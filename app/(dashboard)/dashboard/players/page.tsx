@@ -420,7 +420,7 @@ export default function PlayersHubPage() {
           <div className="flex items-center gap-6 bg-slate-900/40 border border-slate-800 p-4 rounded-[24px] shadow-2xl backdrop-blur-sm z-[100] group hover:border-blue-500/30 transition-all font-black uppercase italic overflow-visible">
              <div className="w-16 h-16 relative font-black uppercase italic leading-none">
                <ResponsiveContainer width="100%" height="100%">
-                 <PieChart overflow="visible">
+                 <PieChart>
                     <Pie data={sideStatsData} innerRadius={18} outerRadius={28} paddingAngle={5} dataKey="value" stroke="none">
                       {sideStatsData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.fill} className="drop-shadow-[0_0_8px_rgba(255,255,255,0.15)]" />)}
                     </Pie>
@@ -524,7 +524,7 @@ export default function PlayersHubPage() {
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 flex flex-col h-[585px] shadow-2xl relative overflow-visible border-t-amber-500/20 font-black uppercase italic leading-none font-black italic">
                <h3 className="text-xl text-white mb-14 italic tracking-tighter">Objective Execution Strategy</h3>
                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={boxPlotData} margin={{ bottom: 60, left: -20 }} overflow="visible">
+                  <BarChart data={boxPlotData} margin={{ bottom: 60, left: -20 }}>
                     <defs>
                       <linearGradient id="barGradientBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={1} /><stop offset="100%" stopColor="#1e3a8a" stopOpacity={0.8} /></linearGradient>
                       <linearGradient id="barGradientRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ef4444" stopOpacity={1} /><stop offset="100%" stopColor="#7f1d1d" stopOpacity={0.8} /></linearGradient>
