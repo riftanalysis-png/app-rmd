@@ -22,8 +22,8 @@ export default function RegisterPage() {
         data: {
           full_name: fullName,
         },
-        // Redireciona para o login após confirmar (se houver confirmação de email)
-        emailRedirectTo: `${window.location.origin}/login`,
+        // Redireciona para o Login após confirmar (se houver confirmação de email)
+        emailRedirectTo: `${window.location.origin}/Login`,
       }
     });
 
@@ -31,7 +31,7 @@ export default function RegisterPage() {
       alert("Erro no cadastro: " + error.message);
     } else {
       alert("Solicitação enviada! Agora você precisa ser aprovado pelo Analista no banco de dados.");
-      window.location.href = '/login';
+      window.location.href = '/Login';
     }
     setLoading(false);
   };
@@ -84,7 +84,7 @@ export default function RegisterPage() {
         </form>
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          Já tem uma conta? <Link href="/login" className="text-blue-400 hover:underline">Entrar</Link>
+          Já tem uma conta? <Link href="/Login" className="text-blue-400 hover:underline">Entrar</Link>
         </p>
       </div>
     </div>
