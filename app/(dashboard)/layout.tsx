@@ -1,7 +1,8 @@
 "use client";
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { supabase } from '@/lib/supabase/client';
 
 export default function DashboardLayout({
   children,
@@ -9,6 +10,45 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  
+  // Variáveis dinâmicas para o usuário logado
+  const [userName, setUserName] = useState("Carlos Augusto Magalhães Crispino");
+  const [userRole, setUserRole] = useState("ANALISTA");
+
+  // Função que busca o usuário real do banco de dados ao carregar a página
+  useEffect(() => {
+    async function fetchActiveUser() {
+      // Pega a sessão ativa do Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        // Aqui você adapta para onde salva o nome (ex: tabela 'profiles' ou 'user_metadata')
+        // Exemplo buscando de uma tabela de perfis:
+        /*
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name, role')
+          .eq('id', session.user.id)
+          .single();
+          
+        if (profile) {
+          setUserName(profile.full_name);
+          setUserRole(profile.role);
+        }
+        */
+        
+        // Se usar o metadata nativo do Supabase Auth:
+        if (session.user.user_metadata?.full_name) {
+           setUserName(session.user.user_metadata.full_name);
+        }
+        if (session.user.user_metadata?.role) {
+           setUserRole(session.user.user_metadata.role);
+        }
+      }
+    }
+    
+    fetchActiveUser();
+  }, []);
 
   return (
     <div className="flex w-full h-full p-2 gap-2">
@@ -21,13 +61,8 @@ export default function DashboardLayout({
         {/* Ilha 1: Navegação Principal */}
         <nav className="bg-[#121212] rounded-xl p-4 flex flex-col gap-4 relative">
           
-          {/* Topo da Sidebar: Logo Gigante que agora é um Botão Home */}
           <Link href="/dashboard" className="flex items-center justify-center mb-6 xl:mb-8 mt-2 relative group cursor-pointer">
-            
-            {/* O "Glow" Dinâmico */}
             <div className="absolute w-16 h-16 xl:w-32 xl:h-32 bg-purple-600/20 rounded-full blur-2xl group-hover:bg-purple-500/30 transition-all duration-500"></div>
-            
-            {/* O Logo Oficial */}
             <img 
               src="https://static.wikia.nocookie.net/lolesports_gamepedia_en/images/9/90/RMD_Gaminglogo_square.png" 
               alt="RMD Gaming Logo" 
@@ -85,10 +120,10 @@ export default function DashboardLayout({
              />
           </div>
           
-          {/* Assinatura / User Info no rodapé */}
+          {/* Assinatura / User Info no rodapé - AGORA DINÂMICA */}
           <div className="mt-auto border-t border-slate-800 pt-4 hidden xl:block">
-             <p className="text-[9px] text-slate-500 uppercase tracking-widest font-black italic truncate">Carlos Augusto Magalhães Crispim</p>
-             <p className="text-[10px] text-purple-400 font-mono mt-1">ANALISTA</p>
+             <p className="text-[9px] text-slate-500 uppercase tracking-widest font-black italic truncate">{userName}</p>
+             <p className="text-[10px] text-purple-400 font-mono mt-1">{userRole}</p>
           </div>
         </div>
         
