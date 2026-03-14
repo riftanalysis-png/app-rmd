@@ -205,33 +205,39 @@ export default function MetaWarRoom() {
   return (
     <div className="max-w-[1500px] mx-auto space-y-8 p-4 md:p-8 font-black uppercase italic tracking-tighter pb-20">
       
-      {/* HEADER TRAVADO */}
-      <header className="grid grid-cols-1 lg:grid-cols-3 items-center gap-6 mb-12 border-b border-slate-800/80 pb-6 sticky top-0 bg-[#030712]/90 backdrop-blur-xl z-50">
-        <div className="flex flex-col border-l-4 border-purple-500 pl-4 justify-center">
-          <h1 className="text-4xl leading-none text-white">META WAR ROOM</h1>
-          <p className="text-purple-400 text-[9px] tracking-[0.4em] mt-1">High Fidelity Scouting</p>
+      {/* HEADER CORRIGIDO: Flexbox Dinâmico (Evita esmagar os filtros na direita) */}
+      <header className="flex flex-col xl:flex-row items-center justify-between gap-6 mb-12 border-b border-white/5 pb-6 sticky top-0 bg-[#121212]/95 backdrop-blur-xl z-50 pt-4 -mx-4 px-4 md:-mx-8 md:px-8">
+        
+        {/* Lado Esquerdo: Título (Usa flex-1 para empurrar o centro) */}
+        <div className="flex-1 flex justify-start w-full xl:w-auto">
+          <div className="flex flex-col border-l-4 border-purple-500 pl-4 justify-center">
+            <h1 className="text-3xl lg:text-4xl leading-none text-white">META WAR ROOM</h1>
+            <p className="text-purple-400 text-[9px] tracking-[0.4em] mt-1">High Fidelity Scouting</p>
+          </div>
         </div>
         
-        <div className="flex justify-center">
-          <div className="flex bg-slate-900/80 p-1.5 rounded-3xl border border-slate-800 shadow-2xl">
-            <button onClick={() => {setViewMode('CHAMPIONS'); setSelectedChamp(null);}} className={`px-8 py-2.5 rounded-2xl text-[10px] tracking-widest transition-all ${viewMode === 'CHAMPIONS' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'}`}>
+        {/* Lado Central: Chave Seletora (shrink-0 garante que não seja esmagada) */}
+        <div className="shrink-0 flex justify-center w-full xl:w-auto">
+          <div className="flex bg-black/50 p-1.5 rounded-3xl border border-white/5 shadow-2xl">
+            <button onClick={() => {setViewMode('CHAMPIONS'); setSelectedChamp(null);}} className={`px-6 py-2.5 rounded-2xl text-[10px] tracking-widest transition-all ${viewMode === 'CHAMPIONS' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
               CHAMPION META
             </button>
-            <button onClick={() => {setViewMode('OBJECTIVES'); setSelectedChamp(null);}} className={`px-8 py-2.5 rounded-2xl text-[10px] tracking-widest transition-all ${viewMode === 'OBJECTIVES' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'}`}>
+            <button onClick={() => {setViewMode('OBJECTIVES'); setSelectedChamp(null);}} className={`px-6 py-2.5 rounded-2xl text-[10px] tracking-widest transition-all ${viewMode === 'OBJECTIVES' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
               MACRO INTEL
             </button>
           </div>
         </div>
 
-        <div className="flex justify-end h-12">
+        {/* Lado Direito: Filtros (flex-1 para equilibrar a balança, wrap para evitar estouro) */}
+        <div className="flex-1 flex justify-center xl:justify-end w-full min-h-[44px]">
           {viewMode === 'CHAMPIONS' && !selectedChamp && (
-            <div className="flex gap-4 animate-in fade-in slide-in-from-right-4">
-              <div className="flex bg-slate-900/60 p-1 rounded-2xl border border-slate-800 items-center shadow-inner">
+            <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-right-4">
+              <div className="flex bg-black/40 p-1 rounded-2xl border border-white/5 items-center shadow-inner">
                  {[1, 5, 10].map(n => <button key={n} onClick={() => setMinGames(n)} className={`w-8 h-8 rounded-xl text-[10px] transition-all ${minGames === n ? 'bg-white text-black shadow-lg scale-105' : 'text-slate-500 hover:text-slate-300'}`}>{n}</button>)}
               </div>
-              <div className="flex bg-slate-900/40 p-1 rounded-3xl border border-slate-800 shadow-inner items-center">
+              <div className="flex bg-black/30 p-1 rounded-3xl border border-white/5 shadow-inner items-center">
                 {['ALL', 'TOP', 'JUNGLE', 'MID', 'ADC', 'SUP'].map(l => (
-                  <button key={l} onClick={() => {setActiveLane(l); setSelectedChamp(null);}} className={`px-4 py-2 rounded-2xl text-[9px] flex items-center gap-1.5 transition-all ${activeLane === l ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}>
+                  <button key={l} onClick={() => {setActiveLane(l); setSelectedChamp(null);}} className={`px-3 py-2 rounded-2xl text-[9px] flex items-center gap-1.5 transition-all ${activeLane === l ? 'bg-slate-800 text-white shadow-md border border-white/5' : 'text-slate-500 hover:text-slate-300'}`}>
                     {l !== 'ALL' && <img src={getRoleIcon(laneMap[l] || l)} className="w-3.5 h-3.5 brightness-200" alt="" />}
                     {l}
                   </button>
@@ -262,10 +268,8 @@ export default function MetaWarRoom() {
             </div>
           )}
 
-          {/* GRID ALINHADO: Esquerda determina a altura, Direita respeita e ganha Scrollbar */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             
-            {/* COLUNA ESQUERDA: Define a altura natural da linha */}
             <div className="lg:col-span-7 flex flex-col gap-8">
               {grubsData.length > 0 && (
                 <div className="bg-slate-900/30 border border-slate-800 rounded-[32px] p-8 shadow-xl relative overflow-hidden shrink-0">
@@ -309,7 +313,6 @@ export default function MetaWarRoom() {
               </div>
             </div>
 
-            {/* COLUNA DIREITA: Trava na altura da esquerda com SCROLL interno usando absolute inset */}
             <div className="lg:col-span-5 relative">
               {elementalData.length > 0 && (
                 <div className="lg:absolute inset-0 bg-slate-900/30 border border-slate-800 rounded-[32px] p-8 shadow-xl flex flex-col h-[700px] lg:h-auto">
@@ -323,7 +326,6 @@ export default function MetaWarRoom() {
                       {elementalData.map((obj: any, idx: number) => (
                         <div key={idx} className="group relative bg-slate-950/50 p-6 rounded-[24px] border border-slate-800/40 hover:border-slate-700 transition-all shadow-sm">
                           
-                          {/* TOOLTIP FLUTUANTE DE OURO (Visível no Hover - Dentro do flow direito) */}
                           <div className="absolute top-1/2 -translate-y-1/2 right-4 opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none z-50 translate-x-2 group-hover:translate-x-0">
                              <div className="bg-slate-900/95 backdrop-blur-xl border border-purple-500/30 p-4 rounded-2xl shadow-2xl min-w-[220px]">
                                 <p className="text-[9px] text-purple-400 uppercase tracking-[0.3em] mb-4 border-b border-purple-500/20 pb-2 text-center">GOLD EFFICIENCY</p>
@@ -350,7 +352,6 @@ export default function MetaWarRoom() {
                              </div>
                           </div>
 
-                          {/* CONTEÚDO DO CARD ELEMENTAL PRINCIPAL */}
                           <div className="flex items-center gap-4 relative z-10 mb-4">
                             <span className="text-[10px] text-slate-600 w-3 text-center font-mono">{idx + 1}</span>
                             <img src={getObjectiveIcon(obj.icon_key)} className="w-12 h-12 rounded-full bg-slate-950 border border-slate-700 shadow-md group-hover:scale-105 transition-transform shrink-0" alt="" />
@@ -376,7 +377,6 @@ export default function MetaWarRoom() {
                             </div>
                           </div>
 
-                          {/* SUB-BLOCO DA ALMA (SOUL) */}
                           {obj.soulStat && (
                             <div className="ml-[3.7rem] pt-3 border-t border-slate-800/50 flex flex-col gap-1.5 pr-2">
                                <div className="flex justify-between items-end">
