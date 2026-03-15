@@ -8,15 +8,13 @@ import {
 
 export default function DashboardPage() {
   // ==========================================
-  // AUTENTICAÇÃO REAL (SUPABASE AUTH)
+  // AUTENTICAÇÃO E USUÁRIO LOGADO
   // ==========================================
   const [currentUser, setCurrentUser] = useState({ 
-    role: 'loading', 
-    puuid: '', 
-    name: 'CARREGANDO IDENTIFICAÇÃO...' 
+    id: '', role: 'loading', puuid: '', name: 'CARREGANDO...', photo: '' 
   });
   
-  // Variável de controle de acesso (RBAC)
+  // Variável Mágica: Define quem tem poder de edição no painel
   const isStaff = ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase());
 
   const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ 
@@ -30,22 +28,13 @@ export default function DashboardPage() {
   // ESTADOS CONECTADOS AO SUPABASE
   // ==========================================
   const [configId, setConfigId] = useState<string | null>(null);
-  
-  const [squadConfig, setSquadConfig] = useState({ 
-    teamAcronym: '...', 
-    directive: "CARREGANDO DIRETRIZES...", phase: 'LOADING', week: 0, intensity: 0, load: 'N/A' 
-  });
-  
-  const [nextTargetIntel, setNextTargetIntel] = useState({
-    team: 'ALVO NÃO DEFINIDO', topPicks: [], topBans: [], winConditions: []
-  });
-  
+  const [squadConfig, setSquadConfig] = useState({ teamAcronym: '...', directive: "CARREGANDO...", phase: 'LOADING', week: 0, intensity: 0, load: 'N/A' });
+  const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
   const [upcomingMissions, setUpcomingMissions] = useState<any[]>([]);
   const [scrimReports, setScrimReports] = useState<any[]>([]);
   const [vodTasks, setVodTasks] = useState<any[]>([]);
   const [roster, setRoster] = useState<any[]>([]);
   const [teamWellness, setTeamWellness] = useState<any[]>([]);
-  const [soloQData, setSoloQData] = useState<any[]>([]);
   const [squadForm, setSquadForm] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
   
@@ -78,155 +67,99 @@ export default function DashboardPage() {
   // ==========================================
   useEffect(() => {
     async function fetchDashboardData() {
-      // 0. AUTENTICAÇÃO REAL: Descobre quem é o usuário logado e busca o perfil dele
+      // 0. AUTENTICAÇÃO REAL E PERFIL DO USUÁRIO
       const { data: { user } } = await supabase.auth.getUser();
-      let loggedUser = { role: 'analista', puuid: 'TESTE', name: 'MODO TESTE/VISITANTE' }; // Fallback caso teste sem login
+      let loggedUser = { id: '', role: 'jogador', puuid: '', name: 'JOGADOR', photo: `https://ui-avatars.com/api/?name=User&background=1e293b&color=3b82f6` };
 
       if (user) {
-         const { data: profile } = await supabase.from('profiles').select('full_name, role, puuid').eq('id', user.id).single();
+         const { data: profile } = await supabase.from('profiles').select('full_name, role, puuid').eq('id', user.id).maybeSingle();
          if (profile) {
-            loggedUser = { 
-               role: profile.role || 'jogador', 
-               puuid: profile.puuid || '',
-               name: profile.full_name || 'OPERADOR DESCONHECIDO'
-            };
+            loggedUser.id = user.id;
+            loggedUser.role = profile.role || 'jogador';
+            loggedUser.puuid = profile.puuid || '';
+            loggedUser.name = profile.full_name || 'JOGADOR';
+            loggedUser.photo = `https://ui-avatars.com/api/?name=${profile.full_name || 'User'}&background=1e293b&color=3b82f6`;
          }
+      } else {
+         // Fallback Seguro (Para testar se não houver login ativo)
+         loggedUser = { id: 'dev', role: 'analista', puuid: 'TESTE', name: 'MODO DESENVOLVEDOR', photo: `https://ui-avatars.com/api/?name=Dev&background=1e293b&color=3b82f6` };
       }
-      setCurrentUser(loggedUser);
 
-      // 0.1 Busca o Dicionário de Times
-      const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
-      if (teamsData) setTeamsList(teamsData);
-
-      // 1. Puxa a Configuração
-      const { data: configData, error: configError } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
-      if (configError) console.error("❌ ERRO AO BUSCAR SQUAD_CONFIG:", configError.message);
-
-      let myTeam = ''; 
-
+      // 1. Busca Config e Tag Mestra
+      const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
+      let myTeam = 'SEM TAG'; 
       if (configData && configData.my_team_tag) {
         myTeam = configData.my_team_tag;
         setConfigId(configData.id);
-        setSquadConfig({
-          teamAcronym: myTeam, 
-          directive: configData.tactical_directive || 'NENHUMA DIRETRIZ DEFINIDA', 
-          phase: configData.periodization_phase || 'N/A',
-          week: configData.periodization_week || 0, 
-          intensity: configData.intensity_score || 0, 
-          load: configData.cognitive_load || 'N/A'
-        });
-      } else {
-        myTeam = 'SEM TAG';
-        setSquadConfig(prev => ({ ...prev, teamAcronym: 'SEM TAG', directive: '⚠️ CONFIGURE SEU TIME NO PAINEL' }));
+        setSquadConfig({ teamAcronym: myTeam, directive: configData.tactical_directive || 'NENHUMA', phase: configData.periodization_phase || 'N/A', week: configData.periodization_week || 0, intensity: configData.intensity_score || 0, load: configData.cognitive_load || 'N/A' });
       }
 
-      // 2. Busca o Roster Oficial
+      // 2. Busca o Roster Oficial e cruza foto do jogador
       const { data: rosterData } = await supabase.from('players').select('puuid, nickname, primary_role, photo_url').ilike('team_acronym', `%${myTeam}%`);
       const activeRoster = rosterData || [];
       setRoster(activeRoster);
 
-      // 3. ✨ CÁLCULO DE EFICIÊNCIA REAL ✨
+      // Atualiza a foto do usuário logado se ele estiver no Roster
+      const myPlayerInfo = activeRoster.find(p => p.puuid === loggedUser.puuid);
+      if (myPlayerInfo && myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url;
+      setCurrentUser(loggedUser); // Finalmente seta o usuário master
+
+      // 3. Busca Times
+      const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
+      if (teamsData) setTeamsList(teamsData);
+
+      // 4. Eficiência Real
       const { data: teamMatches } = await supabase.from('matches').select('id, blue_team_tag, red_team_tag, winner_side').or(`blue_team_tag.ilike."%${myTeam}%",red_team_tag.ilike."%${myTeam}%"`);
       const analyticCycles = teamMatches ? teamMatches.length : 0;
       let wins = 0;
-
-      if (teamMatches && teamMatches.length > 0) {
+      if (teamMatches) {
         teamMatches.forEach(match => {
-          const blueTag = String(match.blue_team_tag || '').trim().toUpperCase();
-          const redTag = String(match.red_team_tag || '').trim().toUpperCase();
-          const myTagNormalized = String(myTeam).trim().toUpperCase();
-
-          const weAreBlue = blueTag.includes(myTagNormalized);
-          const weAreRed = redTag.includes(myTagNormalized);
-          const winner = String(match.winner_side || '').trim().toLowerCase(); 
-          const isBlueWin = winner === 'blue' || winner === '100';
-          const isRedWin = winner === 'red' || winner === '200';
-
-          if ((weAreBlue && isBlueWin) || (weAreRed && isRedWin)) wins++;
+          const blueTag = String(match.blue_team_tag || '').toUpperCase(); const redTag = String(match.red_team_tag || '').toUpperCase(); const myTag = String(myTeam).toUpperCase();
+          const weAreBlue = blueTag.includes(myTag); const weAreRed = redTag.includes(myTag);
+          const winner = String(match.winner_side || '').toLowerCase();
+          if ((weAreBlue && (winner === 'blue' || winner === '100')) || (weAreRed && (winner === 'red' || winner === '200'))) wins++;
         });
       }
       const globalEfficiency = analyticCycles > 0 ? Math.round((wins / analyticCycles) * 100) : 0;
 
-      // 4. Configura UI com Roster Real
-      if (activeRoster.length > 0) {
-        setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
-      }
+      if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
 
-      // 4.5 INTERNAL MVP RACE
+      // 5. Internal MVP Race
       const { data: mvpData } = await supabase.from('hub_players_roster').select('nickname, primary_role, mvp_score').ilike('team_acronym', `%${myTeam}%`).order('mvp_score', { ascending: false });
-      if (mvpData) {
-        const formattedMvp = mvpData.map(p => {
-          const score = p.mvp_score != null ? Number(p.mvp_score) : 0; 
-          let streakText = 'STABLE';
-          if (score >= 8.0) streakText = 'ON FIRE';
-          else if (score < 6.0) streakText = 'COLD'; 
-          return { name: p.nickname, role: p.primary_role, rating: score.toFixed(1), streak: streakText };
-        });
-        setSquadForm(formattedMvp);
-      }
+      if (mvpData) setSquadForm(mvpData.map(p => ({ name: p.nickname, role: p.primary_role, rating: (Number(p.mvp_score) || 0).toFixed(1), streak: Number(p.mvp_score) >= 8 ? 'ON FIRE' : Number(p.mvp_score) < 6 ? 'COLD' : 'STABLE' })));
 
-      // 5. ✨ SQUAD PERFORMANCE INDEX ✨
+      // 6. Squad Performance Index
       const { data: perfData } = await supabase.from('hub_players_performance').select('avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
       if (perfData && perfData.length > 0) {
-        const getMedian = (arr: number[]) => {
-          if (!arr || arr.length === 0) return 0;
-          const sorted = [...arr].sort((a, b) => a - b);
-          const mid = Math.floor(sorted.length / 2);
-          return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-        };
-        const lanes = perfData.map(p => Number(p.avg_lane || 0)); const impacts = perfData.map(p => Number(p.avg_impact || 0)); const conversions = perfData.map(p => Number(p.avg_conversion || 0)); const visions = perfData.map(p => Number(p.avg_vision || 0));
-        const medLane = getMedian(lanes); const medImpact = getMedian(impacts); const medConversion = getMedian(conversions); const medVision = getMedian(visions);
-        const overallScore = (medLane + medImpact + medConversion + medVision) / 4;
-
-        setTeamKpiData([
-          { subject: 'Lane Dom.', A: Math.round(medLane), B: 65 }, { subject: 'Impact', A: Math.round(medImpact), B: 70 }, { subject: 'Conversion', A: Math.round(medConversion), B: 75 }, { subject: 'Vision', A: Math.round(medVision), B: 80 }, { subject: 'Overall', A: Math.round(overallScore), B: 70 }
-        ]);
+        const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
+        const ml = getMed(perfData.map(p => Number(p.avg_lane || 0))), mi = getMed(perfData.map(p => Number(p.avg_impact || 0))), mc = getMed(perfData.map(p => Number(p.avg_conversion || 0))), mv = getMed(perfData.map(p => Number(p.avg_vision || 0)));
+        setTeamKpiData([{ subject: 'Lane Dom.', A: Math.round(ml), B: 65 }, { subject: 'Impact', A: Math.round(mi), B: 70 }, { subject: 'Conversion', A: Math.round(mc), B: 75 }, { subject: 'Vision', A: Math.round(mv), B: 80 }, { subject: 'Overall', A: Math.round((ml+mi+mc+mv)/4), B: 70 }]);
       }
 
-      // 6. Agenda de Eventos
+      // 7. Eventos & Intel
       const { data: missions } = await supabase.from('missions').select('*').ilike('team_acronym', `%${myTeam}%`).order('mission_date', { ascending: true }).limit(5);
-      let nextOpponent = '';
-      if (missions && missions.length > 0) {
-         setUpcomingMissions(missions);
-         nextOpponent = missions[0].opponent_acronym;
+      let nextOp = '';
+      if (missions && missions.length > 0) { setUpcomingMissions(missions); nextOp = missions[0].opponent_acronym; }
+      if (nextOp) {
+         const { data: opData } = await supabase.from('opponent_intel').select('*').eq('opponent_acronym', nextOp).maybeSingle();
+         if (opData) setNextTargetIntel({ team: nextOp, topPicks: opData.top_picks || [], topBans: opData.top_bans || [], winConditions: opData.win_conditions || [] });
+         else setNextTargetIntel({ team: nextOp, topPicks: [], topBans: [], winConditions: [] });
       }
 
-      // 7. Busca Intel do PRÓXIMO ALVO
-      if (nextOpponent) {
-         const { data: opponentData } = await supabase.from('opponent_intel').select('*').eq('opponent_acronym', nextOpponent).maybeSingle();
-         if (opponentData) {
-            setNextTargetIntel({ team: nextOpponent, topPicks: opponentData.top_picks || [], topBans: opponentData.top_bans || [], winConditions: opponentData.win_conditions || [] });
-         } else {
-            setNextTargetIntel({ team: nextOpponent, topPicks: [], topBans: [], winConditions: [] });
-         }
-      } else {
-         setNextTargetIntel({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
-      }
-
-      // 8. Busca Scrims e Tarefas de VOD
+      // 8. Scrims & VOD
       const { data: scrims } = await supabase.from('scrim_reports').select('*').ilike('team_acronym', `%${myTeam}%`).order('scrim_date', { ascending: false }).limit(6);
       if (scrims) setScrimReports(scrims);
-
       const { data: tasks } = await supabase.from('vod_tasks').select('*').ilike('team_acronym', `%${myTeam}%`).order('created_at', { ascending: false });
       if (tasks) setVodTasks(tasks);
 
       // 9. Histórico de Wellness
-      const { data: wellnessData } = await supabase.from('player_wellness').select('*').order('record_date', { ascending: false });
+      const { data: wData } = await supabase.from('player_wellness').select('*').order('record_date', { ascending: false });
       const todayStr = new Date().toISOString().split('T')[0];
-
-      const wellnessBase = activeRoster.map(p => {
-         const playerRecords = wellnessData?.filter((w: any) => w.puuid === p.puuid) || [];
-         const latestRecord = playerRecords.length > 0 ? playerRecords[0] : null;
-         const hasAnsweredToday = latestRecord && latestRecord.record_date === todayStr;
-
-         return { 
-            puuid: p.puuid, name: p.nickname, role: p.primary_role, photo: p.photo_url, 
-            score: latestRecord ? latestRecord.readiness_percent : 0, sleep: latestRecord ? latestRecord.sleep_score : 0, 
-            mental: latestRecord ? latestRecord.mental_score : 0, physical: latestRecord ? latestRecord.physical_score : 0,
-            hasAnsweredToday: !!hasAnsweredToday, history: playerRecords
-         };
-      });
-      setTeamWellness(wellnessBase);
+      setTeamWellness(activeRoster.map(p => {
+         const pRecs = wData?.filter((w: any) => w.puuid === p.puuid) || [];
+         const lRec = pRecs.length > 0 ? pRecs[0] : null;
+         return { puuid: p.puuid, name: p.nickname, role: p.primary_role, photo: p.photo_url, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
+      }));
 
       setStats({ matches: analyticCycles, winrate: globalEfficiency, players: activeRoster.length });
       setLoading(false);
@@ -235,154 +168,25 @@ export default function DashboardPage() {
   }, []);
 
   // ==========================================
-  // HANDLERS (SUPABASE) BLINDADOS
+  // HANDLERS (SUPABASE) 
   // ==========================================
-  
-  const handleUpdateConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isStaff) return alert("Acesso Negado.");
-    const payload = {
-      my_team_tag: configForm.teamAcronym.toUpperCase(), tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, intensity_score: configForm.intensity, cognitive_load: configForm.load 
-    };
-    if (configId) {
-      const { error } = await supabase.from('squad_config').update(payload).eq('id', configId);
-      if (error) alert("Erro ao atualizar config: " + error.message); else window.location.reload();
-    } else {
-      const { error } = await supabase.from('squad_config').insert([payload]).select();
-      if (error) alert("Erro ao criar config: " + error.message); else window.location.reload();
-    }
-  };
+  const handleUpdateConfig = async (e: React.FormEvent) => { e.preventDefault(); const payload = { my_team_tag: configForm.teamAcronym.toUpperCase(), tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, intensity_score: configForm.intensity, cognitive_load: configForm.load }; if (configId) { await supabase.from('squad_config').update(payload).eq('id', configId); window.location.reload(); } else { await supabase.from('squad_config').insert([payload]).select(); window.location.reload(); } };
+  const toggleTask = async (id: string, currentStatus: boolean) => { if(!isStaff) return; setVodTasks(tasks => tasks.map(t => t.id === id ? { ...t, is_done: !currentStatus } : t)); await supabase.from('vod_tasks').update({ is_done: !currentStatus }).eq('id', id); };
+  const handleSaveMission = async (e: React.FormEvent) => { e.preventDefault(); let d = missionForm.date; if (d.includes('/')) { const p = d.split('/'); d = `${p.length === 3 ? p[2] : new Date().getFullYear()}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`; } const t = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time; const payload = { team_acronym: squadConfig.teamAcronym, mission_date: d, mission_time: t, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: 'SCHEDULED' }; if (editMissionId) { const { data } = await supabase.from('missions').update(payload).eq('id', editMissionId).select(); if (data) { setUpcomingMissions(prev => prev.map(m => m.id === editMissionId ? data[0] : m).sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime())); setMissionModalOpen(false); } } else { const { data } = await supabase.from('missions').insert([payload]).select(); if (data) { setUpcomingMissions(prev => [...prev, data[0]].sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime())); setMissionModalOpen(false); } } };
+  const handleDeleteMission = async (id: string) => { if (!window.confirm("Deseja excluir?")) return; await supabase.from('missions').delete().eq('id', id); setUpcomingMissions(prev => prev.filter(m => m.id !== id)); };
+  const handleSaveScrim = async (e: React.FormEvent) => { e.preventDefault(); const payload = { team_acronym: squadConfig.teamAcronym, scrim_date: scrimForm.date || new Date().toISOString().split('T')[0], opponent_acronym: scrimForm.opponent, result: scrimForm.result, score: scrimForm.score, mode: scrimForm.mode, comp_tested: scrimForm.comp, difficulty: scrimForm.difficulty, punctuality: scrimForm.punctuality, remakes: scrimForm.remakes, match_ids: scrimForm.match_ids }; if (editScrimId) { const { data } = await supabase.from('scrim_reports').update(payload).eq('id', editScrimId).select(); if (data) { setScrimReports(prev => prev.map(s => s.id === editScrimId ? data[0] : s).sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime())); setScrimModalOpen(false); } } else { const { data } = await supabase.from('scrim_reports').insert([payload]).select(); if (data) { setScrimReports(prev => [data[0], ...prev].sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime())); setScrimModalOpen(false); } } };
+  const handleDeleteScrim = async (id: string) => { if (!window.confirm("Excluir Report?")) return; await supabase.from('scrim_reports').delete().eq('id', id); setScrimReports(prev => prev.filter(s => s.id !== id)); };
+  const handleUpdateTarget = async (e: React.FormEvent) => { e.preventDefault(); const c = [targetForm.win1, targetForm.win2, targetForm.win3].filter(Boolean); await supabase.from('opponent_intel').upsert({ opponent_acronym: targetForm.team.toUpperCase(), top_picks: [], top_bans: [], win_conditions: c }, { onConflict: 'opponent_acronym' }).select(); setNextTargetIntel(prev => ({ ...prev, team: targetForm.team.toUpperCase(), winConditions: c })); setTargetModalOpen(false); };
+  const handleAddVodTask = async (e: React.FormEvent) => { e.preventDefault(); const { data } = await supabase.from('vod_tasks').insert([{ team_acronym: squadConfig.teamAcronym, tag: vodForm.tag, task_text: vodForm.text, is_done: false }]).select(); if (data) { setVodTasks(prev => [data[0], ...prev]); setVodModalOpen(false); } };
+  const handleWellnessSubmit = async (e: React.FormEvent) => { e.preventDefault(); const r = Math.round(((wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical) / 15) * 100); const td = new Date().toISOString().split('T')[0]; const { data } = await supabase.from('player_wellness').upsert({ puuid: wellnessForm.puuid, record_date: td, sleep_score: wellnessForm.sleep, mental_score: wellnessForm.mental, physical_score: wellnessForm.physical, focus_score: wellnessForm.focus, readiness_percent: r }, { onConflict: 'puuid, record_date' }).select(); if (data) { setTeamWellness(prev => prev.map(p => p.puuid === wellnessForm.puuid ? { ...p, score: r, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true } : p)); setWellnessModalOpen(false); } };
 
-  const toggleTask = async (id: string, currentStatus: boolean) => {
-    setVodTasks(tasks => tasks.map(t => t.id === id ? { ...t, is_done: !currentStatus } : t));
-    const { error } = await supabase.from('vod_tasks').update({ is_done: !currentStatus }).eq('id', id);
-    if (error) alert("Erro ao atualizar tarefa: " + error.message);
-  };
-
-  const handleSaveMission = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isStaff) return alert("Acesso Negado.");
-    let formattedDate = missionForm.date;
-    if (formattedDate.includes('/')) {
-      const parts = formattedDate.split('/');
-      formattedDate = `${parts.length === 3 ? parts[2] : new Date().getFullYear()}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    }
-    const timeFormatted = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time;
-    const payload = { team_acronym: squadConfig.teamAcronym, mission_date: formattedDate, mission_time: timeFormatted, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: 'SCHEDULED' };
-
-    if (editMissionId) {
-      const { data, error } = await supabase.from('missions').update(payload).eq('id', editMissionId).select();
-      if (error) alert("Erro ao editar evento: " + error.message);
-      else if (data) {
-        setUpcomingMissions(prev => prev.map(m => m.id === editMissionId ? data[0] : m).sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime()));
-        setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setEditMissionId(null); setMissionModalOpen(false);
-      }
-    } else {
-      const { data, error } = await supabase.from('missions').insert([payload]).select();
-      if (error) alert("Erro ao criar evento: " + error.message);
-      else if (data) {
-        setUpcomingMissions(prev => [...prev, data[0]].sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime()));
-        setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(false);
-      }
-    }
-  };
-
-  const handleDeleteMission = async (id: string) => {
-    if (!isStaff) return;
-    if (!window.confirm("Tem certeza que deseja excluir este evento da agenda?")) return;
-    const { error } = await supabase.from('missions').delete().eq('id', id);
-    if (error) alert("Erro ao excluir evento: " + error.message);
-    else setUpcomingMissions(prev => prev.filter(m => m.id !== id));
-  };
-
-  const handleSaveScrim = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isStaff) return alert("Acesso Negado.");
-    const today = new Date().toISOString().split('T')[0];
-    const payload = {
-      team_acronym: squadConfig.teamAcronym, scrim_date: scrimForm.date || today, opponent_acronym: scrimForm.opponent, result: scrimForm.result, score: scrimForm.score, mode: scrimForm.mode, comp_tested: scrimForm.comp, difficulty: scrimForm.difficulty, punctuality: scrimForm.punctuality, remakes: scrimForm.remakes, match_ids: scrimForm.match_ids
-    };
-
-    if (editScrimId) {
-      const { data, error } = await supabase.from('scrim_reports').update(payload).eq('id', editScrimId).select();
-      if (error) alert("Erro ao editar Scrim Report: " + error.message);
-      else if (data) {
-        setScrimReports(prev => prev.map(s => s.id === editScrimId ? data[0] : s).sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime()));
-        setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' });
-        setEditScrimId(null); setScrimModalOpen(false);
-      }
-    } else {
-      const { data, error } = await supabase.from('scrim_reports').insert([payload]).select();
-      if (error) alert("Erro ao salvar Scrim Report: " + error.message);
-      else if (data) {
-        setScrimReports(prev => [data[0], ...prev].sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime()));
-        setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' });
-        setScrimModalOpen(false);
-      }
-    }
-  };
-
-  const handleDeleteScrim = async (id: string) => {
-    if (!isStaff) return;
-    if (!window.confirm("Tem certeza que deseja excluir este Report permanentemente?")) return;
-    const { error } = await supabase.from('scrim_reports').delete().eq('id', id);
-    if (error) alert("Erro ao excluir: " + error.message); else setScrimReports(prev => prev.filter(s => s.id !== id));
-  };
-
-  const handleUpdateTarget = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isStaff) return alert("Acesso Negado.");
-    const conditions = [targetForm.win1, targetForm.win2, targetForm.win3].filter(Boolean);
-    const { error } = await supabase.from('opponent_intel').upsert({ opponent_acronym: targetForm.team.toUpperCase(), top_picks: [], top_bans: [], win_conditions: conditions }, { onConflict: 'opponent_acronym' }).select();
-    if (error) alert(`Erro ao salvar Win Conditions: ${error.message}`);
-    else { setNextTargetIntel(prev => ({ ...prev, team: targetForm.team.toUpperCase(), winConditions: conditions })); setTargetModalOpen(false); }
-  };
-
-  const handleAddVodTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isStaff) return alert("Acesso Negado.");
-    const { data, error } = await supabase.from('vod_tasks').insert([{ team_acronym: squadConfig.teamAcronym, tag: vodForm.tag, task_text: vodForm.text, is_done: false }]).select();
-    if (error) alert("Erro ao salvar VOD Task: " + error.message);
-    else if (data) { setVodTasks(prev => [data[0], ...prev]); setVodForm({ tag: 'MACRO', text: '' }); setVodModalOpen(false); }
-  };
-
-  const handleWellnessSubmit = async (e: React.FormEvent) => { 
-    e.preventDefault(); 
-    const totalScore = wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical;
-    const readiness = Math.round((totalScore / 15) * 100);
-    const today = new Date().toISOString().split('T')[0]; 
-    const { data, error } = await supabase.from('player_wellness').upsert({ puuid: wellnessForm.puuid, record_date: today, sleep_score: wellnessForm.sleep, mental_score: wellnessForm.mental, physical_score: wellnessForm.physical, focus_score: wellnessForm.focus, readiness_percent: readiness }, { onConflict: 'puuid, record_date' }).select();
-    if (error) alert("Erro ao sincronizar biometria: " + error.message);
-    else if (data) { setTeamWellness(prev => prev.map(p => p.puuid === wellnessForm.puuid ? { ...p, score: readiness, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true } : p)); setWellnessModalOpen(false); }
-  };
-
-  // --- HELPERS DE COR, FORMATAÇÃO E LOGOS ---
-  const getDifficultyColor = (diff: string) => {
-    switch (diff) {
-      case 'STOMPAMOS': return 'bg-blue-600 text-white border-blue-500'; case 'FÁCIL': return 'bg-emerald-500 text-white border-emerald-400'; case 'CONTROLADO': return 'bg-emerald-700 text-emerald-100 border-emerald-600'; case 'DIFÍCIL': return 'bg-orange-600 text-white border-orange-500'; case 'MT DIFÍCIL': return 'bg-red-500 text-white border-red-400'; case 'STOMPADOS': return 'bg-red-600 text-white border-red-500 animate-pulse'; default: return 'bg-slate-800 text-slate-300 border-slate-700';
-    }
-  };
-
-  const getPunctualityColor = (punct: string) => {
-    if (punct.includes('PONTUAIS')) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'; if (punct.includes('NOSSO ATRASO')) return 'text-red-400 border-red-500/30 bg-red-500/10'; if (punct.includes('ATRASO DELES')) return 'text-orange-400 border-orange-500/30 bg-orange-500/10'; if (punct.includes('DESMARCARAM')) return 'text-slate-400 border-slate-500/30 bg-slate-500/10 line-through'; return 'text-slate-400 border-slate-500/30 bg-slate-500/10';
-  };
-
-  const formatDate = (dateString: string) => { if (!dateString) return ''; const parts = dateString.split('-'); return parts.length >= 3 ? `${parts[2]}/${parts[1]}` : dateString; };
+  // --- HELPERS ---
+  const getDifficultyColor = (diff: string) => { switch (diff) { case 'STOMPAMOS': return 'bg-blue-600 text-white border-blue-500'; case 'FÁCIL': return 'bg-emerald-500 text-white border-emerald-400'; case 'CONTROLADO': return 'bg-emerald-700 text-emerald-100 border-emerald-600'; case 'DIFÍCIL': return 'bg-orange-600 text-white border-orange-500'; case 'MT DIFÍCIL': return 'bg-red-500 text-white border-red-400'; case 'STOMPADOS': return 'bg-red-600 text-white border-red-500 animate-pulse'; default: return 'bg-slate-800 text-slate-300 border-slate-700'; } };
+  const getPunctualityColor = (punct: string) => { if (punct.includes('PONTUAIS')) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'; if (punct.includes('NOSSO ATRASO')) return 'text-red-400 border-red-500/30 bg-red-500/10'; if (punct.includes('ATRASO DELES')) return 'text-orange-400 border-orange-500/30 bg-orange-500/10'; if (punct.includes('DESMARCARAM')) return 'text-slate-400 border-slate-500/30 bg-slate-500/10 line-through'; return 'text-slate-400 border-slate-500/30 bg-slate-500/10'; };
+  const formatDate = (dateString: string) => { if (!dateString) return ''; const p = dateString.split('-'); return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; };
   const formatTime = (timeString: string) => { if (!timeString) return ''; return timeString.substring(0, 5); };
-
-  const getIntensityTheme = (intensity: number) => {
-    if (intensity < 40) return { text: 'text-emerald-400', bg: 'bg-emerald-500', shadow: 'shadow-[0_0_10px_rgba(16,185,129,0.8)]' };
-    if (intensity < 75) return { text: 'text-amber-400', bg: 'bg-amber-500', shadow: 'shadow-[0_0_10px_rgba(245,158,11,0.8)]' };
-    return { text: 'text-red-400', bg: 'bg-red-500', shadow: 'shadow-[0_0_10px_rgba(239,68,68,0.8)]' };
-  };
-  const intensityTheme = getIntensityTheme(squadConfig.intensity);
-
-  const getTeamLogo = (acronym: string) => {
-    if (!acronym) return 'https://ui-avatars.com/api/?name=?&background=1e293b&color=fff&bold=true';
-    const team = teamsList.find(t => t.acronym.toUpperCase() === acronym.toUpperCase());
-    if (team && team.logo_url) return team.logo_url;
-    return `https://ui-avatars.com/api/?name=${acronym}&background=1e293b&color=fff&bold=true`;
-  };
+  const getTeamLogo = (acronym: string) => { const t = teamsList.find(t => t.acronym.toUpperCase() === (acronym||'').toUpperCase()); return t?.logo_url || `https://ui-avatars.com/api/?name=${acronym}&background=1e293b&color=fff&bold=true`; };
+  const intensityTheme = squadConfig.intensity < 40 ? { text: 'text-emerald-400', bg: 'bg-emerald-500', shadow: 'shadow-[0_0_10px_rgba(16,185,129,0.8)]' } : squadConfig.intensity < 75 ? { text: 'text-amber-400', bg: 'bg-amber-500', shadow: 'shadow-[0_0_10px_rgba(245,158,11,0.8)]' } : { text: 'text-red-400', bg: 'bg-red-500', shadow: 'shadow-[0_0_10px_rgba(239,68,68,0.8)]' };
 
   if (loading) return <div className="flex items-center justify-center h-screen text-blue-500 font-black italic animate-pulse text-xs tracking-widest">// ACESSANDO SERVIDORES DO SUPABASE...</div>;
 
@@ -395,19 +199,21 @@ export default function DashboardPage() {
           <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none"></div>
           <div className="relative z-10 shrink-0">
              <div className="w-40 h-40 rounded-[40px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.name}`} className="w-full h-full object-cover" alt="Profile" />
+                <img src={currentUser.photo} className="w-full h-full object-cover" alt="Profile" />
              </div>
-             <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">A.I SYSTEM</div>
+             <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">{isStaff ? 'STAFF' : 'ROSTER'}</div>
           </div>
-          <div className="relative z-10 flex-1 text-center md:text-left">
+          <div className="relative z-10 flex-1 text-center md:text-left min-w-0">
             <div className="flex items-center justify-center md:justify-start gap-3 mb-2">
-               <p className="text-blue-400 text-xs tracking-[0.5em]">SYSTEM CONNECTED</p>
+               <p className="text-blue-400 text-xs tracking-[0.5em]">{isStaff ? 'ACTIVE ANALYST PROTOCOL' : 'PLAYER TACTICAL HUB'}</p>
                <span className="bg-blue-500 text-black px-2 py-0.5 rounded font-black text-[9px] tracking-widest">TEAM: {squadConfig.teamAcronym}</span>
             </div>
-            <h2 className="text-5xl lg:text-6xl text-white mb-4 leading-none truncate max-w-full">{currentUser.name.toUpperCase()}</h2>
+            {/* O Nome do Usuário Dinâmico */}
+            <h2 className="text-5xl lg:text-6xl text-white mb-4 leading-none truncate max-w-full">{currentUser.name.split(' ')[0]}</h2>
             <div className="flex flex-wrap justify-center md:justify-start gap-3">
-               <Badge text={currentUser.role} color={isStaff ? "bg-blue-500" : "bg-emerald-600"} />
-               <Badge text="AUTHORIZED PERSONNEL" color="bg-purple-600" />
+               <Badge text={currentUser.role} color="bg-blue-500" />
+               <Badge text="TIER 3 SCENE" color="bg-purple-600" />
+               <Badge text="BRASIL" color="bg-slate-800" />
             </div>
           </div>
         </div>
@@ -417,7 +223,7 @@ export default function DashboardPage() {
            <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
            <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
              <div><h3 className="text-sm text-slate-400 tracking-widest leading-none">AGENDA DE EVENTOS</h3></div>
-             {/* PROTEÇÃO RBAC */}
+             {/* PROTEÇÃO: Botão NOVO EVENTO só para Staff */}
              {isStaff && (
                <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[9px] tracking-widest transition-all">+ NOVO EVENTO</button>
              )}
@@ -425,7 +231,7 @@ export default function DashboardPage() {
            
            <div className="space-y-3 mb-6 flex-1 overflow-y-auto custom-scrollbar pr-2">
               {upcomingMissions.length > 0 ? upcomingMissions.map(m => (
-                <div key={m.id} className="flex flex-col p-4 bg-white/[0.02] rounded-2xl border border-white/5 hover:bg-white/[0.05] transition-all group/card">
+                <div key={m.id} className="flex flex-col p-4 bg-white/[0.02] rounded-2xl border border-white/5 hover:bg-white/[0.05] transition-all group/card relative">
                    <div className="flex items-center justify-between">
                      <div className="flex items-center gap-4">
                         <img src={getTeamLogo(m.opponent_acronym)} alt={m.opponent_acronym} className="w-11 h-11 object-contain drop-shadow-[0_0_12px_rgba(255,255,255,0.25)]" />
@@ -437,11 +243,11 @@ export default function DashboardPage() {
                      <span className="text-[9px] px-2 py-1 bg-black/40 rounded-lg border border-white/10 text-slate-400">{m.mission_type}</span>
                    </div>
                    
-                   {/* PROTEÇÃO RBAC */}
+                   {/* PROTEÇÃO: Hover de Edição só para Staff */}
                    {isStaff && (
-                     <div className="flex justify-end gap-2 mt-3 opacity-0 group-hover/card:opacity-100 transition-opacity">
-                        <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
-                        <button onClick={() => handleDeleteMission(m.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 border border-red-500/20 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
+                     <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/card:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
+                        <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
+                        <button onClick={() => handleDeleteMission(m.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
                      </div>
                    )}
                 </div>
@@ -463,30 +269,18 @@ export default function DashboardPage() {
                        <span className="text-white text-sm font-black italic tracking-widest">{nextTargetIntel.team !== 'SEM ALVO' ? `VS ${nextTargetIntel.team}` : 'AWAITING ASSIGNMENT'}</span>
                     </div>
                  </div>
-                 {/* PROTEÇÃO RBAC */}
+                 {/* PROTEÇÃO: Botão UPDATE INTEL só para Staff */}
                  {isStaff && (
-                   <button onClick={() => { 
-                       if(nextTargetIntel.team === 'SEM ALVO') return alert('Agende um evento primeiro para ter um alvo.');
-                       setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); 
-                       setTargetModalOpen(true); 
-                   }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2">
-                      <span>✏️</span> UPDATE INTEL
-                   </button>
+                   <button onClick={() => { if(nextTargetIntel.team === 'SEM ALVO') return; setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); setTargetModalOpen(true); }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2"><span>✏️</span> UPDATE</button>
                  )}
               </div>
 
               <div className="space-y-2 relative z-10">
                  {nextTargetIntel.winConditions.length > 0 ? nextTargetIntel.winConditions.map((cond, i) => (
                    <div key={i} className="flex items-start gap-3 p-3 bg-gradient-to-r from-purple-900/20 to-transparent border-l-2 border-purple-500 rounded-r-xl">
-                      <span className="text-[10px] text-purple-500 font-mono font-black pt-0.5">0{i+1}</span>
-                      <p className="text-[10px] text-slate-300 tracking-widest leading-relaxed">{cond}</p>
+                      <span className="text-[10px] text-purple-500 font-mono font-black pt-0.5">0{i+1}</span><p className="text-[10px] text-slate-300 tracking-widest leading-relaxed">{cond}</p>
                    </div>
-                 )) : (
-                   <div className="flex flex-col items-center justify-center py-4 bg-white/[0.02] border border-dashed border-white/10 rounded-xl">
-                      <span className="text-lg mb-1 opacity-50">📂</span>
-                      <span className="text-[9px] text-slate-500 tracking-widest">NO INTEL ACQUIRED</span>
-                   </div>
-                 )}
+                 )) : <div className="flex flex-col items-center justify-center py-4 bg-white/[0.02] border border-dashed border-white/10 rounded-xl"><span className="text-[9px] text-slate-500 tracking-widest">NO INTEL ACQUIRED</span></div>}
               </div>
            </div>
         </div>
@@ -497,11 +291,9 @@ export default function DashboardPage() {
          <div className={`absolute left-0 top-0 bottom-0 w-1 ${intensityTheme.bg} transition-colors duration-1000`}></div>
          
          <div className="flex items-center gap-5 flex-1 w-full min-w-0">
-            {/* PROTEÇÃO RBAC */}
+            {/* PROTEÇÃO: Botão CONFIG só para Staff */}
             {isStaff && (
-               <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">
-                  ⚙️ CONFIG
-               </button>
+               <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">⚙️ CONFIG</button>
             )}
             <div className="flex flex-col min-w-0">
                <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5">Tactical Directive</span>
@@ -517,11 +309,8 @@ export default function DashboardPage() {
                   <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5">Periodization</span>
                   <span className="text-white text-[11px] tracking-[0.2em] font-black italic uppercase">WEEK {squadConfig.week}: {squadConfig.phase}</span>
                </div>
-               <span className={`text-[10px] font-black italic tracking-widest uppercase ${intensityTheme.text}`}>
-                  {squadConfig.load} LOAD
-               </span>
+               <span className={`text-[10px] font-black italic tracking-widest uppercase ${intensityTheme.text}`}>{squadConfig.load} LOAD</span>
             </div>
-            
             <div className="flex items-center gap-3 w-full">
                <div className="h-1.5 flex-1 bg-slate-800 rounded-full overflow-hidden relative shadow-inner">
                   <div className={`absolute top-0 bottom-0 left-0 ${intensityTheme.bg} ${intensityTheme.shadow} transition-all duration-1000`} style={{ width: `${squadConfig.intensity}%` }}></div>
@@ -536,13 +325,14 @@ export default function DashboardPage() {
          <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500 opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4 border-b border-white/5 pb-6">
             <div><h3 className="text-xl text-white italic flex items-center gap-3"><div className="w-1.5 h-5 bg-emerald-500 rounded-full shadow-[0_0_10px_#10b981]"></div> Squad Readiness</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-2">PREVENÇÃO DE LESÕES E BURN-OUT TÁTICO</p></div>
-            <button onClick={() => setWellnessModalOpen(true)} className="bg-emerald-600/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white px-6 py-3 rounded-2xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> DAILY SYNC</button>
+            {/* O jogador pode ver e clicar no Daily Sync dele! */}
+            <button onClick={() => { if(!isStaff) setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); setWellnessModalOpen(true); }} className="bg-emerald-600/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white px-6 py-3 rounded-2xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> DAILY SYNC</button>
          </div>
 
          {teamWellness.length > 0 ? (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+           <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-4'}`}>
               
-              {/* RENDERIZA OS JOGADORES AUTORIZADOS */}
+              {/* RENDERIZAÇÃO INTELIGENTE (STAFF VS JOGADOR) */}
               {teamWellness
                 .filter(p => isStaff || p.puuid === currentUser.puuid)
                 .map((p) => {
@@ -550,21 +340,15 @@ export default function DashboardPage() {
                  const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/5';
 
                  return (
-                   <div key={p.puuid} className={`relative p-5 rounded-[24px] border transition-all overflow-hidden ${colorClass}`}>
-                      
+                   <div key={p.puuid} className={`relative p-5 rounded-[24px] border transition-all overflow-hidden ${colorClass} ${!isStaff ? 'col-span-1 h-full' : ''}`}>
                       {!p.hasAnsweredToday && (
                         <div className="absolute inset-0 bg-[#121212]/90 backdrop-blur-sm z-20 flex flex-col items-center justify-center border border-white/5">
-                           <span className="text-3xl mb-3 animate-pulse opacity-50">⏳</span>
-                           <span className="text-[9px] text-slate-400 tracking-[0.2em] font-black text-center px-4 leading-relaxed">PENDENTE DE<br/>RESPOSTA HOJE</span>
+                           <span className="text-3xl mb-3 animate-pulse opacity-50">⏳</span><span className="text-[9px] text-slate-400 tracking-[0.2em] font-black text-center px-4 leading-relaxed">PENDENTE DE<br/>RESPOSTA HOJE</span>
                         </div>
                       )}
-
                       {isStaff && p.history.length > 0 && (
-                         <button onClick={() => setWellnessHistoryModal({ isOpen: true, player: p, history: p.history })} className="absolute top-4 right-4 z-30 text-[8px] bg-black/40 hover:bg-white/10 text-slate-400 hover:text-white px-2 py-1 rounded border border-white/5 transition-all">
-                            HISTÓRICO
-                         </button>
+                         <button onClick={() => setWellnessHistoryModal({ isOpen: true, player: p, history: p.history })} className="absolute top-4 right-4 z-30 text-[8px] bg-black/40 hover:bg-white/10 text-slate-400 hover:text-white px-2 py-1 rounded border border-white/5 transition-all">HISTÓRICO</button>
                       )}
-
                       <div className="flex justify-between items-start mb-4 relative z-10">
                          <div className="flex items-start gap-3 flex-1 min-w-0 pr-2">
                            {p.photo && <img src={p.photo} alt={p.name} className="w-9 h-9 rounded-full border border-white/10 object-cover shrink-0 mt-0.5" />}
@@ -575,31 +359,32 @@ export default function DashboardPage() {
                          </div>
                          <span className={`text-2xl font-black italic leading-none shrink-0 pt-1 ${isDanger ? 'text-red-400 animate-pulse' : ''}`}>{p.score}%</span>
                       </div>
-                      <div className="space-y-2 relative z-10">
-                        <WellnessBar label="SONO" value={p.sleep} />
-                        <WellnessBar label="MENTAL" value={p.mental} />
-                        <WellnessBar label="FÍSICO" value={p.physical} />
-                      </div>
+                      <div className="space-y-2 relative z-10"><WellnessBar label="SONO" value={p.sleep} /><WellnessBar label="MENTAL" value={p.mental} /><WellnessBar label="FÍSICO" value={p.physical} /></div>
                    </div>
                  );
               })}
 
-              {/* TAPA-BURACO PARA QUANDO FOR JOGADOR (OCUPA O RESTO DO GRID) */}
-              {!isStaff && teamWellness.filter(p => p.puuid === currentUser.puuid).length > 0 && (
-                 <div className="md:col-span-1 lg:col-span-4 bg-white/[0.02] border border-dashed border-white/10 rounded-[24px] p-6 flex flex-col justify-center items-center text-center transition-all hover:border-white/20 hover:bg-white/[0.04]">
-                    <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/10">
-                       <span className="text-xl opacity-50 grayscale">🛡️</span>
+              {/* SE FOR JOGADOR: Preenche o espaço vazio com um Gráfico Pessoal */}
+              {!isStaff && teamWellness.find(p => p.puuid === currentUser.puuid) && (
+                 <div className="col-span-1 lg:col-span-3 bg-black/20 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group">
+                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
+                    <div className="flex items-center justify-between mb-4">
+                       <div><h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Seu Desempenho Biométrico</h4><p className="text-[9px] text-slate-500 tracking-widest mt-1">HISTÓRICO RECENTE (ATÉ 7 DIAS)</p></div>
+                       <span className="text-2xl opacity-20 group-hover:opacity-100 transition-all">📈</span>
                     </div>
-                    <h4 className="text-white text-lg italic font-black mb-2 uppercase">PROTOCOLO DE PRIVACIDADE ATIVO</h4>
-                    <p className="text-[10px] text-slate-400 max-w-lg leading-relaxed tracking-widest uppercase">
-                       A BIOMETRIA DA SUA EQUIPE É ESTRITAMENTE RESTRITA À COMISSÃO TÉCNICA.<br/><br/>
-                       SEU ÚNICO OBJETIVO É GARANTIR QUE SUA MÁQUINA ESTEJA 100% OPERACIONAL. FAÇA SEU DAILY SYNC TODOS OS DIAS ANTES DOS TREINOS.
-                    </p>
+                    {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
+                       <ResponsiveContainer width="100%" height={100}>
+                          <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
+                            <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
+                            <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
+                          </LineChart>
+                       </ResponsiveContainer>
+                    ) : <p className="text-[10px] text-slate-600 text-center italic py-6">Sincronize seus dados diários para gerar o gráfico.</p>}
                  </div>
               )}
 
            </div>
-         ) : <div className="text-center py-10"><p className="text-slate-500 text-xs tracking-widest">NENHUM JOGADOR ATIVO NO ROSTER DA TAG {squadConfig.teamAcronym}.</p></div>}
+         ) : <div className="text-center py-10"><p className="text-slate-500 text-xs tracking-widest">NENHUM JOGADOR ATIVO NO ROSTER.</p></div>}
       </div>
 
       {/* SQUAD FORM & KPI GRID */}
@@ -636,8 +421,7 @@ export default function DashboardPage() {
          <div className="absolute top-0 left-0 w-full h-1 bg-white opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4">
             <div><h3 className="text-xl text-white italic">Advanced Scrim Report</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">HISTÓRICO COMPORTAMENTAL</p></div>
-            
-            {/* PROTEÇÃO RBAC */}
+            {/* PROTEÇÃO: Botão LOG REPORT só para Staff */}
             {isStaff && (
                <button onClick={() => { setEditScrimId(null); setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' }); setScrimModalOpen(true); }} className="bg-white/10 border border-white/20 text-white hover:bg-white hover:text-black px-4 py-2 rounded-xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> LOG REPORT</button>
             )}
@@ -682,8 +466,7 @@ export default function DashboardPage() {
                      <td className="p-4 text-center"><span className={`text-[9px] px-3 py-1 rounded border tracking-widest ${getPunctualityColor(scrim.punctuality)}`}>{scrim.punctuality}</span></td>
                      <td className="p-4 text-center rounded-r-2xl relative">
                         <span className={`text-[10px] font-black ${scrim.remakes === 0 ? 'text-slate-600' : scrim.remakes > 1 ? 'text-red-400' : 'text-yellow-400'}`}>{scrim.remakes} RMK</span>
-                        
-                        {/* PROTEÇÃO RBAC */}
+                        {/* PROTEÇÃO: Edição de Scrims apenas para Staff */}
                         {isStaff && (
                            <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
                               <button onClick={() => { setEditScrimId(scrim.id); setScrimForm({ date: scrim.scrim_date, opponent: scrim.opponent_acronym, result: scrim.result, score: scrim.score || '', mode: scrim.mode || 'MD1', comp: scrim.comp_tested, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: scrim.match_ids || '' }); setScrimModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
@@ -732,7 +515,7 @@ export default function DashboardPage() {
                 if (task.tag === 'DRAFT') colorClass = 'text-purple-400 border-purple-500/30 bg-purple-500/10';
 
                 return (
-                  <div key={task.id} onClick={() => toggleTask(task.id, task.is_done)} className={`p-4 rounded-2xl border transition-all cursor-pointer flex gap-4 items-start ${task.is_done ? 'bg-black/40 border-white/5 opacity-50 hover:opacity-100' : 'bg-white/[0.02] border-white/10 hover:border-white/20 hover:bg-white/[0.05]'}`}>
+                  <div key={task.id} onClick={() => toggleTask(task.id, task.is_done)} className={`p-4 rounded-2xl border transition-all ${isStaff ? 'cursor-pointer' : 'cursor-default'} flex gap-4 items-start ${task.is_done ? 'bg-black/40 border-white/5 opacity-50 hover:opacity-100' : 'bg-white/[0.02] border-white/10 hover:border-white/20 hover:bg-white/[0.05]'}`}>
                      <div className={`w-5 h-5 shrink-0 rounded-md border-2 mt-0.5 flex items-center justify-center transition-colors ${task.is_done ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>{task.is_done && <span className="text-white text-[10px]">✓</span>}</div>
                      <div className="flex-1">
                         <div className="flex items-center gap-2 mb-2"><span className={`text-[8px] px-2 py-0.5 rounded-md border ${colorClass} tracking-widest`}>{task.tag}</span></div>
@@ -743,7 +526,7 @@ export default function DashboardPage() {
               }) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUMA TAREFA PENDENTE.</p>}
            </div>
 
-           {/* PROTEÇÃO RBAC NO VOD REVIEW TBM (Opcional, mas faz sentido) */}
+           {/* PROTEÇÃO: Apenas Staff pode adicionar Tarefa */}
            {isStaff && (
               <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/10 text-slate-500 text-[10px] tracking-widest hover:border-white/30 hover:text-white transition-all bg-black/20 shrink-0 mt-auto">
                  + ADICIONAR NOVA TAREFA
@@ -757,7 +540,7 @@ export default function DashboardPage() {
       ========================================= */}
 
       {/* MODAL 0: COMMAND BAR CONFIG */}
-      {isConfigModalOpen && (
+      {isConfigModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleUpdateConfig} className="w-full max-w-2xl bg-[#121212] border border-yellow-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(234,179,8,0.15)] relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-yellow-900 to-yellow-500"></div>
@@ -789,7 +572,7 @@ export default function DashboardPage() {
       )}
 
       {/* MODAL 1: TARGET INTEL */}
-      {isTargetModalOpen && (
+      {isTargetModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleUpdateTarget} className="w-full max-w-xl bg-[#121212] border border-purple-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(168,85,247,0.15)] relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-900 to-purple-500"></div>
@@ -816,7 +599,7 @@ export default function DashboardPage() {
       )}
 
       {/* MODAL 2: ADD VOD TASK */}
-      {isVodModalOpen && (
+      {isVodModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleAddVodTask} className="w-full max-w-xl bg-[#121212] border border-amber-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(245,158,11,0.15)] relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-900 to-amber-500"></div>
@@ -849,9 +632,8 @@ export default function DashboardPage() {
             <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">DAILY READINESS SYNC</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">PROTOCOLO DE BIOMETRIA</p></div>
             <div className="space-y-4 mb-4">
                <label className="text-[10px] text-slate-500 ml-2">Jogador</label>
-               <select value={wellnessForm.puuid} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-emerald-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                 {/* Staff vê todos, Jogador só vê a si mesmo */}
-                 {roster.filter(p => isStaff || p.puuid === currentUser.puuid).map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
+               <select value={wellnessForm.puuid} disabled={!isStaff} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-emerald-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer disabled:opacity-50">
+                 {roster.map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
                </select>
             </div>
             <div className="space-y-8">
@@ -868,7 +650,7 @@ export default function DashboardPage() {
       )}
 
       {/* MODAL 4: ADD MISSION */}
-      {isMissionModalOpen && (
+      {isMissionModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleSaveMission} className="w-full max-w-xl bg-[#121212] border border-blue-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(59,130,246,0.15)] relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-900 to-blue-400"></div>
@@ -907,7 +689,7 @@ export default function DashboardPage() {
       )}
 
       {/* MODAL 5: LOG SCRIM REPORT */}
-      {isScrimModalOpen && (
+      {isScrimModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
           <form onSubmit={handleSaveScrim} className="w-full max-w-4xl bg-[#121212] border border-white/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(255,255,255,0.1)] relative overflow-hidden my-auto">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-slate-500 to-white"></div>
