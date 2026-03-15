@@ -11,7 +11,7 @@ export default function DashboardPage() {
   // AUTENTICAÇÃO E USUÁRIO LOGADO
   // ==========================================
   const [currentUser, setCurrentUser] = useState({ 
-    id: '', role: 'loading', puuid: '', name: 'CARREGANDO...', photo: '' 
+    id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' 
   });
   
   // Variável Mágica: Define quem tem poder de edição no painel
@@ -22,6 +22,7 @@ export default function DashboardPage() {
   });
 
   const [stats, setStats] = useState({ matches: 0, winrate: 0, players: 0 });
+  const [myStats, setMyStats] = useState({ lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 }); // Novo estado para o Player Hub
   const [loading, setLoading] = useState(true);
   
   // ==========================================
@@ -81,8 +82,8 @@ export default function DashboardPage() {
             loggedUser.photo = `https://ui-avatars.com/api/?name=${profile.full_name || 'User'}&background=1e293b&color=3b82f6`;
          }
       } else {
-         // Fallback Seguro (Para testar se não houver login ativo)
-         loggedUser = { id: 'dev', role: 'analista', puuid: 'TESTE', name: 'MODO DESENVOLVEDOR', photo: `https://ui-avatars.com/api/?name=Dev&background=1e293b&color=3b82f6` };
+         // Fallback Seguro (Para testar se não houver login ativo) - MUDE PARA 'jogador' PRA TESTAR O PLAYER HUB
+         loggedUser = { id: 'dev', role: 'jogador', puuid: 'TESTE', name: 'CHOVY BR', photo: `https://ui-avatars.com/api/?name=C&background=1e293b&color=3b82f6` };
       }
 
       // 1. Busca Config e Tag Mestra
@@ -101,8 +102,9 @@ export default function DashboardPage() {
 
       // Atualiza a foto do usuário logado se ele estiver no Roster
       const myPlayerInfo = activeRoster.find(p => p.puuid === loggedUser.puuid);
+      const myNickname = myPlayerInfo ? myPlayerInfo.nickname : loggedUser.name;
       if (myPlayerInfo && myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url;
-      setCurrentUser(loggedUser); // Finalmente seta o usuário master
+      setCurrentUser({...loggedUser, name: myNickname});
 
       // 3. Busca Times
       const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
@@ -124,17 +126,40 @@ export default function DashboardPage() {
 
       if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
 
-      // 5. Internal MVP Race
+      // 5. Internal MVP Race & Posição do Jogador
+      let tempMyStats = { lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 };
       const { data: mvpData } = await supabase.from('hub_players_roster').select('nickname, primary_role, mvp_score').ilike('team_acronym', `%${myTeam}%`).order('mvp_score', { ascending: false });
-      if (mvpData) setSquadForm(mvpData.map(p => ({ name: p.nickname, role: p.primary_role, rating: (Number(p.mvp_score) || 0).toFixed(1), streak: Number(p.mvp_score) >= 8 ? 'ON FIRE' : Number(p.mvp_score) < 6 ? 'COLD' : 'STABLE' })));
 
-      // 6. Squad Performance Index
-      const { data: perfData } = await supabase.from('hub_players_performance').select('avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
+      if (mvpData) {
+        setSquadForm(mvpData.map(p => ({ name: p.nickname, role: p.primary_role, rating: (Number(p.mvp_score) || 0).toFixed(1), streak: Number(p.mvp_score) >= 8 ? 'ON FIRE' : Number(p.mvp_score) < 6 ? 'COLD' : 'STABLE' })));
+        
+        // Pega rank do jogador
+        const myMvpIndex = mvpData.findIndex(p => p.nickname.toUpperCase() === myNickname.toUpperCase());
+        if(myMvpIndex !== -1) {
+           tempMyStats.mvp = Number(mvpData[myMvpIndex].mvp_score) || 0;
+           tempMyStats.streak = tempMyStats.mvp >= 8 ? 'ON FIRE' : tempMyStats.mvp < 6 ? 'COLD' : 'STABLE';
+           tempMyStats.rank = myMvpIndex + 1;
+        }
+      }
+
+      // 6. Squad Performance Index & Status do Jogador
+      const { data: perfData } = await supabase.from('hub_players_performance').select('player_name, nickname, avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
+
       if (perfData && perfData.length > 0) {
         const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
         const ml = getMed(perfData.map(p => Number(p.avg_lane || 0))), mi = getMed(perfData.map(p => Number(p.avg_impact || 0))), mc = getMed(perfData.map(p => Number(p.avg_conversion || 0))), mv = getMed(perfData.map(p => Number(p.avg_vision || 0)));
         setTeamKpiData([{ subject: 'Lane Dom.', A: Math.round(ml), B: 65 }, { subject: 'Impact', A: Math.round(mi), B: 70 }, { subject: 'Conversion', A: Math.round(mc), B: 75 }, { subject: 'Vision', A: Math.round(mv), B: 80 }, { subject: 'Overall', A: Math.round((ml+mi+mc+mv)/4), B: 70 }]);
+
+        // Pega as stats do jogador logado
+        const myPerf = perfData.find(p => (p.nickname || p.player_name || '').toUpperCase() === myNickname.toUpperCase());
+        if (myPerf) {
+           tempMyStats.lane = Math.round(Number(myPerf.avg_lane) || 0);
+           tempMyStats.impact = Math.round(Number(myPerf.avg_impact) || 0);
+           tempMyStats.conversion = Math.round(Number(myPerf.avg_conversion) || 0);
+           tempMyStats.vision = Math.round(Number(myPerf.avg_vision) || 0);
+        }
       }
+      setMyStats(tempMyStats); // Salva as stats pessoais
 
       // 7. Eventos & Intel
       const { data: missions } = await supabase.from('missions').select('*').ilike('team_acronym', `%${myTeam}%`).order('mission_date', { ascending: true }).limit(5);
@@ -144,6 +169,8 @@ export default function DashboardPage() {
          const { data: opData } = await supabase.from('opponent_intel').select('*').eq('opponent_acronym', nextOp).maybeSingle();
          if (opData) setNextTargetIntel({ team: nextOp, topPicks: opData.top_picks || [], topBans: opData.top_bans || [], winConditions: opData.win_conditions || [] });
          else setNextTargetIntel({ team: nextOp, topPicks: [], topBans: [], winConditions: [] });
+      } else {
+         setNextTargetIntel({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
       }
 
       // 8. Scrims & VOD
@@ -330,7 +357,7 @@ export default function DashboardPage() {
          </div>
 
          {teamWellness.length > 0 ? (
-           <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-4'}`}>
+           <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-5'}`}>
               
               {/* RENDERIZAÇÃO INTELIGENTE (STAFF VS JOGADOR) */}
               {teamWellness
@@ -364,22 +391,52 @@ export default function DashboardPage() {
                  );
               })}
 
-              {/* SE FOR JOGADOR: Preenche o espaço vazio com um Gráfico Pessoal */}
+              {/* SE FOR JOGADOR: PREENCHE O ESPAÇO COM O "PERSONAL PLAYER HUB" */}
               {!isStaff && teamWellness.find(p => p.puuid === currentUser.puuid) && (
-                 <div className="col-span-1 lg:col-span-3 bg-black/20 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
-                    <div className="flex items-center justify-between mb-4">
-                       <div><h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Seu Desempenho Biométrico</h4><p className="text-[9px] text-slate-500 tracking-widest mt-1">HISTÓRICO RECENTE (ATÉ 7 DIAS)</p></div>
-                       <span className="text-2xl opacity-20 group-hover:opacity-100 transition-all">📈</span>
+                 <div className="col-span-1 lg:col-span-4 bg-gradient-to-br from-black/40 to-blue-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col lg:flex-row gap-8 relative overflow-hidden group">
+                    <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 opacity-50 group-hover:opacity-100 transition-all"></div>
+                    
+                    {/* Bloco 1: Identidade & MVP */}
+                    <div className="flex items-center gap-5 lg:w-1/3 border-b lg:border-b-0 lg:border-r border-white/5 pb-6 lg:pb-0 lg:pr-6">
+                       <img src={currentUser.photo} className="w-20 h-20 rounded-2xl border border-blue-500/30 object-cover shadow-[0_0_15px_rgba(59,130,246,0.3)]" />
+                       <div>
+                          <span className="text-[10px] text-blue-400 tracking-[0.3em] uppercase block mb-1">YOUR HUB</span>
+                          <h3 className="text-2xl text-white font-black italic leading-none truncate mb-2">{currentUser.name.split(' ')[0]}</h3>
+                          <div className="flex gap-2 mt-2">
+                            <span className="text-[9px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 tracking-widest">RANK #{myStats.rank || '-'}</span>
+                            <span className={`text-[9px] px-2 py-0.5 rounded border tracking-widest ${myStats.streak === 'ON FIRE' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>{myStats.streak}</span>
+                          </div>
+                       </div>
                     </div>
-                    {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
-                       <ResponsiveContainer width="100%" height={100}>
-                          <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
-                            <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
-                            <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
-                          </LineChart>
-                       </ResponsiveContainer>
-                    ) : <p className="text-[10px] text-slate-600 text-center italic py-6">Sincronize seus dados diários para gerar o gráfico.</p>}
+
+                    {/* Bloco 2: Estatísticas Táticas */}
+                    <div className="lg:w-1/3 flex flex-col justify-center border-b lg:border-b-0 lg:border-r border-white/5 pb-6 lg:pb-0 lg:pr-6 space-y-3">
+                       <div className="flex justify-between items-center mb-1">
+                          <span className="text-[9px] text-slate-400 tracking-[0.2em] uppercase">Tactical Performance</span>
+                          <span className="text-lg opacity-30">📊</span>
+                       </div>
+                       <MiniStatBar label="Lane Dom." value={myStats.lane} color="bg-blue-500" />
+                       <MiniStatBar label="Impact" value={myStats.impact} color="bg-emerald-500" />
+                       <MiniStatBar label="Conversion" value={myStats.conversion} color="bg-amber-500" />
+                       <MiniStatBar label="Vision" value={myStats.vision} color="bg-purple-500" />
+                    </div>
+
+                    {/* Bloco 3: Gráfico de Evolução Biométrica */}
+                    <div className="lg:w-1/3 flex flex-col justify-center">
+                       <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Biometric Evolution</h4>
+                       </div>
+                       {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
+                          <div className="h-[80px] w-full mt-2">
+                            <ResponsiveContainer width="100%" height="100%">
+                               <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
+                                 <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={2} dot={{r: 3, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 5}} />
+                                 <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
+                               </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                       ) : <p className="text-[9px] text-slate-600 text-center italic mt-4">Sincronize diariamente para gerar gráficos.</p>}
+                    </div>
                  </div>
               )}
 
@@ -865,6 +922,19 @@ function WellnessInput({ icon, title, desc, value, onChange }: any) {
             return (<button key={num} type="button" onClick={() => onChange(num)} className={`flex-1 py-4 rounded-xl border-2 text-lg font-black transition-all ${isActive ? `${activeColor} text-white` : 'bg-black/50 border-white/5 text-slate-600 hover:border-white/20'}`}>{num}</button>);
           })}
        </div>
+    </div>
+  );
+}
+
+// Novo componente para as barrinhas de Status do Jogador Logado
+function MiniStatBar({ label, value, color }: { label: string, value: number, color: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[8px] text-slate-500 tracking-widest uppercase w-16 truncate">{label}</span>
+      <div className="flex-1 h-1.5 bg-black rounded-full overflow-hidden border border-white/5 relative">
+         <div className={`absolute top-0 left-0 h-full ${color} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }}></div>
+      </div>
+      <span className="text-[9px] font-black text-white w-6 text-right">{value}</span>
     </div>
   );
 }
