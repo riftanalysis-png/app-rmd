@@ -8,14 +8,17 @@ import {
 
 export default function DashboardPage() {
   // ==========================================
-  // SIMULAÇÃO DE AUTENTICAÇÃO E NOVOS ESTADOS
-  // ==========================================
-  // TODO: Substituir pelo usuário real do Supabase futuramente
-  // ==========================================
   // AUTENTICAÇÃO REAL (SUPABASE AUTH)
   // ==========================================
-  const [currentUser, setCurrentUser] = useState({ role: 'loading', puuid: '' });
+  const [currentUser, setCurrentUser] = useState({ 
+    role: 'loading', 
+    puuid: '', 
+    name: 'CARREGANDO IDENTIFICAÇÃO...' 
+  });
   
+  // Variável de controle de acesso (RBAC)
+  const isStaff = ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase());
+
   const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ 
     isOpen: false, player: null, history: [] 
   });
@@ -42,6 +45,7 @@ export default function DashboardPage() {
   const [vodTasks, setVodTasks] = useState<any[]>([]);
   const [roster, setRoster] = useState<any[]>([]);
   const [teamWellness, setTeamWellness] = useState<any[]>([]);
+  const [soloQData, setSoloQData] = useState<any[]>([]);
   const [squadForm, setSquadForm] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
   
@@ -66,11 +70,7 @@ export default function DashboardPage() {
   const [vodForm, setVodForm] = useState({ tag: 'MACRO', text: '' });
 
   const [teamKpiData, setTeamKpiData] = useState([
-    { subject: 'Lane Dom.', A: 0, B: 65 },
-    { subject: 'Impact', A: 0, B: 70 },
-    { subject: 'Conversion', A: 0, B: 75 },
-    { subject: 'Vision', A: 0, B: 80 },
-    { subject: 'Overall', A: 0, B: 70 }
+    { subject: 'Lane Dom.', A: 0, B: 65 }, { subject: 'Impact', A: 0, B: 70 }, { subject: 'Conversion', A: 0, B: 75 }, { subject: 'Vision', A: 0, B: 80 }, { subject: 'Overall', A: 0, B: 70 }
   ]);
 
   // ==========================================
@@ -78,24 +78,25 @@ export default function DashboardPage() {
   // ==========================================
   useEffect(() => {
     async function fetchDashboardData() {
-      // 0. AUTENTICAÇÃO: Descobre quem é o usuário logado e busca o perfil dele
+      // 0. AUTENTICAÇÃO REAL: Descobre quem é o usuário logado e busca o perfil dele
       const { data: { user } } = await supabase.auth.getUser();
-      let loggedUser = { role: 'jogador', puuid: '' };
+      let loggedUser = { role: 'analista', puuid: 'TESTE', name: 'MODO TESTE/VISITANTE' }; // Fallback caso teste sem login
 
       if (user) {
-         const { data: profile } = await supabase.from('profiles').select('role, puuid').eq('id', user.id).single();
+         const { data: profile } = await supabase.from('profiles').select('full_name, role, puuid').eq('id', user.id).single();
          if (profile) {
             loggedUser = { 
                role: profile.role || 'jogador', 
-               puuid: profile.puuid || '' 
+               puuid: profile.puuid || '',
+               name: profile.full_name || 'OPERADOR DESCONHECIDO'
             };
-            setCurrentUser(loggedUser);
          }
-      } else {
-         // Se ninguém estiver logado, redireciona para o Login (opcional)
-         // window.location.href = '/login';
-         return; // Interrompe o carregamento se não tiver usuário
       }
+      setCurrentUser(loggedUser);
+
+      // 0.1 Busca o Dicionário de Times
+      const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
+      if (teamsData) setTeamsList(teamsData);
 
       // 1. Puxa a Configuração
       const { data: configData, error: configError } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
@@ -126,7 +127,6 @@ export default function DashboardPage() {
 
       // 3. ✨ CÁLCULO DE EFICIÊNCIA REAL ✨
       const { data: teamMatches } = await supabase.from('matches').select('id, blue_team_tag, red_team_tag, winner_side').or(`blue_team_tag.ilike."%${myTeam}%",red_team_tag.ilike."%${myTeam}%"`);
-      
       const analyticCycles = teamMatches ? teamMatches.length : 0;
       let wins = 0;
 
@@ -145,7 +145,6 @@ export default function DashboardPage() {
           if ((weAreBlue && isBlueWin) || (weAreRed && isRedWin)) wins++;
         });
       }
-      
       const globalEfficiency = analyticCycles > 0 ? Math.round((wins / analyticCycles) * 100) : 0;
 
       // 4. Configura UI com Roster Real
@@ -155,7 +154,6 @@ export default function DashboardPage() {
 
       // 4.5 INTERNAL MVP RACE
       const { data: mvpData } = await supabase.from('hub_players_roster').select('nickname, primary_role, mvp_score').ilike('team_acronym', `%${myTeam}%`).order('mvp_score', { ascending: false });
-
       if (mvpData) {
         const formattedMvp = mvpData.map(p => {
           const score = p.mvp_score != null ? Number(p.mvp_score) : 0; 
@@ -169,7 +167,6 @@ export default function DashboardPage() {
 
       // 5. ✨ SQUAD PERFORMANCE INDEX ✨
       const { data: perfData } = await supabase.from('hub_players_performance').select('avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
-
       if (perfData && perfData.length > 0) {
         const getMedian = (arr: number[]) => {
           if (!arr || arr.length === 0) return 0;
@@ -177,30 +174,17 @@ export default function DashboardPage() {
           const mid = Math.floor(sorted.length / 2);
           return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
         };
-
-        const lanes = perfData.map(p => Number(p.avg_lane || 0));
-        const impacts = perfData.map(p => Number(p.avg_impact || 0));
-        const conversions = perfData.map(p => Number(p.avg_conversion || 0));
-        const visions = perfData.map(p => Number(p.avg_vision || 0));
-
-        const medLane = getMedian(lanes);
-        const medImpact = getMedian(impacts);
-        const medConversion = getMedian(conversions);
-        const medVision = getMedian(visions);
+        const lanes = perfData.map(p => Number(p.avg_lane || 0)); const impacts = perfData.map(p => Number(p.avg_impact || 0)); const conversions = perfData.map(p => Number(p.avg_conversion || 0)); const visions = perfData.map(p => Number(p.avg_vision || 0));
+        const medLane = getMedian(lanes); const medImpact = getMedian(impacts); const medConversion = getMedian(conversions); const medVision = getMedian(visions);
         const overallScore = (medLane + medImpact + medConversion + medVision) / 4;
 
         setTeamKpiData([
-          { subject: 'Lane Dom.', A: Math.round(medLane), B: 65 }, 
-          { subject: 'Impact', A: Math.round(medImpact), B: 70 },
-          { subject: 'Conversion', A: Math.round(medConversion), B: 75 },
-          { subject: 'Vision', A: Math.round(medVision), B: 80 },
-          { subject: 'Overall', A: Math.round(overallScore), B: 70 }
+          { subject: 'Lane Dom.', A: Math.round(medLane), B: 65 }, { subject: 'Impact', A: Math.round(medImpact), B: 70 }, { subject: 'Conversion', A: Math.round(medConversion), B: 75 }, { subject: 'Vision', A: Math.round(medVision), B: 80 }, { subject: 'Overall', A: Math.round(overallScore), B: 70 }
         ]);
       }
 
       // 6. Agenda de Eventos
       const { data: missions } = await supabase.from('missions').select('*').ilike('team_acronym', `%${myTeam}%`).order('mission_date', { ascending: true }).limit(5);
-      
       let nextOpponent = '';
       if (missions && missions.length > 0) {
          setUpcomingMissions(missions);
@@ -256,19 +240,16 @@ export default function DashboardPage() {
   
   const handleUpdateConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isStaff) return alert("Acesso Negado.");
     const payload = {
-      my_team_tag: configForm.teamAcronym.toUpperCase(),
-      tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, 
-      intensity_score: configForm.intensity, cognitive_load: configForm.load 
+      my_team_tag: configForm.teamAcronym.toUpperCase(), tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, intensity_score: configForm.intensity, cognitive_load: configForm.load 
     };
     if (configId) {
       const { error } = await supabase.from('squad_config').update(payload).eq('id', configId);
-      if (error) alert("Erro ao atualizar config: " + error.message);
-      else window.location.reload();
+      if (error) alert("Erro ao atualizar config: " + error.message); else window.location.reload();
     } else {
       const { error } = await supabase.from('squad_config').insert([payload]).select();
-      if (error) alert("Erro ao criar config: " + error.message);
-      else window.location.reload();
+      if (error) alert("Erro ao criar config: " + error.message); else window.location.reload();
     }
   };
 
@@ -280,13 +261,11 @@ export default function DashboardPage() {
 
   const handleSaveMission = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isStaff) return alert("Acesso Negado.");
     let formattedDate = missionForm.date;
     if (formattedDate.includes('/')) {
       const parts = formattedDate.split('/');
-      const day = parts[0].padStart(2, '0');
-      const month = parts[1].padStart(2, '0');
-      const year = parts.length === 3 ? parts[2] : new Date().getFullYear();
-      formattedDate = `${year}-${month}-${day}`;
+      formattedDate = `${parts.length === 3 ? parts[2] : new Date().getFullYear()}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
     }
     const timeFormatted = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time;
     const payload = { team_acronym: squadConfig.teamAcronym, mission_date: formattedDate, mission_time: timeFormatted, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: 'SCHEDULED' };
@@ -309,6 +288,7 @@ export default function DashboardPage() {
   };
 
   const handleDeleteMission = async (id: string) => {
+    if (!isStaff) return;
     if (!window.confirm("Tem certeza que deseja excluir este evento da agenda?")) return;
     const { error } = await supabase.from('missions').delete().eq('id', id);
     if (error) alert("Erro ao excluir evento: " + error.message);
@@ -317,20 +297,10 @@ export default function DashboardPage() {
 
   const handleSaveScrim = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isStaff) return alert("Acesso Negado.");
     const today = new Date().toISOString().split('T')[0];
-    
     const payload = {
-      team_acronym: squadConfig.teamAcronym, 
-      scrim_date: scrimForm.date || today, 
-      opponent_acronym: scrimForm.opponent, 
-      result: scrimForm.result, 
-      score: scrimForm.score,
-      mode: scrimForm.mode,
-      comp_tested: scrimForm.comp, 
-      difficulty: scrimForm.difficulty, 
-      punctuality: scrimForm.punctuality, 
-      remakes: scrimForm.remakes,
-      match_ids: scrimForm.match_ids
+      team_acronym: squadConfig.teamAcronym, scrim_date: scrimForm.date || today, opponent_acronym: scrimForm.opponent, result: scrimForm.result, score: scrimForm.score, mode: scrimForm.mode, comp_tested: scrimForm.comp, difficulty: scrimForm.difficulty, punctuality: scrimForm.punctuality, remakes: scrimForm.remakes, match_ids: scrimForm.match_ids
     };
 
     if (editScrimId) {
@@ -353,14 +323,15 @@ export default function DashboardPage() {
   };
 
   const handleDeleteScrim = async (id: string) => {
+    if (!isStaff) return;
     if (!window.confirm("Tem certeza que deseja excluir este Report permanentemente?")) return;
     const { error } = await supabase.from('scrim_reports').delete().eq('id', id);
-    if (error) alert("Erro ao excluir: " + error.message);
-    else setScrimReports(prev => prev.filter(s => s.id !== id));
+    if (error) alert("Erro ao excluir: " + error.message); else setScrimReports(prev => prev.filter(s => s.id !== id));
   };
 
   const handleUpdateTarget = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isStaff) return alert("Acesso Negado.");
     const conditions = [targetForm.win1, targetForm.win2, targetForm.win3].filter(Boolean);
     const { error } = await supabase.from('opponent_intel').upsert({ opponent_acronym: targetForm.team.toUpperCase(), top_picks: [], top_bans: [], win_conditions: conditions }, { onConflict: 'opponent_acronym' }).select();
     if (error) alert(`Erro ao salvar Win Conditions: ${error.message}`);
@@ -369,6 +340,7 @@ export default function DashboardPage() {
 
   const handleAddVodTask = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isStaff) return alert("Acesso Negado.");
     const { data, error } = await supabase.from('vod_tasks').insert([{ team_acronym: squadConfig.teamAcronym, tag: vodForm.tag, task_text: vodForm.text, is_done: false }]).select();
     if (error) alert("Erro ao salvar VOD Task: " + error.message);
     else if (data) { setVodTasks(prev => [data[0], ...prev]); setVodForm({ tag: 'MACRO', text: '' }); setVodModalOpen(false); }
@@ -423,20 +395,19 @@ export default function DashboardPage() {
           <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none"></div>
           <div className="relative z-10 shrink-0">
              <div className="w-40 h-40 rounded-[40px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
-                <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Carlos" className="w-full h-full object-cover" alt="Profile" />
+                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.name}`} className="w-full h-full object-cover" alt="Profile" />
              </div>
-             <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">LEVEL 42</div>
+             <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">A.I SYSTEM</div>
           </div>
           <div className="relative z-10 flex-1 text-center md:text-left">
             <div className="flex items-center justify-center md:justify-start gap-3 mb-2">
-               <p className="text-blue-400 text-xs tracking-[0.5em]">ACTIVE ANALYST PROTOCOL</p>
+               <p className="text-blue-400 text-xs tracking-[0.5em]">SYSTEM CONNECTED</p>
                <span className="bg-blue-500 text-black px-2 py-0.5 rounded font-black text-[9px] tracking-widest">TEAM: {squadConfig.teamAcronym}</span>
             </div>
-            <h2 className="text-5xl lg:text-6xl text-white mb-4 leading-none">CARLOS AUGUSTO</h2>
+            <h2 className="text-5xl lg:text-6xl text-white mb-4 leading-none truncate max-w-full">{currentUser.name.toUpperCase()}</h2>
             <div className="flex flex-wrap justify-center md:justify-start gap-3">
-               <Badge text="HEAD ANALYST" color="bg-blue-500" />
-               <Badge text="TIER 3 SPECIALIST" color="bg-purple-600" />
-               <Badge text="RIO DE JANEIRO, BR" color="bg-slate-800" />
+               <Badge text={currentUser.role} color={isStaff ? "bg-blue-500" : "bg-emerald-600"} />
+               <Badge text="AUTHORIZED PERSONNEL" color="bg-purple-600" />
             </div>
           </div>
         </div>
@@ -446,7 +417,10 @@ export default function DashboardPage() {
            <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
            <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
              <div><h3 className="text-sm text-slate-400 tracking-widest leading-none">AGENDA DE EVENTOS</h3></div>
-             <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[9px] tracking-widest transition-all">+ NOVO EVENTO</button>
+             {/* PROTEÇÃO RBAC */}
+             {isStaff && (
+               <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[9px] tracking-widest transition-all">+ NOVO EVENTO</button>
+             )}
            </div>
            
            <div className="space-y-3 mb-6 flex-1 overflow-y-auto custom-scrollbar pr-2">
@@ -463,10 +437,13 @@ export default function DashboardPage() {
                      <span className="text-[9px] px-2 py-1 bg-black/40 rounded-lg border border-white/10 text-slate-400">{m.mission_type}</span>
                    </div>
                    
-                   <div className="flex justify-end gap-2 mt-3 opacity-0 group-hover/card:opacity-100 transition-opacity">
-                      <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
-                      <button onClick={() => handleDeleteMission(m.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 border border-red-500/20 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
-                   </div>
+                   {/* PROTEÇÃO RBAC */}
+                   {isStaff && (
+                     <div className="flex justify-end gap-2 mt-3 opacity-0 group-hover/card:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
+                        <button onClick={() => handleDeleteMission(m.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 border border-red-500/20 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
+                     </div>
+                   )}
                 </div>
               )) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUM EVENTO AGENDADO.</p>}
            </div>
@@ -486,13 +463,16 @@ export default function DashboardPage() {
                        <span className="text-white text-sm font-black italic tracking-widest">{nextTargetIntel.team !== 'SEM ALVO' ? `VS ${nextTargetIntel.team}` : 'AWAITING ASSIGNMENT'}</span>
                     </div>
                  </div>
-                 <button onClick={() => { 
-                     if(nextTargetIntel.team === 'SEM ALVO') return alert('Agende um evento primeiro para ter um alvo.');
-                     setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); 
-                     setTargetModalOpen(true); 
-                 }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2">
-                    <span>✏️</span> UPDATE INTEL
-                 </button>
+                 {/* PROTEÇÃO RBAC */}
+                 {isStaff && (
+                   <button onClick={() => { 
+                       if(nextTargetIntel.team === 'SEM ALVO') return alert('Agende um evento primeiro para ter um alvo.');
+                       setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); 
+                       setTargetModalOpen(true); 
+                   }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2">
+                      <span>✏️</span> UPDATE INTEL
+                   </button>
+                 )}
               </div>
 
               <div className="space-y-2 relative z-10">
@@ -517,9 +497,12 @@ export default function DashboardPage() {
          <div className={`absolute left-0 top-0 bottom-0 w-1 ${intensityTheme.bg} transition-colors duration-1000`}></div>
          
          <div className="flex items-center gap-5 flex-1 w-full min-w-0">
-            <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">
-               ⚙️ CONFIG
-            </button>
+            {/* PROTEÇÃO RBAC */}
+            {isStaff && (
+               <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">
+                  ⚙️ CONFIG
+               </button>
+            )}
             <div className="flex flex-col min-w-0">
                <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5">Tactical Directive</span>
                <span className="text-white text-sm tracking-[0.2em] font-black italic truncate">{squadConfig.directive}</span>
@@ -558,12 +541,13 @@ export default function DashboardPage() {
 
          {teamWellness.length > 0 ? (
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              
+              {/* RENDERIZA OS JOGADORES AUTORIZADOS */}
               {teamWellness
-                .filter(p => ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase()) || p.puuid === currentUser.puuid)
+                .filter(p => isStaff || p.puuid === currentUser.puuid)
                 .map((p) => {
                  const isDanger = p.score < 65; const isOptimal = p.score > 85;
                  const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/5';
-                 const isStaff = ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase());
 
                  return (
                    <div key={p.puuid} className={`relative p-5 rounded-[24px] border transition-all overflow-hidden ${colorClass}`}>
@@ -599,6 +583,21 @@ export default function DashboardPage() {
                    </div>
                  );
               })}
+
+              {/* TAPA-BURACO PARA QUANDO FOR JOGADOR (OCUPA O RESTO DO GRID) */}
+              {!isStaff && teamWellness.filter(p => p.puuid === currentUser.puuid).length > 0 && (
+                 <div className="md:col-span-1 lg:col-span-4 bg-white/[0.02] border border-dashed border-white/10 rounded-[24px] p-6 flex flex-col justify-center items-center text-center transition-all hover:border-white/20 hover:bg-white/[0.04]">
+                    <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/10">
+                       <span className="text-xl opacity-50 grayscale">🛡️</span>
+                    </div>
+                    <h4 className="text-white text-lg italic font-black mb-2 uppercase">PROTOCOLO DE PRIVACIDADE ATIVO</h4>
+                    <p className="text-[10px] text-slate-400 max-w-lg leading-relaxed tracking-widest uppercase">
+                       A BIOMETRIA DA SUA EQUIPE É ESTRITAMENTE RESTRITA À COMISSÃO TÉCNICA.<br/><br/>
+                       SEU ÚNICO OBJETIVO É GARANTIR QUE SUA MÁQUINA ESTEJA 100% OPERACIONAL. FAÇA SEU DAILY SYNC TODOS OS DIAS ANTES DOS TREINOS.
+                    </p>
+                 </div>
+              )}
+
            </div>
          ) : <div className="text-center py-10"><p className="text-slate-500 text-xs tracking-widest">NENHUM JOGADOR ATIVO NO ROSTER DA TAG {squadConfig.teamAcronym}.</p></div>}
       </div>
@@ -637,7 +636,11 @@ export default function DashboardPage() {
          <div className="absolute top-0 left-0 w-full h-1 bg-white opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4">
             <div><h3 className="text-xl text-white italic">Advanced Scrim Report</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">HISTÓRICO COMPORTAMENTAL</p></div>
-            <button onClick={() => { setEditScrimId(null); setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' }); setScrimModalOpen(true); }} className="bg-white/10 border border-white/20 text-white hover:bg-white hover:text-black px-4 py-2 rounded-xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> LOG REPORT</button>
+            
+            {/* PROTEÇÃO RBAC */}
+            {isStaff && (
+               <button onClick={() => { setEditScrimId(null); setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' }); setScrimModalOpen(true); }} className="bg-white/10 border border-white/20 text-white hover:bg-white hover:text-black px-4 py-2 rounded-xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> LOG REPORT</button>
+            )}
          </div>
          <div className="overflow-x-auto custom-scrollbar pb-4 max-h-[400px]">
             <table className="w-full text-left border-separate border-spacing-y-3 min-w-[800px]">
@@ -680,10 +683,13 @@ export default function DashboardPage() {
                      <td className="p-4 text-center rounded-r-2xl relative">
                         <span className={`text-[10px] font-black ${scrim.remakes === 0 ? 'text-slate-600' : scrim.remakes > 1 ? 'text-red-400' : 'text-yellow-400'}`}>{scrim.remakes} RMK</span>
                         
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
-                           <button onClick={() => { setEditScrimId(scrim.id); setScrimForm({ date: scrim.scrim_date, opponent: scrim.opponent_acronym, result: scrim.result, score: scrim.score || '', mode: scrim.mode || 'MD1', comp: scrim.comp_tested, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: scrim.match_ids || '' }); setScrimModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
-                           <button onClick={() => handleDeleteScrim(scrim.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
-                        </div>
+                        {/* PROTEÇÃO RBAC */}
+                        {isStaff && (
+                           <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
+                              <button onClick={() => { setEditScrimId(scrim.id); setScrimForm({ date: scrim.scrim_date, opponent: scrim.opponent_acronym, result: scrim.result, score: scrim.score || '', mode: scrim.mode || 'MD1', comp: scrim.comp_tested, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: scrim.match_ids || '' }); setScrimModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
+                              <button onClick={() => handleDeleteScrim(scrim.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
+                           </div>
+                        )}
                      </td>
                    </tr>
                  )) : <tr><td colSpan={6} className="text-center py-6 text-[10px] text-slate-600">NENHUM REPORT CADASTRADO PARA {squadConfig.teamAcronym}.</td></tr>}
@@ -692,7 +698,7 @@ export default function DashboardPage() {
          </div>
       </div>
 
-      {/* TACTICAL DATA BLOCKS E VOD REVIEW QUEUE (AGORA LADO A LADO) */}
+      {/* TACTICAL DATA BLOCKS E VOD REVIEW QUEUE */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         
         {/* Radar Chart */}
@@ -737,9 +743,12 @@ export default function DashboardPage() {
               }) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUMA TAREFA PENDENTE.</p>}
            </div>
 
-           <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/10 text-slate-500 text-[10px] tracking-widest hover:border-white/30 hover:text-white transition-all bg-black/20 shrink-0 mt-auto">
-              + ADICIONAR NOVA TAREFA
-           </button>
+           {/* PROTEÇÃO RBAC NO VOD REVIEW TBM (Opcional, mas faz sentido) */}
+           {isStaff && (
+              <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/10 text-slate-500 text-[10px] tracking-widest hover:border-white/30 hover:text-white transition-all bg-black/20 shrink-0 mt-auto">
+                 + ADICIONAR NOVA TAREFA
+              </button>
+           )}
         </div>
       </div>
 
@@ -841,7 +850,8 @@ export default function DashboardPage() {
             <div className="space-y-4 mb-4">
                <label className="text-[10px] text-slate-500 ml-2">Jogador</label>
                <select value={wellnessForm.puuid} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-emerald-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                 {roster.map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
+                 {/* Staff vê todos, Jogador só vê a si mesmo */}
+                 {roster.filter(p => isStaff || p.puuid === currentUser.puuid).map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
                </select>
             </div>
             <div className="space-y-8">
