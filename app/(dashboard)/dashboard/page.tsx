@@ -11,10 +11,10 @@ export default function DashboardPage() {
   // SIMULAÇÃO DE AUTENTICAÇÃO E NOVOS ESTADOS
   // ==========================================
   // TODO: Substituir pelo usuário real do Supabase futuramente
-  const [currentUser, setCurrentUser] = useState({ 
-    role: 'analista', // Troque para 'jogador' para testar a visão restrita do Squad Readiness
-    puuid: 'PUUID_DE_TESTE_DO_JOGADOR'
-  });
+  // ==========================================
+  // AUTENTICAÇÃO REAL (SUPABASE AUTH)
+  // ==========================================
+  const [currentUser, setCurrentUser] = useState({ role: 'loading', puuid: '' });
   
   const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ 
     isOpen: false, player: null, history: [] 
@@ -78,9 +78,24 @@ export default function DashboardPage() {
   // ==========================================
   useEffect(() => {
     async function fetchDashboardData() {
-      // 0. Busca o Dicionário de Times
-      const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
-      if (teamsData) setTeamsList(teamsData);
+      // 0. AUTENTICAÇÃO: Descobre quem é o usuário logado e busca o perfil dele
+      const { data: { user } } = await supabase.auth.getUser();
+      let loggedUser = { role: 'jogador', puuid: '' };
+
+      if (user) {
+         const { data: profile } = await supabase.from('profiles').select('role, puuid').eq('id', user.id).single();
+         if (profile) {
+            loggedUser = { 
+               role: profile.role || 'jogador', 
+               puuid: profile.puuid || '' 
+            };
+            setCurrentUser(loggedUser);
+         }
+      } else {
+         // Se ninguém estiver logado, redireciona para o Login (opcional)
+         // window.location.href = '/login';
+         return; // Interrompe o carregamento se não tiver usuário
+      }
 
       // 1. Puxa a Configuração
       const { data: configData, error: configError } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
