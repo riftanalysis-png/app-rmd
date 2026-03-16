@@ -2,7 +2,9 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import Papa from 'papaparse';
-import { processMatchIntelligence } from '@/lib/services/analytics';
+
+// O Calendário Oficial do Circuitão (DD/MM)
+const OFFICIAL_DATES = ['30/03', '31/03', '06/04', '07/04', '08/04', '13/04', '14/04', '20/04', '21/04'];
 
 export default function UploadPage() {
   const [loading, setLoading] = useState(false);
@@ -15,14 +17,46 @@ export default function UploadPage() {
     return parseFloat(cleanVal) || 0;
   };
 
-  // --- MOTOR DE RATINGS (LANE, IMPACTO, CONVERSÃO, VISÃO) ---
+  // --- INTELIGÊNCIA DE CALENDÁRIO (DIA LÓGICO) BLINDADA ---
+  const determineGameType = (dateString: string) => {
+    if (!dateString) return 'SCRIM';
+    
+    // Converte a data do CSV (2026-01-14 08:13:52) para formato ISO seguro (2026-01-14T08:13:52)
+    const safeDateString = dateString.replace(' ', 'T');
+    const date = new Date(safeDateString);
+
+    if (isNaN(date.getTime())) return 'SCRIM';
+
+    const hours = date.getHours();
+    
+    // Janela oficial: >= 18h (18:00 às 23:59) OU <= 3h (00:00 às 03:59)
+    const isOfficialTimeWindow = hours >= 18 || hours <= 3;
+    if (!isOfficialTimeWindow) return 'SCRIM'; 
+
+    // Ajusta o "Dia Lógico" para jogos da madrugada
+    const logicalDate = new Date(date);
+    if (hours <= 3) {
+        logicalDate.setDate(logicalDate.getDate() - 1);
+    }
+
+    const day = String(logicalDate.getDate()).padStart(2, '0');
+    const month = String(logicalDate.getMonth() + 1).padStart(2, '0');
+    const formattedDate = `${day}/${month}`; 
+
+    if (OFFICIAL_DATES.includes(formattedDate)) {
+        return 'OFFICIAL';
+    }
+    
+    return 'SCRIM';
+  };
+
+  // --- MOTOR DE RATINGS ---
   const calculateRatings = async (players: any[]) => {
     const { data: weights } = await supabase.from('lane_weights').select('*');
     const { data: bounds } = await supabase.from('lane_metrics_bounds').select('*');
     const localBounds = bounds || [];
     const updatedBounds: any[] = [];
 
-    // 1. Cálculo de métricas derivadas e Diffs
     const playersWithDerived = players.map(p => {
       const opp = players.find(o => o.match_id === p.match_id && o.lane === p.lane && o.side !== p.side);
       const pi = p.cs_12, pj = opp?.cs_12 || pi;
@@ -31,17 +65,14 @@ export default function UploadPage() {
 
       return {
         ...p,
-        // Diffs
         cs_diff_at_12: pi - pj,
         gold_diff_at_12: si - sj,
         xp_diff_at_12: ri - rj,
-        // Siglas locais para as fórmulas (Não vão para o banco)
         _ap: ((pi / (pi + pj || 1)) + (ri / (ri + rj || 1)) + (si / (si + sj || 1))) / 3, 
         _aq: p.dmg_percent / (p.gold_share || 1),
       };
     });
 
-    // 2. Mapeamento de Siglas -> Colunas Reais
     const metricsMap: any = {
       ap: '_ap', p: 'cs_12', ar: 'cs_diff_at_12', as: 'gold_diff_at_12', at: 'xp_diff_at_12', l: 'deaths_at_12', ac: 'plates', al: 'vpm_at_12', am: 'kda_at_12',
       i: 'kda', k: 'kp', ae: 'taken_percent', ad: 'dmg_percent', aa: 'dmg_buildings', ab: 'dmg_objectives', v: 'dpm', an: 'cc_score',
@@ -49,7 +80,6 @@ export default function UploadPage() {
       t: 'vspm', aj: 'wards_killed', ai: 'wards_placed', u: 'cw_placed'
     };
 
-    // 3. Atualização de Bounds (Min-Max)
     const lanes = ['TOP', 'JNG', 'MID', 'ADC', 'SUP'];
     lanes.forEach(lane => {
       const lanePlayers = playersWithDerived.filter(p => p.lane?.toUpperCase() === lane);
@@ -72,7 +102,6 @@ export default function UploadPage() {
 
     if (updatedBounds.length > 0) await supabase.from('lane_metrics_bounds').upsert(updatedBounds);
 
-    // 4. Cálculo Final e Limpeza do Objeto
     return playersWithDerived.map(p => {
       const lane = p.lane?.toUpperCase();
       const lW = weights?.find(w => w.lane === lane);
@@ -85,14 +114,13 @@ export default function UploadPage() {
           const b = localBounds.find(b => b.lane === lane && b.metric_name === k);
           const val = p[metricsMap[k]];
           let norm = (!b || b.max_val === b.min_val) ? 0.5 : (val - b.min_val) / (b.max_val - b.min_val);
-          if (k === 'l') norm = 1 - norm; // Inversão para mortes
+          if (k === 'l') norm = 1 - norm; 
           sumN += norm * weight;
           sumW += weight;
         });
         return Math.max(50, 50 + (50 * (sumN / (sumW || 1))));
       };
 
-      // Remove as siglas temporárias antes de retornar para o banco não dar erro
       const { _ap, _aq, ...cleanPlayer } = p;
 
       return {
@@ -160,40 +188,15 @@ export default function UploadPage() {
         gold_share: toNum(row['Gold Share'])
       };
     }
-    // (Outros mapeamentos de Wards, Objetivos, Draft continuam aqui...)
+    // Drafts, Wards e Objetivos continuam mapeados corretamente
     if (tableName === 'match_drafts') {
-      return {
-        match_id: row['Match ID'],
-        team_acronym: row['Team Acronym'],
-        tipo: row['Tipo'],
-        side: row['Time'],
-        jogador: row['Jogador'],
-        champion: row['Campeão'] || row['Campeao'],
-        sequence: parseInt(row['Sequence']) || 0
-      };
+      return { match_id: row['Match ID'], team_acronym: row['Team Acronym'], tipo: row['Tipo'], side: row['Time'], jogador: row['Jogador'], champion: row['Campeão'] || row['Campeao'], sequence: parseInt(row['Sequence']) || 0 };
     }
     if (tableName === 'match_objectives') {
-      return {
-        match_id: row['Match ID'],
-        minuto: parseInt(row['Minuto']) || 0,
-        team_acronym: row['Team Acronym'],
-        objective_type: row['Objetivo'],
-        subtype: row['Subtipo'],
-        player_name: row['Jogador']
-      };
+      return { match_id: row['Match ID'], minuto: parseInt(row['Minuto']) || 0, team_acronym: row['Team Acronym'], objective_type: row['Objetivo'], subtype: row['Subtipo'], player_name: row['Jogador'] };
     }
     if (tableName === 'match_wards') {
-      return {
-        match_id: row['Match ID'],
-        player_name: row['Jogador'],
-        team_acronym: row['Team Acronym'],
-        minute: parseInt(row['Minuto']) || 0,
-        type: row['Tipo'],
-        ward_x: toNum(row['Ward X']),
-        ward_y: toNum(row['Ward Y']),
-        player_x: toNum(row['Player X']),
-        player_y: toNum(row['Player Y'])
-      };
+      return { match_id: row['Match ID'], player_name: row['Jogador'], team_acronym: row['Team Acronym'], minute: parseInt(row['Minuto']) || 0, type: row['Tipo'], ward_x: toNum(row['Ward X']), ward_y: toNum(row['Ward Y']), player_x: toNum(row['Player X']), player_y: toNum(row['Player Y']) };
     }
     return row;
   };
@@ -211,26 +214,45 @@ export default function UploadPage() {
           const rawData = results.data as any[];
           const uniqueMatchIds = Array.from(new Set(rawData.map((r) => r['Match ID']))).filter(Boolean);
 
-          // 1. SINCRONIZAÇÃO DE HIERARQUIA
-          setStatus("SINCRONIZANDO SÉRIES E VENCEDORES...");
-          for (const mId of uniqueMatchIds) {
-            const seriesId = (mId as string).split('_')[0];
-            const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
-            const baseRow = rowsOfMatch[0];
-            let blueTag = rowsOfMatch.find(r => r['Side'] === 'Blue')?.['Team Acronym'];
-            let redTag = rowsOfMatch.find(r => r['Side'] === 'Red')?.['Team Acronym'];
-            let winnerSide = rowsOfMatch.find(r => String(r['Win']).toLowerCase() === 'true')?.['Side']?.toLowerCase();
-            
-            await supabase.from('series').upsert({ id: seriesId, description: blueTag && redTag ? `${blueTag} x ${redTag}` : `Série ${seriesId}` });
-            await supabase.from('matches').upsert({
-              id: mId, series_id: seriesId, blue_team_tag: blueTag || null, red_team_tag: redTag || null,
-              winner_side: winnerSide || null, patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
-              game_start_time: baseRow?.['Game Start Time'] || new Date().toISOString()
-            });
+          // 1. CONSTRUÇÃO E INJEÇÃO DA TABELA MATCHES (SOMENTE QUANDO FOR A PLANILHA DE ESTATÍSTICAS)
+          // Fazemos isso apenas aqui porque o arquivo de Drafts/Wards não possui Game Start Time ou Patch!
+          if (tableName === 'player_stats_detailed') {
+             setStatus("CLASSIFICANDO SÉRIES E IDENTIFICANDO CAMPEONATOS...");
+             
+             const matchesPayload = uniqueMatchIds.map(mId => {
+               const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
+               const baseRow = rowsOfMatch[0];
+               
+               const blueTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'blue')?.['Team Acronym'];
+               const redTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'red')?.['Team Acronym'];
+               const winnerSide = rowsOfMatch.find(r => String(r['Win']).toLowerCase() === 'true')?.['Side']?.toLowerCase();
+               
+               // Coleta a data crua do CSV e processa
+               const rawDate = baseRow?.['Game Start Time'] || '';
+               const safeDateString = rawDate.replace(' ', 'T');
+               const gameType = determineGameType(safeDateString);
+               
+               // Validação de data segura para o Supabase (Se falhar, manda nulo para não quebrar a inserção)
+               const finalIsoDate = !isNaN(new Date(safeDateString).getTime()) ? new Date(safeDateString).toISOString() : null;
+
+               return {
+                 id: mId, 
+                 patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
+                 winner_side: winnerSide || null, 
+                 blue_team_tag: blueTag || null, 
+                 red_team_tag: redTag || null,
+                 game_start_time: finalIsoDate,
+                 game_type: gameType 
+               };
+             });
+
+             // Usamos Upsert para não apagar Wards e Drafts antigos atrelados a essas matches
+             const { error: matchesError } = await supabase.from('matches').upsert(matchesPayload);
+             if (matchesError) throw new Error("Erro ao injetar Matches: " + matchesError.message);
           }
 
-          // 2. MAPEAMENTO E RATINGS
-          setStatus("PROCESSANDO MÉTRICAS E RATINGS...");
+          // 2. MAPEAMENTO E RATINGS DA TABELA ALVO
+          setStatus("PROCESSANDO DADOS DA TABELA...");
           let formattedData = rawData.map((row) => mapCsvToDb(row, tableName));
 
           if (tableName === 'player_stats_detailed') {
@@ -238,13 +260,16 @@ export default function UploadPage() {
             formattedData = await calculateRatings(formattedData);
           }
 
-          // 3. UPLOAD EM LOTE
-          setStatus("INJETANDO DADOS NO DATABASE...");
-          await supabase.from(tableName).delete().in('match_id', uniqueMatchIds);
-          const { error } = await supabase.from(tableName).insert(formattedData);
-          if (error) throw error;
+          // 3. WIPE ABSOLUTO (APAGA TODOS OS DADOS ANTIGOS DA TABELA ALVO)
+          setStatus("APAGANDO DADOS ANTIGOS DA TABELA...");
+          await supabase.from(tableName).delete().not('match_id', 'is', null);
 
-          alert(`${file.name} PROCESSADO COM SUCESSO!`);
+          // 4. INJEÇÃO DOS NOVOS DADOS
+          setStatus("INJETANDO DADOS NOVOS NO DATABASE...");
+          const { error } = await supabase.from(tableName).insert(formattedData);
+          if (error) throw new Error("Erro na Injeção de Dados: " + error.message);
+
+          alert(`${file.name} PROCESSADO COM SUCESSO! A TABELA FOI TOTALMENTE ATUALIZADA.`);
           setStatus("CONCLUÍDO.");
         } catch (err: any) {
           alert("ERRO: " + err.message);
@@ -261,7 +286,7 @@ export default function UploadPage() {
     <div className="p-8 max-w-[1000px] mx-auto space-y-10 font-black uppercase italic tracking-tighter pb-20">
       <header className="border-l-4 border-blue-500 pl-6">
         <h1 className="text-5xl text-white">DATA CONSOLE</h1>
-        <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Protocolo V6 Final</p>
+        <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Protocolo Full Wipe Ativado // Matches Corrigidas</p>
       </header>
       
       {status && <div className="p-4 bg-blue-600/10 border border-blue-500/30 rounded-2xl text-blue-400 text-[10px] text-center animate-pulse italic">{status}</div>}
