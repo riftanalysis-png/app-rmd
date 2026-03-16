@@ -20,41 +20,31 @@ export default function UploadPage() {
   // --- INTELIGÊNCIA DE CALENDÁRIO (DIA LÓGICO) BLINDADA ---
   const determineGameType = (dateString: string) => {
     if (!dateString) return 'SCRIM';
-    
-    // Converte a data do CSV (2026-01-14 08:13:52) para formato ISO seguro (2026-01-14T08:13:52)
     const safeDateString = dateString.replace(' ', 'T');
     const date = new Date(safeDateString);
 
     if (isNaN(date.getTime())) return 'SCRIM';
 
     const hours = date.getHours();
-    
-    // Janela oficial: >= 18h (18:00 às 23:59) OU <= 3h (00:00 às 03:59)
     const isOfficialTimeWindow = hours >= 18 || hours <= 3;
     if (!isOfficialTimeWindow) return 'SCRIM'; 
 
-    // Ajusta o "Dia Lógico" para jogos da madrugada
     const logicalDate = new Date(date);
-    if (hours <= 3) {
-        logicalDate.setDate(logicalDate.getDate() - 1);
-    }
+    if (hours <= 3) logicalDate.setDate(logicalDate.getDate() - 1);
 
     const day = String(logicalDate.getDate()).padStart(2, '0');
     const month = String(logicalDate.getMonth() + 1).padStart(2, '0');
     const formattedDate = `${day}/${month}`; 
 
-    if (OFFICIAL_DATES.includes(formattedDate)) {
-        return 'OFFICIAL';
-    }
-    
+    if (OFFICIAL_DATES.includes(formattedDate)) return 'OFFICIAL';
     return 'SCRIM';
   };
 
   // --- MOTOR DE RATINGS ---
   const calculateRatings = async (players: any[]) => {
     const { data: weights } = await supabase.from('lane_weights').select('*');
-    const { data: bounds } = await supabase.from('lane_metrics_bounds').select('*');
-    const localBounds = bounds || [];
+    // Como apagamos os bounds antigos, começamos do zero calculando a nova realidade do CSV!
+    const localBounds: any[] = []; 
     const updatedBounds: any[] = [];
 
     const playersWithDerived = players.map(p => {
@@ -89,14 +79,8 @@ export default function UploadPage() {
         if (vals.length === 0) return;
         const cMin = Math.min(...vals), cMax = Math.max(...vals);
 
-        let b = localBounds.find(b => b.lane === lane && b.metric_name === mKey);
-        if (!b) {
-          updatedBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
-        } else if (cMin < b.min_val || cMax > b.max_val) {
-          b.min_val = Math.min(b.min_val, cMin);
-          b.max_val = Math.max(b.max_val, cMax);
-          updatedBounds.push(b);
-        }
+        updatedBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
+        localBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
       });
     });
 
@@ -138,66 +122,25 @@ export default function UploadPage() {
   const mapCsvToDb = (row: any, tableName: string) => {
     if (tableName === 'player_stats_detailed') {
       return {
-        match_id: row['Match ID'],
-        summoner_name: row['Summoner Name'],
-        puuid: row['PUUID'],
-        game_start_time: row['Game Start Time'],
-        patch: row['Patch'],
-        team_acronym: row['Team Acronym'],
-        side: row['Side'],
-        lane: row['Lane'],
-        champion: row['Champion'],
-        kda: toNum(row['KDA']),
-        kills: parseInt(row['Kills']) || 0,
-        deaths: parseInt(row['Deaths']) || 0,
-        deaths_at_12: parseInt(row['Deaths até 12min']) || 0,
-        assists: parseInt(row['Assists']) || 0,
-        result: row['Result'],
-        cs_6: parseInt(row['CS 6']) || 0,
-        cs_12: parseInt(row['CS 12']) || 0,
-        cs_18: parseInt(row['CS 18']) || 0,
-        xp_12: parseInt(row['XP 12']) || 0,
-        gold_12: parseInt(row['Gold 12']) || 0,
-        vspm: toNum(row['VSPM']),
-        cw_placed: parseInt(row['CW Placed']) || 0,
-        dpm: toNum(row['DPM']),
-        gpm: toNum(row['GPM']),
-        gold_efficiency: toNum(row['Gold Eff']),
-        kp: toNum(row['KP']),
-        fpm: toNum(row['FPM']),
-        dmg_buildings: parseInt(row['Dmg Buildings']) || 0,
-        dmg_objectives: parseInt(row['Dmg Obj']) || 0,
-        plates: parseInt(row['Plates']) || 0,
-        dmg_percent: toNum(row['Dmg %']),
-        taken_percent: toNum(row['Taken %']),
-        mitigated: toNum(row['Mitigated']),
-        fb_assist: String(row['FB Assist']).toUpperCase() === 'TRUE',
-        fb_kill: String(row['FB Kill']).toUpperCase() === 'TRUE',
-        ft_assist: String(row['FT Assist']).toUpperCase() === 'TRUE',
-        ft_kill: String(row['FT Kill']).toUpperCase() === 'TRUE',
-        total_dmg: parseInt(row['Total Dmg']) || 0,
-        total_taken: parseInt(row['Total Taken']) || 0,
-        vision_score: parseInt(row['Vision']) || 0,
-        wards_placed: parseInt(row['Wards P']) || 0,
-        wards_killed: parseInt(row['Wards K']) || 0,
-        total_gold: parseInt(row['Gold']) || 0,
-        win: String(row['Win']).toLowerCase() === 'true',
-        vpm_at_12: toNum(row['VPM@12']),
-        kda_at_12: toNum(row['KDA@12']),
-        cc_score: parseInt(row['CC Score']) || 0,
-        gold_share: toNum(row['Gold Share'])
+        match_id: row['Match ID'], summoner_name: row['Summoner Name'], puuid: row['PUUID'], game_start_time: row['Game Start Time'],
+        patch: row['Patch'], team_acronym: row['Team Acronym'], side: row['Side'], lane: row['Lane'], champion: row['Champion'],
+        kda: toNum(row['KDA']), kills: parseInt(row['Kills']) || 0, deaths: parseInt(row['Deaths']) || 0, deaths_at_12: parseInt(row['Deaths até 12min']) || 0,
+        assists: parseInt(row['Assists']) || 0, result: row['Result'], cs_6: parseInt(row['CS 6']) || 0, cs_12: parseInt(row['CS 12']) || 0,
+        cs_18: parseInt(row['CS 18']) || 0, xp_12: parseInt(row['XP 12']) || 0, gold_12: parseInt(row['Gold 12']) || 0, vspm: toNum(row['VSPM']),
+        cw_placed: parseInt(row['CW Placed']) || 0, dpm: toNum(row['DPM']), gpm: toNum(row['GPM']), gold_efficiency: toNum(row['Gold Eff']),
+        kp: toNum(row['KP']), fpm: toNum(row['FPM']), dmg_buildings: parseInt(row['Dmg Buildings']) || 0, dmg_objectives: parseInt(row['Dmg Obj']) || 0,
+        plates: parseInt(row['Plates']) || 0, dmg_percent: toNum(row['Dmg %']), taken_percent: toNum(row['Taken %']), mitigated: toNum(row['Mitigated']),
+        fb_assist: String(row['FB Assist']).toUpperCase() === 'TRUE', fb_kill: String(row['FB Kill']).toUpperCase() === 'TRUE',
+        ft_assist: String(row['FT Assist']).toUpperCase() === 'TRUE', ft_kill: String(row['FT Kill']).toUpperCase() === 'TRUE',
+        total_dmg: parseInt(row['Total Dmg']) || 0, total_taken: parseInt(row['Total Taken']) || 0, vision_score: parseInt(row['Vision']) || 0,
+        wards_placed: parseInt(row['Wards P']) || 0, wards_killed: parseInt(row['Wards K']) || 0, total_gold: parseInt(row['Gold']) || 0,
+        win: String(row['Win']).toLowerCase() === 'true', vpm_at_12: toNum(row['VPM@12']), kda_at_12: toNum(row['KDA@12']),
+        cc_score: parseInt(row['CC Score']) || 0, gold_share: toNum(row['Gold Share'])
       };
     }
-    // Drafts, Wards e Objetivos continuam mapeados corretamente
-    if (tableName === 'match_drafts') {
-      return { match_id: row['Match ID'], team_acronym: row['Team Acronym'], tipo: row['Tipo'], side: row['Time'], jogador: row['Jogador'], champion: row['Campeão'] || row['Campeao'], sequence: parseInt(row['Sequence']) || 0 };
-    }
-    if (tableName === 'match_objectives') {
-      return { match_id: row['Match ID'], minuto: parseInt(row['Minuto']) || 0, team_acronym: row['Team Acronym'], objective_type: row['Objetivo'], subtype: row['Subtipo'], player_name: row['Jogador'] };
-    }
-    if (tableName === 'match_wards') {
-      return { match_id: row['Match ID'], player_name: row['Jogador'], team_acronym: row['Team Acronym'], minute: parseInt(row['Minuto']) || 0, type: row['Tipo'], ward_x: toNum(row['Ward X']), ward_y: toNum(row['Ward Y']), player_x: toNum(row['Player X']), player_y: toNum(row['Player Y']) };
-    }
+    if (tableName === 'match_drafts') return { match_id: row['Match ID'], team_acronym: row['Team Acronym'], tipo: row['Tipo'], side: row['Time'], jogador: row['Jogador'], champion: row['Campeão'] || row['Campeao'], sequence: parseInt(row['Sequence']) || 0 };
+    if (tableName === 'match_objectives') return { match_id: row['Match ID'], minuto: parseInt(row['Minuto']) || 0, team_acronym: row['Team Acronym'], objective_type: row['Objetivo'], subtype: row['Subtipo'], player_name: row['Jogador'] };
+    if (tableName === 'match_wards') return { match_id: row['Match ID'], player_name: row['Jogador'], team_acronym: row['Team Acronym'], minute: parseInt(row['Minuto']) || 0, type: row['Tipo'], ward_x: toNum(row['Ward X']), ward_y: toNum(row['Ward Y']), player_x: toNum(row['Player X']), player_y: toNum(row['Player Y']) };
     return row;
   };
 
@@ -205,7 +148,7 @@ export default function UploadPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true);
-    setStatus(`SCANNEANDO ${file.name.toUpperCase()}...`);
+    setStatus(`SCANNEANDO E LENDO DADOS DE ${file.name.toUpperCase()}...`);
 
     Papa.parse(file, {
       header: true, delimiter: ";", skipEmptyLines: true,
@@ -214,12 +157,43 @@ export default function UploadPage() {
           const rawData = results.data as any[];
           const uniqueMatchIds = Array.from(new Set(rawData.map((r) => r['Match ID']))).filter(Boolean);
 
-          // 1. CONSTRUÇÃO E INJEÇÃO DA TABELA MATCHES (SOMENTE QUANDO FOR A PLANILHA DE ESTATÍSTICAS)
-          // Fazemos isso apenas aqui porque o arquivo de Drafts/Wards não possui Game Start Time ou Patch!
+          // 1. LÓGICA DE RECONSTRUÇÃO (APENAS AO SUBIR A PLANILHA MESTRE)
           if (tableName === 'player_stats_detailed') {
-             setStatus("CLASSIFICANDO SÉRIES E IDENTIFICANDO CAMPEONATOS...");
-             
-             const matchesPayload = uniqueMatchIds.map(mId => {
+             setStatus("SALVANDO FOTOS DOS JOGADORES E LOGOS DOS TIMES...");
+             const { data: existingTeams } = await supabase.from('teams').select('acronym, logo_url');
+             const { data: existingPlayers } = await supabase.from('players').select('puuid, photo_url');
+
+             // Organiza as Partidas e Séries novas
+             setStatus("MAPENADO SÉRIES E IDENTIFICANDO CAMPEONATOS...");
+             const uniqueSeriesMap = new Map();
+             const uniqueMatchesMap = new Map();
+             const uniqueTeamsMap = new Map();
+             const uniquePlayersMap = new Map();
+
+             for (const r of rawData) {
+                const mId = r['Match ID'];
+                if (!mId) continue;
+                
+                const seriesId = mId.split('_')[0];
+                const acronym = r['Team Acronym'];
+                const puuid = r['PUUID'];
+
+                // Separa Times Únicos (Preservando a logo antiga)
+                if (acronym && !uniqueTeamsMap.has(acronym)) {
+                   const extTeam = existingTeams?.find(t => t.acronym === acronym);
+                   uniqueTeamsMap.set(acronym, { acronym: acronym, name: acronym, logo_url: extTeam?.logo_url || null });
+                }
+
+                // Separa Jogadores Únicos (Preservando a foto antiga)
+                if (puuid && !uniquePlayersMap.has(puuid)) {
+                   const extPlayer = existingPlayers?.find(p => p.puuid === puuid);
+                   uniquePlayersMap.set(puuid, { puuid: puuid, nickname: r['Summoner Name'], team_acronym: r['Team Acronym'], primary_role: r['Lane'], photo_url: extPlayer?.photo_url || null });
+                }
+             }
+
+             // Processa Séries e Matches
+             for (const mId of uniqueMatchIds) {
+               const seriesId = (mId as string).split('_')[0];
                const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
                const baseRow = rowsOfMatch[0];
                
@@ -227,50 +201,70 @@ export default function UploadPage() {
                const redTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'red')?.['Team Acronym'];
                const winnerSide = rowsOfMatch.find(r => String(r['Win']).toLowerCase() === 'true')?.['Side']?.toLowerCase();
                
-               // Coleta a data crua do CSV e processa
                const rawDate = baseRow?.['Game Start Time'] || '';
                const safeDateString = rawDate.replace(' ', 'T');
                const gameType = determineGameType(safeDateString);
-               
-               // Validação de data segura para o Supabase (Se falhar, manda nulo para não quebrar a inserção)
                const finalIsoDate = !isNaN(new Date(safeDateString).getTime()) ? new Date(safeDateString).toISOString() : null;
 
-               return {
-                 id: mId, 
-                 patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
-                 winner_side: winnerSide || null, 
-                 blue_team_tag: blueTag || null, 
-                 red_team_tag: redTag || null,
-                 game_start_time: finalIsoDate,
-                 game_type: gameType 
-               };
-             });
+               if (!uniqueSeriesMap.has(seriesId)) {
+                  uniqueSeriesMap.set(seriesId, { id: seriesId, description: blueTag && redTag ? `${blueTag} x ${redTag}` : `Série ${seriesId}` });
+               }
 
-             // Usamos Upsert para não apagar Wards e Drafts antigos atrelados a essas matches
-             const { error: matchesError } = await supabase.from('matches').upsert(matchesPayload);
-             if (matchesError) throw new Error("Erro ao injetar Matches: " + matchesError.message);
+               uniqueMatchesMap.set(mId, {
+                 id: mId, series_id: seriesId, blue_team_tag: blueTag || null, red_team_tag: redTag || null,
+                 winner_side: winnerSide || null, patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
+                 game_start_time: finalIsoDate, game_type: gameType 
+               });
+             }
+
+             // >>> PROTOCOLO DESTRUTIVO (FULL WIPE) <<<
+             setStatus("LIMPANDO BANCO DE DADOS (FULL WIPE ATIVADO)...");
+             // Apagamos na ordem correta para respeitar a hierarquia do Banco de Dados
+             await supabase.from('player_stats_detailed').delete().not('match_id', 'is', null);
+             await supabase.from('matches').delete().not('id', 'is', null);
+             await supabase.from('series').delete().not('id', 'is', null);
+             await supabase.from('players').delete().not('puuid', 'is', null);
+             await supabase.from('teams').delete().not('acronym', 'is', null);
+             await supabase.from('lane_metrics_bounds').delete().not('lane', 'is', null);
+
+             // >>> RECONSTRUÇÃO HIERÁRQUICA <<<
+             setStatus("RECONSTRUINDO TIMES E JOGADORES...");
+             const newTeams = Array.from(uniqueTeamsMap.values());
+             const newPlayers = Array.from(uniquePlayersMap.values());
+             if (newTeams.length > 0) await supabase.from('teams').insert(newTeams);
+             if (newPlayers.length > 0) await supabase.from('players').insert(newPlayers);
+
+             setStatus("RECONSTRUINDO SÉRIES E PARTIDAS...");
+             const newSeries = Array.from(uniqueSeriesMap.values());
+             const newMatches = Array.from(uniqueMatchesMap.values());
+             if (newSeries.length > 0) await supabase.from('series').insert(newSeries);
+             if (newMatches.length > 0) await supabase.from('matches').insert(newMatches);
           }
 
-          // 2. MAPEAMENTO E RATINGS DA TABELA ALVO
-          setStatus("PROCESSANDO DADOS DA TABELA...");
+          // 2. PROCESSAMENTO E RATINGS FINAIS
+          setStatus("FORMATANDO ESTATÍSTICAS...");
           let formattedData = rawData.map((row) => mapCsvToDb(row, tableName));
 
           if (tableName === 'player_stats_detailed') {
-            setStatus("CALCULANDO RATINGS PRO...");
+            setStatus("CALCULANDO NOVOS RATINGS E BOUNDS DA SEMANA...");
             formattedData = await calculateRatings(formattedData);
+            
+            setStatus("INJETANDO ESTATÍSTICAS DETALHADAS...");
+            const { error } = await supabase.from(tableName).insert(formattedData);
+            if (error) throw new Error("Erro na Injeção de Dados (Stats): " + error.message);
+
+          } else {
+            // Se for arquivo de Ward, Draft ou Objetivo (Apenas Substitui a Tabela Alvo)
+            setStatus(`LIMPANDO TABELA ${tableName.toUpperCase()}...`);
+            await supabase.from(tableName).delete().not('match_id', 'is', null);
+
+            setStatus(`INJETANDO NOVOS DADOS EM ${tableName.toUpperCase()}...`);
+            const { error } = await supabase.from(tableName).insert(formattedData);
+            if (error) throw new Error(`Erro na Injeção (${tableName}): ` + error.message);
           }
 
-          // 3. WIPE ABSOLUTO (APAGA TODOS OS DADOS ANTIGOS DA TABELA ALVO)
-          setStatus("APAGANDO DADOS ANTIGOS DA TABELA...");
-          await supabase.from(tableName).delete().not('match_id', 'is', null);
-
-          // 4. INJEÇÃO DOS NOVOS DADOS
-          setStatus("INJETANDO DADOS NOVOS NO DATABASE...");
-          const { error } = await supabase.from(tableName).insert(formattedData);
-          if (error) throw new Error("Erro na Injeção de Dados: " + error.message);
-
-          alert(`${file.name} PROCESSADO COM SUCESSO! A TABELA FOI TOTALMENTE ATUALIZADA.`);
-          setStatus("CONCLUÍDO.");
+          alert(`${file.name} PROCESSADO COM SUCESSO! BD TOTALMENTE RESETADO E ATUALIZADO.`);
+          setStatus("CONCLUÍDO COM ÊXITO.");
         } catch (err: any) {
           alert("ERRO: " + err.message);
         } finally {
@@ -286,7 +280,7 @@ export default function UploadPage() {
     <div className="p-8 max-w-[1000px] mx-auto space-y-10 font-black uppercase italic tracking-tighter pb-20">
       <header className="border-l-4 border-blue-500 pl-6">
         <h1 className="text-5xl text-white">DATA CONSOLE</h1>
-        <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Protocolo Full Wipe Ativado // Matches Corrigidas</p>
+        <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Hierarchical Full Wipe // Safe Photo Preserver</p>
       </header>
       
       {status && <div className="p-4 bg-blue-600/10 border border-blue-500/30 rounded-2xl text-blue-400 text-[10px] text-center animate-pulse italic">{status}</div>}

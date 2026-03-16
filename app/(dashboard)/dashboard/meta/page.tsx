@@ -4,16 +4,24 @@ import { supabase } from '@/lib/supabase/client';
 
 const DDRAGON_VERSION = '16.5.1';
 
-const laneMap: Record<string, string> = {
-  'SUP': 'support', 'SUPPORT': 'support', 'MID': 'mid', 
-  'ADC': 'adc', 'TOP': 'top', 'JUNGLE': 'jungle'
-};
+// --- INTELIGÊNCIA DE TRADUÇÃO DE ROTAS (BLINDADA) ---
+function normalizeRole(lane: string | null): string {
+  if (!lane) return 'mid';
+  const l = lane.toLowerCase().trim();
+  if (l.includes('top')) return 'top';
+  if (l.includes('jungle') || l.includes('jng') || l === 'jg') return 'jungle';
+  if (l.includes('mid')) return 'mid';
+  if (l.includes('bot') || l.includes('adc')) return 'adc';
+  if (l.includes('sup') || l.includes('utility')) return 'support';
+  return 'support'; // Fallback
+}
 
 const getRoleIcon = (role: string) => {
+  const normalized = normalizeRole(role);
   const mapping: Record<string, string> = {
     top: 'top', jungle: 'jungle', mid: 'middle', adc: 'bottom', support: 'utility'
   };
-  const key = mapping[role?.toLowerCase()] || 'middle';
+  const key = mapping[normalized] || 'middle';
   return `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-clash/global/default/assets/images/position-selector/positions/icon-position-${key}.png`;
 };
 
@@ -64,8 +72,9 @@ export default function MetaWarRoom() {
   }, []);
 
   const filteredTiers = useMemo(() => {
-    const target = laneMap[activeLane] || activeLane.toLowerCase();
-    const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || c.lane === target) && c.total_picks >= minGames);
+    const target = normalizeRole(activeLane);
+    // Agora ele compara usando o normalizeRole para garantir que JNG = JUNGLE
+    const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= minGames);
     return {
       S: list.filter((c: any) => c.power_score >= 75),
       A: list.filter((c: any) => c.power_score >= 60 && c.power_score < 75),
@@ -76,7 +85,8 @@ export default function MetaWarRoom() {
 
   const champDraft = useMemo(() => {
     if (!selectedChamp) return { blue: [], red: [] };
-    const rawDraft = data.draft.filter((x: any) => x.champion === selectedChamp.name && x.lane === selectedChamp.lane);
+    // Blindado com normalizeRole
+    const rawDraft = data.draft.filter((x: any) => x.champion === selectedChamp.name && normalizeRole(x.lane) === normalizeRole(selectedChamp.lane));
     
     const seqMap: Record<number, { label: string, side: string }> = {
       7: { label: 'B1', side: 'blue' }, 8: { label: 'R1', side: 'red' }, 9: { label: 'R2', side: 'red' },
@@ -98,13 +108,15 @@ export default function MetaWarRoom() {
 
   const champMatchups = useMemo(() => {
     if (!selectedChamp) return [];
-    return data.matchups.filter((m: any) => m.champion === selectedChamp.name && m.lane === selectedChamp.lane)
+    // Blindado com normalizeRole
+    return data.matchups.filter((m: any) => m.champion === selectedChamp.name && normalizeRole(m.lane) === normalizeRole(selectedChamp.lane))
       .sort((a: any, b: any) => b.total_matchups - a.total_matchups);
   }, [selectedChamp, data.matchups]);
 
   const champSynergies = useMemo(() => {
     if (!selectedChamp) return [];
-    return data.synergies.filter((s: any) => s.champion === selectedChamp.name && s.lane === selectedChamp.lane && s.total_games > 1)
+    // Blindado com normalizeRole
+    return data.synergies.filter((s: any) => s.champion === selectedChamp.name && normalizeRole(s.lane) === normalizeRole(selectedChamp.lane) && s.total_games > 1)
       .sort((a: any, b: any) => b.win_rate !== a.win_rate ? b.win_rate - a.win_rate : b.total_games - a.total_games).slice(0, 10);
   }, [selectedChamp, data.synergies]);
 
@@ -189,12 +201,12 @@ export default function MetaWarRoom() {
        const soulGoldInfo = findGoldValue(`${key}_soul`, data.goldStats);
        
        const soulStat = {
-          win_rate: soulDrakObj ? soulDrakObj.win_rate : 0,
-          times_achieved: soulDrakObj ? soulDrakObj.times_achieved : 0,
-          delta: soulDrakObj ? soulDrakObj.win_rate - 50 : 0,
-          isTrap: soulDrakObj ? (soulDrakObj.win_rate - 50 < 0) : false,
-          gold: soulGoldInfo?.gold_value_team || null,
-          hasData: !!soulDrakObj
+         win_rate: soulDrakObj ? soulDrakObj.win_rate : 0,
+         times_achieved: soulDrakObj ? soulDrakObj.times_achieved : 0,
+         delta: soulDrakObj ? soulDrakObj.win_rate - 50 : 0,
+         isTrap: soulDrakObj ? (soulDrakObj.win_rate - 50 < 0) : false,
+         gold: soulGoldInfo?.gold_value_team || null,
+         hasData: !!soulDrakObj
        };
 
        return { ...baseDrake, soulStat };
@@ -226,7 +238,7 @@ export default function MetaWarRoom() {
               <div className="flex bg-black/30 p-1 rounded-3xl border border-white/5 shadow-inner items-center">
                 {['ALL', 'TOP', 'JUNGLE', 'MID', 'ADC', 'SUP'].map(l => (
                   <button key={l} onClick={() => {setActiveLane(l); setSelectedChamp(null);}} className={`px-3 py-2 rounded-2xl text-[9px] flex items-center gap-1.5 transition-all ${activeLane === l ? 'bg-slate-800 text-white shadow-md border border-white/5' : 'text-slate-500 hover:text-slate-300'}`}>
-                    {l !== 'ALL' && <img src={getRoleIcon(laneMap[l] || l)} className="w-3.5 h-3.5 brightness-200" alt="" />}
+                    {l !== 'ALL' && <img src={getRoleIcon(l)} className="w-3.5 h-3.5 brightness-200" alt="" />}
                     {l}
                   </button>
                 ))}

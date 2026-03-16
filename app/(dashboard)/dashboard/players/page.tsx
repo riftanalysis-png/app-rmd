@@ -45,7 +45,7 @@ const OBJECTIVE_ASSETS: { [key: string]: { icon: string, hover: string } } = {
 
 const ORDERED_OBJECTIVES = ['dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
 
-// --- UTILITÁRIOS ---
+// --- UTILITÁRIOS CORRIGIDOS ---
 
 function formatTime(decimal: number) {
   if (isNaN(decimal) || decimal === null) return "00:00";
@@ -54,14 +54,16 @@ function formatTime(decimal: number) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// ⚠️ CORREÇÃO AQUI: Agora ele reconhece as abreviações do banco de dados perfeitamente
 function normalizeRole(lane: string | null): string {
   if (!lane) return 'mid';
   const l = lane.toLowerCase().trim();
   if (l.includes('top')) return 'top';
-  if (l.includes('jungle')) return 'jungle';
+  if (l.includes('jungle') || l.includes('jng') || l === 'jg') return 'jungle';
   if (l.includes('mid')) return 'mid';
   if (l.includes('bot') || l.includes('adc')) return 'adc';
-  return 'support';
+  if (l.includes('sup') || l.includes('utility')) return 'support';
+  return 'support'; // Fallback
 }
 
 function getChampionImageUrl(championName: string | null) {
@@ -80,10 +82,15 @@ function getScoreColor(score: number | null) {
   return "text-red-400";                               
 }
 
+// ⚠️ CORREÇÃO AQUI: A função agora traduz a role usando o NormalizeRole ANTES de buscar a foto
 function getRoleIcon(role: string, size: string = "w-5 h-5") {
   const basePath = "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-clash/global/default/assets/images/position-selector/positions";
   let iconName = "";
-  switch (role.toLowerCase()) {
+  
+  // Transforma o 'JNG' ou 'SUP' que vem do banco em 'jungle' ou 'support'
+  const normalizedRole = normalizeRole(role); 
+
+  switch (normalizedRole) {
     case 'top': iconName = "icon-position-top.png"; break;
     case 'jungle': iconName = "icon-position-jungle.png"; break;
     case 'mid': iconName = "icon-position-middle.png"; break;
@@ -91,7 +98,7 @@ function getRoleIcon(role: string, size: string = "w-5 h-5") {
     case 'support': iconName = "icon-position-utility.png"; break;
     default: return <span className="text-[10px]">👤</span>;
   }
-  return <img src={`${basePath}/${iconName}`} alt={role} className={`${size} object-contain brightness-200`} />;
+  return <img src={`${basePath}/${iconName}`} alt={normalizedRole} className={`${size} object-contain brightness-200`} />;
 }
 
 // --- COMPONENTE PRINCIPAL ---
@@ -495,6 +502,7 @@ function PlayerCard({ player, teams, isAdmin, onEdit }: any) {
             </div>
           </div>
           <div className="absolute -bottom-2 -right-2 bg-[#121212] p-2 rounded-xl border border-white/10 shadow-2xl z-20">
+            {/* O ícone da rota agora é exibido corretamente */}
             {getRoleIcon(player.primary_role, "w-4 h-4")}
           </div>
         </div>
@@ -551,6 +559,7 @@ function DraftPickCard({ label, data, side, mode }: any) {
             <div className="relative">
               {mode === 'role' ? (
                 <div className="w-12 h-12 flex items-center justify-center bg-black border border-white/10 rounded-xl shadow-lg">
+                  {/* Corrige o Bug do Icone quando no modo de visualizar por Role */}
                   {getRoleIcon(data.name, "w-7 h-7")}
                 </div>
               ) : (
