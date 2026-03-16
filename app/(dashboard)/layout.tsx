@@ -11,9 +11,9 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   
-  // Variáveis dinâmicas para o usuário logado
-  const [userName, setUserName] = useState("Carlos Augusto Magalhães Crispino");
-  const [userRole, setUserRole] = useState("ANALISTA");
+  // Variáveis dinâmicas inicializadas vazias/loading para evitar piscar o nome antigo
+  const [userName, setUserName] = useState("CARREGANDO...");
+  const [userRole, setUserRole] = useState("...");
 
   // Função que busca o usuário real do banco de dados ao carregar a página
   useEffect(() => {
@@ -22,9 +22,7 @@ export default function DashboardLayout({
       const { data: { session } } = await supabase.auth.getSession();
       
       if (session?.user) {
-        // Aqui você adapta para onde salva o nome (ex: tabela 'profiles' ou 'user_metadata')
-        // Exemplo buscando de uma tabela de perfis:
-        /*
+        // Busca na tabela 'profiles' usando o ID do usuário logado
         const { data: profile } = await supabase
           .from('profiles')
           .select('full_name, role')
@@ -32,18 +30,17 @@ export default function DashboardLayout({
           .single();
           
         if (profile) {
-          setUserName(profile.full_name);
-          setUserRole(profile.role);
+          setUserName(profile.full_name || "JOGADOR DESCONHECIDO");
+          setUserRole(profile.role || "JOGADOR");
+        } else {
+          // Fallback de segurança buscando do metadata caso a tabela falhe
+          setUserName(session.user.user_metadata?.full_name || "JOGADOR DESCONHECIDO");
+          setUserRole(session.user.user_metadata?.role || "JOGADOR");
         }
-        */
-        
-        // Se usar o metadata nativo do Supabase Auth:
-        if (session.user.user_metadata?.full_name) {
-           setUserName(session.user.user_metadata.full_name);
-        }
-        if (session.user.user_metadata?.role) {
-           setUserRole(session.user.user_metadata.role);
-        }
+      } else {
+        // Se estiver em modo de teste local sem login
+        setUserName("MODO DESENVOLVEDOR");
+        setUserRole("ANALISTA");
       }
     }
     
@@ -54,7 +51,7 @@ export default function DashboardLayout({
     <div className="flex w-full h-full p-2 gap-2">
       
       {/* =========================================
-          BARRA LATERAL (SIDEBAR - SPOTIFY STYLE)
+         BARRA LATERAL (SIDEBAR - SPOTIFY STYLE)
       ========================================= */}
       <aside className="w-[80px] xl:w-[280px] flex flex-col gap-2 shrink-0 transition-all duration-300 relative z-20">
         
@@ -110,27 +107,43 @@ export default function DashboardLayout({
           </div>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar mt-2 pr-2 space-y-3">
-             <SidebarItem title="Aprovar Usuários" subtitle="Administração" isAction />
-             <SidebarItem 
-               title="Subir CSV" 
-               subtitle="(GRID.GG)" 
-               isAction 
-               href="/dashboard/admin/upload" 
-               isActive={pathname.includes('/dashboard/admin/upload')} 
-             />
+             {/* PROTEÇÃO DE STAFF PARA AS FUNÇÕES DE ADMINISTRAÇÃO */}
+             {['analista', 'treinador', 'diretor'].includes(userRole.toLowerCase()) && (
+                <>
+                  <SidebarItem title="Aprovar Usuários" subtitle="Administração" isAction />
+                  <SidebarItem 
+                    title="Subir CSV" 
+                    subtitle="(GRID.GG)" 
+                    isAction 
+                    href="/dashboard/admin/upload" 
+                    isActive={pathname.includes('/dashboard/admin/upload')} 
+                  />
+                  {/* NOVO BOTÃO DE CONFIGURAÇÃO - APENAS ANALISTA */}
+                  {userRole.toLowerCase() === 'analista' && (
+                    <SidebarItem 
+                      title="Configurações" 
+                      subtitle="Sistema Global" 
+                      isAction 
+                      icon={SettingsIcon}
+                      href="/dashboard/config" 
+                      isActive={pathname.includes('/dashboard/config')} 
+                    />
+                  )}
+                </>
+             )}
           </div>
           
-          {/* Assinatura / User Info no rodapé - AGORA DINÂMICA */}
+          {/* Assinatura / User Info no rodapé - DINÂMICO E PUXANDO DO BANCO */}
           <div className="mt-auto border-t border-slate-800 pt-4 hidden xl:block">
              <p className="text-[9px] text-slate-500 uppercase tracking-widest font-black italic truncate">{userName}</p>
-             <p className="text-[10px] text-purple-400 font-mono mt-1">{userRole}</p>
+             <p className="text-[10px] text-purple-400 font-mono mt-1">{userRole.toUpperCase()}</p>
           </div>
         </div>
         
       </aside>
 
       {/* =========================================
-          CONTEÚDO PRINCIPAL (MAIN ISLAND)
+         CONTEÚDO PRINCIPAL (MAIN ISLAND)
       ========================================= */}
       <main className="flex-1 bg-[#121212] rounded-xl overflow-y-auto custom-scrollbar relative border border-white/5 z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-purple-900/10 to-transparent pointer-events-none h-64 z-0"></div>
@@ -147,11 +160,11 @@ export default function DashboardLayout({
 // COMPONENTES AUXILIARES PARA A SIDEBAR
 // -----------------------------------------------------
 
-function SidebarItem({ title, subtitle, isAction = false, href, isActive = false }: { title: string, subtitle: string, isAction?: boolean, href?: string, isActive?: boolean }) {
+function SidebarItem({ title, subtitle, isAction = false, href, isActive = false, icon: Icon = FolderIcon }: any) {
   const content = (
     <div className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors group ${isActive ? 'bg-white/10' : 'hover:bg-white/5'}`}>
       <div className={`w-12 h-12 rounded-md flex items-center justify-center shrink-0 border transition-colors ${isActive ? 'bg-slate-800 border-purple-500' : 'bg-slate-800/80 border-slate-700'}`}>
-        <FolderIcon className={`w-5 h-5 transition-colors ${isActive ? 'text-purple-400' : isAction ? 'text-purple-500/70 group-hover:text-purple-400' : 'text-slate-400 group-hover:text-white'}`} />
+        <Icon className={`w-5 h-5 transition-colors ${isActive ? 'text-purple-400' : isAction ? 'text-purple-500/70 group-hover:text-purple-400' : 'text-slate-400 group-hover:text-white'}`} />
       </div>
       <div className="hidden xl:flex flex-col truncate">
         <p className={`text-[11px] font-black uppercase italic truncate transition-colors ${isActive ? 'text-white' : isAction ? 'text-purple-400 group-hover:text-purple-300' : 'text-slate-200 group-hover:text-white'}`}>{title}</p>
@@ -166,6 +179,8 @@ function SidebarItem({ title, subtitle, isAction = false, href, isActive = false
 
   return content;
 }
+
+// --- ÍCONES SVG ---
 
 function HomeIcon({ className }: { className?: string }) {
   return (
@@ -203,6 +218,15 @@ function FolderIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+    </svg>
+  );
+}
+
+function SettingsIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
     </svg>
   );
 }
