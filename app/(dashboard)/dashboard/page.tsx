@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { 
-  ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, 
+  ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, 
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid
 } from 'recharts';
 
@@ -14,7 +14,6 @@ export default function DashboardPage() {
     id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' 
   });
   
-  // Variável Mágica: Define quem tem poder de edição no painel
   const isStaff = ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase());
 
   const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ 
@@ -22,7 +21,7 @@ export default function DashboardPage() {
   });
 
   const [stats, setStats] = useState({ matches: 0, winrate: 0, players: 0 });
-  const [myStats, setMyStats] = useState({ lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 }); // Novo estado para o Player Hub
+  const [myStats, setMyStats] = useState({ lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 }); 
   const [loading, setLoading] = useState(true);
   
   // ==========================================
@@ -68,7 +67,6 @@ export default function DashboardPage() {
   // ==========================================
   useEffect(() => {
     async function fetchDashboardData() {
-      // 0. AUTENTICAÇÃO REAL E PERFIL DO USUÁRIO
       const { data: { user } } = await supabase.auth.getUser();
       let loggedUser = { id: '', role: 'jogador', puuid: '', name: 'JOGADOR', photo: `https://ui-avatars.com/api/?name=User&background=1e293b&color=3b82f6` };
 
@@ -82,11 +80,12 @@ export default function DashboardPage() {
             loggedUser.photo = `https://ui-avatars.com/api/?name=${profile.full_name || 'User'}&background=1e293b&color=3b82f6`;
          }
       } else {
-         // Fallback Seguro (Para testar se não houver login ativo) - MUDE PARA 'jogador' PRA TESTAR O PLAYER HUB
-         loggedUser = { id: 'dev', role: 'jogador', puuid: 'TESTE', name: 'CHOVY BR', photo: `https://ui-avatars.com/api/?name=C&background=1e293b&color=3b82f6` };
+         // MUDE PARA 'analista' PARA TESTAR A VISÃO DA STAFF
+         loggedUser = { id: 'dev', role: 'jogador', puuid: 'TESTE', name: 'CHOVY', photo: `https://ui-avatars.com/api/?name=C&background=1e293b&color=3b82f6` };
       }
 
-      // 1. Busca Config e Tag Mestra
+      const userIsStaff = ['analista', 'treinador', 'diretor'].includes(loggedUser.role.toLowerCase());
+
       const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
       let myTeam = 'SEM TAG'; 
       if (configData && configData.my_team_tag) {
@@ -95,22 +94,18 @@ export default function DashboardPage() {
         setSquadConfig({ teamAcronym: myTeam, directive: configData.tactical_directive || 'NENHUMA', phase: configData.periodization_phase || 'N/A', week: configData.periodization_week || 0, intensity: configData.intensity_score || 0, load: configData.cognitive_load || 'N/A' });
       }
 
-      // 2. Busca o Roster Oficial e cruza foto do jogador
       const { data: rosterData } = await supabase.from('players').select('puuid, nickname, primary_role, photo_url').ilike('team_acronym', `%${myTeam}%`);
       const activeRoster = rosterData || [];
       setRoster(activeRoster);
 
-      // Atualiza a foto do usuário logado se ele estiver no Roster
       const myPlayerInfo = activeRoster.find(p => p.puuid === loggedUser.puuid);
       const myNickname = myPlayerInfo ? myPlayerInfo.nickname : loggedUser.name;
       if (myPlayerInfo && myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url;
       setCurrentUser({...loggedUser, name: myNickname});
 
-      // 3. Busca Times
       const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
       if (teamsData) setTeamsList(teamsData);
 
-      // 4. Eficiência Real
       const { data: teamMatches } = await supabase.from('matches').select('id, blue_team_tag, red_team_tag, winner_side').or(`blue_team_tag.ilike."%${myTeam}%",red_team_tag.ilike."%${myTeam}%"`);
       const analyticCycles = teamMatches ? teamMatches.length : 0;
       let wins = 0;
@@ -126,14 +121,11 @@ export default function DashboardPage() {
 
       if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
 
-      // 5. Internal MVP Race & Posição do Jogador
       let tempMyStats = { lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 };
       const { data: mvpData } = await supabase.from('hub_players_roster').select('nickname, primary_role, mvp_score').ilike('team_acronym', `%${myTeam}%`).order('mvp_score', { ascending: false });
 
       if (mvpData) {
         setSquadForm(mvpData.map(p => ({ name: p.nickname, role: p.primary_role, rating: (Number(p.mvp_score) || 0).toFixed(1), streak: Number(p.mvp_score) >= 8 ? 'ON FIRE' : Number(p.mvp_score) < 6 ? 'COLD' : 'STABLE' })));
-        
-        // Pega rank do jogador
         const myMvpIndex = mvpData.findIndex(p => p.nickname.toUpperCase() === myNickname.toUpperCase());
         if(myMvpIndex !== -1) {
            tempMyStats.mvp = Number(mvpData[myMvpIndex].mvp_score) || 0;
@@ -142,26 +134,26 @@ export default function DashboardPage() {
         }
       }
 
-      // 6. Squad Performance Index & Status do Jogador
       const { data: perfData } = await supabase.from('hub_players_performance').select('player_name, nickname, avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
 
       if (perfData && perfData.length > 0) {
         const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
         const ml = getMed(perfData.map(p => Number(p.avg_lane || 0))), mi = getMed(perfData.map(p => Number(p.avg_impact || 0))), mc = getMed(perfData.map(p => Number(p.avg_conversion || 0))), mv = getMed(perfData.map(p => Number(p.avg_vision || 0)));
         setTeamKpiData([{ subject: 'Lane Dom.', A: Math.round(ml), B: 65 }, { subject: 'Impact', A: Math.round(mi), B: 70 }, { subject: 'Conversion', A: Math.round(mc), B: 75 }, { subject: 'Vision', A: Math.round(mv), B: 80 }, { subject: 'Overall', A: Math.round((ml+mi+mc+mv)/4), B: 70 }]);
-
-        // Pega as stats do jogador logado
-        const myPerf = perfData.find(p => (p.nickname || p.player_name || '').toUpperCase() === myNickname.toUpperCase());
-        if (myPerf) {
-           tempMyStats.lane = Math.round(Number(myPerf.avg_lane) || 0);
-           tempMyStats.impact = Math.round(Number(myPerf.avg_impact) || 0);
-           tempMyStats.conversion = Math.round(Number(myPerf.avg_conversion) || 0);
-           tempMyStats.vision = Math.round(Number(myPerf.avg_vision) || 0);
-        }
       }
-      setMyStats(tempMyStats); // Salva as stats pessoais
 
-      // 7. Eventos & Intel
+      if (!userIsStaff && loggedUser.puuid) {
+         const { data: detailStats } = await supabase.from('player_stats_detailed').select('lane_rating, impact_rating, conversion_rating, vision_rating').eq('puuid', loggedUser.puuid);
+         if (detailStats && detailStats.length > 0) {
+            const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
+            tempMyStats.lane = Math.round(getMed(detailStats.map(s => Number(s.lane_rating) || 0)));
+            tempMyStats.impact = Math.round(getMed(detailStats.map(s => Number(s.impact_rating) || 0)));
+            tempMyStats.conversion = Math.round(getMed(detailStats.map(s => Number(s.conversion_rating) || 0)));
+            tempMyStats.vision = Math.round(getMed(detailStats.map(s => Number(s.vision_rating) || 0)));
+         }
+      }
+      setMyStats(tempMyStats);
+
       const { data: missions } = await supabase.from('missions').select('*').ilike('team_acronym', `%${myTeam}%`).order('mission_date', { ascending: true }).limit(5);
       let nextOp = '';
       if (missions && missions.length > 0) { setUpcomingMissions(missions); nextOp = missions[0].opponent_acronym; }
@@ -173,13 +165,11 @@ export default function DashboardPage() {
          setNextTargetIntel({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
       }
 
-      // 8. Scrims & VOD
       const { data: scrims } = await supabase.from('scrim_reports').select('*').ilike('team_acronym', `%${myTeam}%`).order('scrim_date', { ascending: false }).limit(6);
       if (scrims) setScrimReports(scrims);
       const { data: tasks } = await supabase.from('vod_tasks').select('*').ilike('team_acronym', `%${myTeam}%`).order('created_at', { ascending: false });
       if (tasks) setVodTasks(tasks);
 
-      // 9. Histórico de Wellness
       const { data: wData } = await supabase.from('player_wellness').select('*').order('record_date', { ascending: false });
       const todayStr = new Date().toISOString().split('T')[0];
       setTeamWellness(activeRoster.map(p => {
@@ -195,7 +185,7 @@ export default function DashboardPage() {
   }, []);
 
   // ==========================================
-  // HANDLERS (SUPABASE) 
+  // HANDLERS (SUPABASE)
   // ==========================================
   const handleUpdateConfig = async (e: React.FormEvent) => { e.preventDefault(); const payload = { my_team_tag: configForm.teamAcronym.toUpperCase(), tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, intensity_score: configForm.intensity, cognitive_load: configForm.load }; if (configId) { await supabase.from('squad_config').update(payload).eq('id', configId); window.location.reload(); } else { await supabase.from('squad_config').insert([payload]).select(); window.location.reload(); } };
   const toggleTask = async (id: string, currentStatus: boolean) => { if(!isStaff) return; setVodTasks(tasks => tasks.map(t => t.id === id ? { ...t, is_done: !currentStatus } : t)); await supabase.from('vod_tasks').update({ is_done: !currentStatus }).eq('id', id); };
@@ -215,34 +205,67 @@ export default function DashboardPage() {
   const getTeamLogo = (acronym: string) => { const t = teamsList.find(t => t.acronym.toUpperCase() === (acronym||'').toUpperCase()); return t?.logo_url || `https://ui-avatars.com/api/?name=${acronym}&background=1e293b&color=fff&bold=true`; };
   const intensityTheme = squadConfig.intensity < 40 ? { text: 'text-emerald-400', bg: 'bg-emerald-500', shadow: 'shadow-[0_0_10px_rgba(16,185,129,0.8)]' } : squadConfig.intensity < 75 ? { text: 'text-amber-400', bg: 'bg-amber-500', shadow: 'shadow-[0_0_10px_rgba(245,158,11,0.8)]' } : { text: 'text-red-400', bg: 'bg-red-500', shadow: 'shadow-[0_0_10px_rgba(239,68,68,0.8)]' };
 
+  // ==========================================
+  // DADOS DINÂMICOS DO RADAR CHART (A MÁGICA ACONTECE AQUI)
+  // ==========================================
+  // B: 65, 70, 75, etc, representam a Média do Circuitão/Role (Pode ser dinâmico no futuro)
+  const radarData = isStaff ? teamKpiData : [
+    { subject: 'Lane Dom.', A: myStats.lane || 0, B: 65 }, 
+    { subject: 'Impact', A: myStats.impact || 0, B: 70 }, 
+    { subject: 'Conversion', A: myStats.conversion || 0, B: 75 }, 
+    { subject: 'Vision', A: myStats.vision || 0, B: 80 }, 
+    { subject: 'Overall', A: Math.round((myStats.lane + myStats.impact + myStats.conversion + myStats.vision) / 4) || 0, B: 70 }
+  ];
+
   if (loading) return <div className="flex items-center justify-center h-screen text-blue-500 font-black italic animate-pulse text-xs tracking-widest">// ACESSANDO SERVIDORES DO SUPABASE...</div>;
 
   return (
     <div className="max-w-[1600px] mx-auto p-4 md:p-8 space-y-10 font-black uppercase italic tracking-tighter pb-20">
       
-      {/* 1. HEADER & USER STATUS */}
+      {/* HEADER & PLAYER HUB */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-        <div className="lg:col-span-8 relative group overflow-hidden bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 rounded-[48px] p-8 flex flex-col md:flex-row items-center gap-8 shadow-2xl transition-all hover:border-blue-500/30">
+        <div className="lg:col-span-8 relative group overflow-hidden bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 rounded-[48px] p-8 flex flex-col md:flex-row items-center md:items-stretch gap-8 shadow-2xl transition-all hover:border-blue-500/30">
           <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none"></div>
-          <div className="relative z-10 shrink-0">
-             <div className="w-40 h-40 rounded-[40px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
-                <img src={currentUser.photo} className="w-full h-full object-cover" alt="Profile" />
+
+          <div className={`flex items-center md:items-start gap-6 relative z-10 w-full md:w-auto border-b md:border-b-0 ${!isStaff ? 'md:border-r border-white/5 pb-6 md:pb-0 md:pr-8' : ''} shrink-0`}>
+             <div className="relative shrink-0">
+                 <div className="w-32 h-32 md:w-40 md:h-40 rounded-[40px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
+                    <img src={currentUser.photo} className="w-full h-full object-cover" alt="Profile" />
+                 </div>
+                 <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">{isStaff ? 'STAFF' : 'ROSTER'}</div>
              </div>
-             <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">{isStaff ? 'STAFF' : 'ROSTER'}</div>
+             <div className="flex flex-col justify-center h-full">
+                <div className="flex items-center gap-3 mb-2">
+                   <p className="text-blue-400 text-xs tracking-[0.5em]">{isStaff ? 'ACTIVE ANALYST PROTOCOL' : 'PLAYER TACTICAL HUB'}</p>
+                </div>
+                <h2 className="text-4xl md:text-5xl lg:text-6xl text-white mb-3 leading-none truncate max-w-[250px]">{currentUser.name.split(' ')[0]}</h2>
+                <div className="flex flex-wrap gap-2">
+                   <Badge text={currentUser.role} color="bg-blue-500" />
+                   <Badge text="CIRCUITO DESAFIANTE" color="bg-purple-600" />
+                   {!isStaff && (
+                      <>
+                        <span className="text-[9px] bg-slate-800 text-slate-300 px-2 py-1 rounded-full border border-slate-700 tracking-widest uppercase">RANK #{myStats.rank || '-'}</span>
+                        <span className={`text-[9px] px-2 py-1 rounded-full border tracking-widest uppercase ${myStats.streak === 'ON FIRE' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>{myStats.streak}</span>
+                      </>
+                   )}
+                </div>
+             </div>
           </div>
-          <div className="relative z-10 flex-1 text-center md:text-left min-w-0">
-            <div className="flex items-center justify-center md:justify-start gap-3 mb-2">
-               <p className="text-blue-400 text-xs tracking-[0.5em]">{isStaff ? 'ACTIVE ANALYST PROTOCOL' : 'PLAYER TACTICAL HUB'}</p>
-               <span className="bg-blue-500 text-black px-2 py-0.5 rounded font-black text-[9px] tracking-widest">TEAM: {squadConfig.teamAcronym}</span>
-            </div>
-            {/* O Nome do Usuário Dinâmico */}
-            <h2 className="text-5xl lg:text-6xl text-white mb-4 leading-none truncate max-w-full">{currentUser.name.split(' ')[0]}</h2>
-            <div className="flex flex-wrap justify-center md:justify-start gap-3">
-               <Badge text={currentUser.role} color="bg-blue-500" />
-               <Badge text="TIER 3 SCENE" color="bg-purple-600" />
-               <Badge text="BRASIL" color="bg-slate-800" />
-            </div>
-          </div>
+
+          {!isStaff && (
+             <div className="relative z-10 flex-1 flex flex-col justify-center w-full">
+                <div className="flex justify-between items-center mb-4">
+                   <span className="text-[10px] text-slate-400 tracking-[0.2em] uppercase">Tactical Performance Matrix</span>
+                   <span className="text-xl opacity-30">📊</span>
+                </div>
+                <div className="space-y-3">
+                   <MiniStatBar label="Lane Dom." value={myStats.lane} color="bg-blue-500" />
+                   <MiniStatBar label="Impact" value={myStats.impact} color="bg-emerald-500" />
+                   <MiniStatBar label="Conversion" value={myStats.conversion} color="bg-amber-500" />
+                   <MiniStatBar label="Vision" value={myStats.vision} color="bg-purple-500" />
+                </div>
+             </div>
+          )}
         </div>
 
         {/* AGENDA DE EVENTOS & TARGET INTEL */}
@@ -250,7 +273,6 @@ export default function DashboardPage() {
            <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
            <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
              <div><h3 className="text-sm text-slate-400 tracking-widest leading-none">AGENDA DE EVENTOS</h3></div>
-             {/* PROTEÇÃO: Botão NOVO EVENTO só para Staff */}
              {isStaff && (
                <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[9px] tracking-widest transition-all">+ NOVO EVENTO</button>
              )}
@@ -270,7 +292,6 @@ export default function DashboardPage() {
                      <span className="text-[9px] px-2 py-1 bg-black/40 rounded-lg border border-white/10 text-slate-400">{m.mission_type}</span>
                    </div>
                    
-                   {/* PROTEÇÃO: Hover de Edição só para Staff */}
                    {isStaff && (
                      <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/card:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
                         <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
@@ -281,7 +302,6 @@ export default function DashboardPage() {
               )) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUM EVENTO AGENDADO.</p>}
            </div>
 
-           {/* TARGET INTEL DOSSIER */}
            <div className="mt-auto pt-6 border-t border-white/5 relative">
               <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -296,7 +316,6 @@ export default function DashboardPage() {
                        <span className="text-white text-sm font-black italic tracking-widest">{nextTargetIntel.team !== 'SEM ALVO' ? `VS ${nextTargetIntel.team}` : 'AWAITING ASSIGNMENT'}</span>
                     </div>
                  </div>
-                 {/* PROTEÇÃO: Botão UPDATE INTEL só para Staff */}
                  {isStaff && (
                    <button onClick={() => { if(nextTargetIntel.team === 'SEM ALVO') return; setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); setTargetModalOpen(true); }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2"><span>✏️</span> UPDATE</button>
                  )}
@@ -313,12 +332,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 1.5 TACTICAL COMMAND BAR */}
+      {/* TACTICAL COMMAND BAR */}
       <div className="bg-[#121212] border border-white/5 rounded-[32px] p-6 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-8 relative overflow-hidden group">
          <div className={`absolute left-0 top-0 bottom-0 w-1 ${intensityTheme.bg} transition-colors duration-1000`}></div>
          
          <div className="flex items-center gap-5 flex-1 w-full min-w-0">
-            {/* PROTEÇÃO: Botão CONFIG só para Staff */}
             {isStaff && (
                <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">⚙️ CONFIG</button>
             )}
@@ -352,14 +370,12 @@ export default function DashboardPage() {
          <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500 opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4 border-b border-white/5 pb-6">
             <div><h3 className="text-xl text-white italic flex items-center gap-3"><div className="w-1.5 h-5 bg-emerald-500 rounded-full shadow-[0_0_10px_#10b981]"></div> Squad Readiness</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-2">PREVENÇÃO DE LESÕES E BURN-OUT TÁTICO</p></div>
-            {/* O jogador pode ver e clicar no Daily Sync dele! */}
             <button onClick={() => { if(!isStaff) setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); setWellnessModalOpen(true); }} className="bg-emerald-600/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white px-6 py-3 rounded-2xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> DAILY SYNC</button>
          </div>
 
          {teamWellness.length > 0 ? (
            <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-5'}`}>
               
-              {/* RENDERIZAÇÃO INTELIGENTE (STAFF VS JOGADOR) */}
               {teamWellness
                 .filter(p => isStaff || p.puuid === currentUser.puuid)
                 .map((p) => {
@@ -391,52 +407,33 @@ export default function DashboardPage() {
                  );
               })}
 
-              {/* SE FOR JOGADOR: PREENCHE O ESPAÇO COM O "PERSONAL PLAYER HUB" */}
               {!isStaff && teamWellness.find(p => p.puuid === currentUser.puuid) && (
-                 <div className="col-span-1 lg:col-span-4 bg-gradient-to-br from-black/40 to-blue-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col lg:flex-row gap-8 relative overflow-hidden group">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 opacity-50 group-hover:opacity-100 transition-all"></div>
+                 <div className="col-span-1 lg:col-span-3 xl:col-span-4 bg-gradient-to-br from-black/40 to-emerald-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group min-h-[200px]">
+                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
                     
-                    {/* Bloco 1: Identidade & MVP */}
-                    <div className="flex items-center gap-5 lg:w-1/3 border-b lg:border-b-0 lg:border-r border-white/5 pb-6 lg:pb-0 lg:pr-6">
-                       <img src={currentUser.photo} className="w-20 h-20 rounded-2xl border border-blue-500/30 object-cover shadow-[0_0_15px_rgba(59,130,246,0.3)]" />
+                    <div className="flex items-center justify-between mb-4">
                        <div>
-                          <span className="text-[10px] text-blue-400 tracking-[0.3em] uppercase block mb-1">YOUR HUB</span>
-                          <h3 className="text-2xl text-white font-black italic leading-none truncate mb-2">{currentUser.name.split(' ')[0]}</h3>
-                          <div className="flex gap-2 mt-2">
-                            <span className="text-[9px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 tracking-widest">RANK #{myStats.rank || '-'}</span>
-                            <span className={`text-[9px] px-2 py-0.5 rounded border tracking-widest ${myStats.streak === 'ON FIRE' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>{myStats.streak}</span>
-                          </div>
+                          <h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Biometric Evolution (Readiness)</h4>
+                          <p className="text-[9px] text-slate-500 tracking-widest mt-1">ACOMPANHAMENTO DE ENERGIA E FOCO</p>
                        </div>
+                       <span className="text-2xl opacity-20 group-hover:opacity-100 transition-all">📈</span>
                     </div>
-
-                    {/* Bloco 2: Estatísticas Táticas */}
-                    <div className="lg:w-1/3 flex flex-col justify-center border-b lg:border-b-0 lg:border-r border-white/5 pb-6 lg:pb-0 lg:pr-6 space-y-3">
-                       <div className="flex justify-between items-center mb-1">
-                          <span className="text-[9px] text-slate-400 tracking-[0.2em] uppercase">Tactical Performance</span>
-                          <span className="text-lg opacity-30">📊</span>
+                    
+                    {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
+                       <div className="flex-1 w-full mt-2 min-h-[120px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                             <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
+                               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                               <XAxis dataKey="record_date" tickFormatter={formatDate} tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} axisLine={false} tickLine={false} />
+                               <YAxis hide domain={[0, 100]} />
+                               <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
+                               <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
+                             </LineChart>
+                          </ResponsiveContainer>
                        </div>
-                       <MiniStatBar label="Lane Dom." value={myStats.lane} color="bg-blue-500" />
-                       <MiniStatBar label="Impact" value={myStats.impact} color="bg-emerald-500" />
-                       <MiniStatBar label="Conversion" value={myStats.conversion} color="bg-amber-500" />
-                       <MiniStatBar label="Vision" value={myStats.vision} color="bg-purple-500" />
-                    </div>
-
-                    {/* Bloco 3: Gráfico de Evolução Biométrica */}
-                    <div className="lg:w-1/3 flex flex-col justify-center">
-                       <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Biometric Evolution</h4>
-                       </div>
-                       {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
-                          <div className="h-[80px] w-full mt-2">
-                            <ResponsiveContainer width="100%" height="100%">
-                               <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
-                                 <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={2} dot={{r: 3, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 5}} />
-                                 <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
-                               </LineChart>
-                            </ResponsiveContainer>
-                          </div>
-                       ) : <p className="text-[9px] text-slate-600 text-center italic mt-4">Sincronize diariamente para gerar gráficos.</p>}
-                    </div>
+                    ) : (
+                       <p className="text-[10px] text-slate-600 text-center italic py-6">Sincronize seus dados diários para gerar o gráfico.</p>
+                    )}
                  </div>
               )}
 
@@ -478,7 +475,6 @@ export default function DashboardPage() {
          <div className="absolute top-0 left-0 w-full h-1 bg-white opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4">
             <div><h3 className="text-xl text-white italic">Advanced Scrim Report</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">HISTÓRICO COMPORTAMENTAL</p></div>
-            {/* PROTEÇÃO: Botão LOG REPORT só para Staff */}
             {isStaff && (
                <button onClick={() => { setEditScrimId(null); setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' }); setScrimModalOpen(true); }} className="bg-white/10 border border-white/20 text-white hover:bg-white hover:text-black px-4 py-2 rounded-xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> LOG REPORT</button>
             )}
@@ -523,7 +519,6 @@ export default function DashboardPage() {
                      <td className="p-4 text-center"><span className={`text-[9px] px-3 py-1 rounded border tracking-widest ${getPunctualityColor(scrim.punctuality)}`}>{scrim.punctuality}</span></td>
                      <td className="p-4 text-center rounded-r-2xl relative">
                         <span className={`text-[10px] font-black ${scrim.remakes === 0 ? 'text-slate-600' : scrim.remakes > 1 ? 'text-red-400' : 'text-yellow-400'}`}>{scrim.remakes} RMK</span>
-                        {/* PROTEÇÃO: Edição de Scrims apenas para Staff */}
                         {isStaff && (
                            <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
                               <button onClick={() => { setEditScrimId(scrim.id); setScrimForm({ date: scrim.scrim_date, opponent: scrim.opponent_acronym, result: scrim.result, score: scrim.score || '', mode: scrim.mode || 'MD1', comp: scrim.comp_tested, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: scrim.match_ids || '' }); setScrimModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
@@ -541,16 +536,24 @@ export default function DashboardPage() {
       {/* TACTICAL DATA BLOCKS E VOD REVIEW QUEUE */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         
-        {/* Radar Chart */}
+        {/* RADAR CHART INTELIGENTE (STAFF VS JOGADOR) */}
         <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl h-[450px] relative overflow-hidden group">
           <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
-          <h3 className="text-xl text-white mb-6 italic flex items-center gap-3"><div className="w-1.5 h-5 bg-blue-500 rounded-full"></div> Squad Performance Index</h3>
+          <h3 className="text-xl text-white mb-6 italic flex items-center gap-3">
+             <div className="w-1.5 h-5 bg-blue-500 rounded-full"></div> 
+             {isStaff ? 'Squad Performance Index' : 'Personal Performance Index'}
+          </h3>
           <ResponsiveContainer width="100%" height="90%">
-            <RadarChart cx="50%" cy="50%" outerRadius="75%" data={teamKpiData}>
+            <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
               <PolarGrid stroke="#1e293b" />
               <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} />
-              <Radar name="Squad" dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.4} />
-              <Radar name="Tier Avg" dataKey="B" stroke="#64748b" strokeWidth={2} strokeDasharray="3 3" fill="transparent" />
+              <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+              
+              {/* O nome da teia muda dependendo de quem tá vendo */}
+              <Radar name={isStaff ? "Squad" : "My Stats"} dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.4} />
+              <Radar name={isStaff ? "Circuitão Avg" : "Role Avg"} dataKey="B" stroke="#64748b" strokeWidth={2} strokeDasharray="3 3" fill="transparent" />
+              
+              <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#1e293b', fontSize: '10px', borderRadius: '12px', fontWeight: '900', fontStyle: 'italic' }} itemStyle={{ color: '#fff' }} />
             </RadarChart>
           </ResponsiveContainer>
         </div>
@@ -583,7 +586,6 @@ export default function DashboardPage() {
               }) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUMA TAREFA PENDENTE.</p>}
            </div>
 
-           {/* PROTEÇÃO: Apenas Staff pode adicionar Tarefa */}
            {isStaff && (
               <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/10 text-slate-500 text-[10px] tracking-widest hover:border-white/30 hover:text-white transition-all bg-black/20 shrink-0 mt-auto">
                  + ADICIONAR NOVA TAREFA
@@ -926,7 +928,6 @@ function WellnessInput({ icon, title, desc, value, onChange }: any) {
   );
 }
 
-// Novo componente para as barrinhas de Status do Jogador Logado
 function MiniStatBar({ label, value, color }: { label: string, value: number, color: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
