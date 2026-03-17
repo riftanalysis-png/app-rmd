@@ -4,7 +4,6 @@ import { supabase } from '@/lib/supabase/client';
 
 const DDRAGON_VERSION = '16.5.1';
 
-// --- INTELIGÊNCIA DE TRADUÇÃO DE ROTAS ---
 function normalizeRole(lane: string | null): string {
   if (!lane) return 'mid';
   const l = lane.toLowerCase().trim();
@@ -27,20 +26,25 @@ const getRoleIcon = (role: string) => {
 
 const getObjectiveIcon = (key: string) => {
   const base = 'https://raw.communitydragon.org/latest/game/assets/ux/announcements/';
-  const map: Record<string, string> = {
-    baron: 'baron_circle.png', dragon: 'dragon_circle.png', soul: 'dragon_circle.png', 
-    air: 'dragon_circle_air.png', chemtech: 'dragon_circle_chemtech.png', earth: 'dragon_circle_earth.png',
-    fire: 'dragon_circle_fire.png', hextech: 'dragon_circle_hextech.png', water: 'dragon_circle_water.png',
-    grubs_1: 'sru_voidgrub_circle.png', grubs_2: 'sru_voidgrub_circle.png', grubs_3: 'sru_voidgrub_circle.png',
-    grubs_4: 'sru_voidgrub_circle.png', grubs_5: 'sru_voidgrub_circle.png', grubs_6: 'sru_voidgrub_circle.png',
-    herald: 'sruriftherald_circle.png'
-  };
-  return `${base}${map[key] || 'dragon_circle.png'}`;
+  const k = String(key || '').toLowerCase();
+
+  if (k.includes('baron') || k.includes('nashor') || k.includes('barão')) return `${base}baron_circle.png`;
+  if (k.includes('herald') || k.includes('arauto') || k.includes('rift') || k.includes('harold')) return `${base}sruriftherald_circle.png`;
+  if (k.includes('grub') || k.includes('horde') || k.includes('larva')) return `${base}sru_voidgrub_circle.png`;
+  if (k.includes('fire') || k.includes('infernal')) return `${base}dragon_circle_fire.png`;
+  if (k.includes('water') || k.includes('ocean')) return `${base}dragon_circle_water.png`;
+  if (k.includes('earth') || k.includes('mountain')) return `${base}dragon_circle_earth.png`;
+  if (k.includes('air') || k.includes('cloud')) return `${base}dragon_circle_air.png`;
+  if (k.includes('hextech')) return `${base}dragon_circle_hextech.png`;
+  if (k.includes('chemtech')) return `${base}dragon_circle_chemtech.png`;
+  
+  return `${base}dragon_circle.png`; 
 };
 
 interface SelectedChampProps { name: string; lane: string; }
 
 const MathSafe = (val: any) => Number(val) || 0;
+
 const weightedAvg = (accAvg: any, accCount: any, currAvg: any, currCount: any) => {
   const v1 = MathSafe(accAvg); const w1 = MathSafe(accCount);
   const v2 = MathSafe(currAvg); const w2 = MathSafe(currCount);
@@ -86,11 +90,14 @@ export default function MetaWarRoom() {
       const aggTiers = Array.from((t.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
           const key = `${curr.champion}_${lane}`;
-          if (!acc.has(key)) acc.set(key, { ...curr, lane, power_score: MathSafe(curr.power_score), total_picks: MathSafe(curr.total_picks) });
+          const pScore = MathSafe(curr.power_score);
+          const tPicks = MathSafe(curr.total_picks);
+
+          if (!acc.has(key)) acc.set(key, { ...curr, lane, power_score: pScore, total_picks: tPicks });
           else {
               const ex = acc.get(key);
-              ex.power_score = weightedAvg(ex.power_score, ex.total_picks, curr.power_score, curr.total_picks);
-              ex.total_picks += MathSafe(curr.total_picks);
+              ex.power_score = weightedAvg(ex.power_score, ex.total_picks, pScore, tPicks);
+              ex.total_picks += tPicks;
           }
           return acc;
       }, new Map()).values());
@@ -150,9 +157,9 @@ export default function MetaWarRoom() {
       }, new Map()).values());
 
       const aggObjectives = Array.from((gobj.data || []).reduce((acc, curr) => {
-          const name = String(curr.objective_name || '').trim();
-          const sub = String(curr.icon_key || '').trim();
-          const key = `${name}_${sub}`; 
+          const type = String(curr.objective_type || '').trim().toUpperCase();
+          const sub = String(curr.subtype || '').trim().toUpperCase();
+          const key = `${type}_${sub}`; 
           
           if (!acc.has(key)) acc.set(key, { ...curr, win_rate: MathSafe(curr.win_rate), times_achieved: MathSafe(curr.times_achieved) });
           else {
@@ -182,11 +189,12 @@ export default function MetaWarRoom() {
     const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= minGames);
     list.sort((a: any, b: any) => b.power_score - a.power_score);
 
+    // RÉGUA DE CORTE IMPLACÁVEL (Focada no competitivo)
     return {
-      S: list.filter((c: any) => c.power_score >= 75),
-      A: list.filter((c: any) => c.power_score >= 60 && c.power_score < 75),
-      B: list.filter((c: any) => c.power_score >= 45 && c.power_score < 60),
-      C: list.filter((c: any) => c.power_score < 45),
+      S: list.filter((c: any) => c.power_score >= 78), // Apenas anomalias e quebras de meta
+      A: list.filter((c: any) => c.power_score >= 72 && c.power_score < 78), // Muito fortes
+      B: list.filter((c: any) => c.power_score >= 65 && c.power_score < 72), // Bons / Situacionais
+      C: list.filter((c: any) => c.power_score < 65), // A grande massa "Média" cai toda aqui
     };
   }, [data.tiers, activeLane, minGames]);
 
@@ -250,7 +258,7 @@ export default function MetaWarRoom() {
     if (!dbData || dbData.length === 0) return null;
     const matchers = [
       { key: 'baron', terms: ['baron', 'nashor', 'barão'] },
-      { key: 'herald', terms: ['herald', 'arauto', 'rift'] },
+      { key: 'herald', terms: ['herald', 'arauto', 'rift', 'harold'] },
       { key: 'soul', terms: ['soul', 'alma'] },
       { key: 'dragon', terms: ['dragon', 'dragão'], stacks: 1 },
       { key: 'grubs_1', terms: ['grub', 'larva', 'horde'], stacks: 1 },
@@ -274,71 +282,97 @@ export default function MetaWarRoom() {
     if (!matcher) return null;
 
     return dbData.find(row => {
-      const nameMatch = matcher.terms.some(term => row.objective_name?.toLowerCase().includes(term) || row.category?.toLowerCase().includes(term));
+      const nameMatch = matcher.terms.some(term => String(row.objective_name).toLowerCase().includes(term) || String(row.category).toLowerCase().includes(term));
       const stackMatch = matcher.stacks ? row.stacks === matcher.stacks : true;
       const stackMatchFallback = (iconKey === 'grubs_3' && row.stacks >= 3);
       return nameMatch && (stackMatch || stackMatchFallback);
     });
   };
 
-  // === TRADUTOR FLEXÍVEL DE OBJETIVOS ===
-  const getObj = (searchKey: string) => {
-    let obj = data.globalObjectives.find((row: any) => {
-      const n = (row.objective_name || '').toLowerCase();
-      const i = (row.icon_key || '').toLowerCase();
-      const combined = `${n} ${i}`;
+  // === EXTRATORES DE DADOS (SCANNER BLINDADO) ===
+  const getObjSafe = (keywords: string[], excludeKeyword?: string) => {
+    const obj = data.globalObjectives.find((row: any) => {
+       const t = String(row.objective_type || row.objective_name || '').toLowerCase();
+       const s = String(row.subtype || row.icon_key || '').toLowerCase();
+       const combined = `${t} ${s}`;
+       
+       // Ignora a linha se contiver a palavra excluída (ex: evitar pegar BARON_COUNTS)
+       if (excludeKeyword && combined.includes(excludeKeyword.toLowerCase())) return false;
 
-      if (searchKey === 'baron') return combined.includes('baron') || combined.includes('nashor');
-      if (searchKey === 'herald') return combined.includes('herald') || combined.includes('arauto') || combined.includes('rift');
-      if (searchKey === 'dragon') return (combined.includes('dragon') || combined.includes('dragão')) && !combined.includes('soul') && !combined.includes('alma') && !['fire','water','earth','air','hextech','chemtech'].some(e => combined.includes(e));
-      if (searchKey === 'soul') return combined.includes('soul') || combined.includes('alma');
-      return combined.includes(searchKey);
+       return keywords.some(kw => combined.includes(kw));
     });
 
     if (!obj) return null;
-    const delta = obj.win_rate - 50;
-    const goldInfo = findGoldValue(searchKey, data.goldStats);
+    const delta = MathSafe(obj.win_rate) - 50;
+    const iconKey = keywords[0]; 
+    const goldInfo = findGoldValue(iconKey, data.goldStats);
     
-    return { ...obj, delta, isTrap: delta < 0, gold: goldInfo?.gold_value_team, icon_key: searchKey };
+    return { ...obj, delta, isTrap: delta < 0, gold: goldInfo?.gold_value_team, icon_key: iconKey };
   };
-
-  // === EXTRATOR DE VASTILARVAS (MÁXIMA SOBREVIVÊNCIA) ===
+  
+  const heraldData = getObjSafe(['herald', 'arauto', 'riftharold', 'harold', 'riftherald']);
+  
+  // === BARÃO (COMPLETO COM QUANTIDADE POR JOGO) ===
+  const bBase = getObjSafe(['baron', 'nashor', 'barão'], 'counts');
+  const baronData = bBase ? {
+     ...bBase,
+     elements: [1, 2, 3, 4, 5].map(num => {
+        const obj = data.globalObjectives.find((row: any) => 
+           String(row.objective_type).toUpperCase() === 'BARON_COUNTS' &&
+           String(row.subtype).toLowerCase() === `barons_${num}`
+        );
+        if (!obj) return null;
+        return { 
+          key: `barons_${num}`, 
+          label: `${num} BARÃO${num > 1 ? 'S' : ''}`, 
+          color: 'text-purple-400', 
+          win_rate: MathSafe(obj.win_rate), 
+          count: MathSafe(obj.times_achieved) 
+        };
+     }).filter(Boolean)
+  } : null;
+  
+  // === PRIMEIRO DRAGÃO (COMPLETO COM SUB-ELEMENTOS) ===
+  const fDrakeBase = getObjSafe(['dragon1']);
+  const firstDragonData = fDrakeBase ? {
+     ...fDrakeBase,
+     elements: [
+       { key: 'fire', label: 'Fogo', color: 'text-red-400' },
+       { key: 'water', label: 'Água', color: 'text-blue-400' },
+       { key: 'earth', label: 'Montanha', color: 'text-amber-600' },
+       { key: 'air', label: 'Nuvens', color: 'text-cyan-200' },
+       { key: 'hextech', label: 'Hextech', color: 'text-purple-400' },
+       { key: 'chemtech', label: 'Quimtec', color: 'text-emerald-400' }
+     ].map(el => {
+        const obj = data.globalObjectives.find((row: any) => 
+           String(row.objective_type).toUpperCase() === 'FIRST_DRAGON_ELEMENT' &&
+           (String(row.subtype).toLowerCase().includes(el.key) || String(row.subtype).toLowerCase().includes(el.label.toLowerCase()) || String(row.subtype).toLowerCase().includes('infernal') || String(row.subtype).toLowerCase().includes('ocean'))
+        );
+        if (!obj) return null;
+        return { ...el, win_rate: MathSafe(obj.win_rate), count: MathSafe(obj.times_achieved) };
+     }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate)
+  } : null;
+  
   const getGrubs = () => {
-    // Tenta achar com os números exatos 1, 2, 3...
-    const specifics = [1, 2, 3, 4, 5, 6].map(num => {
-      const obj = data.globalObjectives.find((row: any) => {
-        const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
-        return (combined.includes('horde') || combined.includes('grub') || combined.includes('larva') || combined.includes('voidgrub')) && combined.includes(String(num));
-      });
+    return [1, 2, 3, 4, 5, 6].map(num => {
+      const obj = getObjSafe([`grubs_${num}`]);
       if (!obj) return null;
-      const delta = obj.win_rate - 50;
-      return { ...obj, objective_name: `${num} VASTILARVA${num > 1 ? 'S' : ''}`, icon_key: `grubs_${num}`, delta, isTrap: delta < 0, gold: findGoldValue(`grubs_${num}`, data.goldStats)?.gold_value_team };
+      return {
+         ...obj,
+         objective_name: `${num} VASTILARVA${num > 1 ? 'S' : ''}`,
+         icon_key: `grubs_${num}`
+      };
     }).filter(Boolean);
-
-    if (specifics.length > 0) return specifics;
-
-    // Fallback: Se não achar os números, pega o genérico para o card não sumir da tela
-    const generic = data.globalObjectives.find((row: any) => {
-      const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
-      return combined.includes('horde') || combined.includes('grub') || combined.includes('larva') || combined.includes('voidgrub');
-    });
-
-    if (!generic) return [];
-    const delta = generic.win_rate - 50;
-    return [{ ...generic, objective_name: 'VASTILARVAS', icon_key: 'grubs_1', delta, isTrap: delta < 0, gold: findGoldValue('grubs_1', data.goldStats)?.gold_value_team }];
   };
+  const grubsData = getGrubs();
 
-  // === EXTRATOR GERAL DE ALMAS ===
   const getGenericSoul = () => {
-     let exactSoul = getObj('soul');
-     if (exactSoul) return exactSoul;
-
-     // Junta todas as almas de elementos diferentes num Win Rate só
      const allSouls = data.globalObjectives.filter((row: any) => {
-        const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
-        return combined.includes('soul') || combined.includes('alma');
+         const t = String(row.objective_type || row.objective_name || '').toLowerCase();
+         const s = String(row.subtype || row.icon_key || '').toLowerCase();
+         return t.includes('soul') || s.includes('soul') || t.includes('alma') || s.includes('alma');
      });
-
+     
      if (allSouls.length === 0) return null;
 
      const totalAchieved = allSouls.reduce((acc: number, curr: any) => acc + MathSafe(curr.times_achieved), 0);
@@ -346,7 +380,7 @@ export default function MetaWarRoom() {
      const delta = avgWr - 50;
 
      return {
-        objective_name: 'ALMA DO DRAGÃO',
+        objective_name: 'ALMA DO DRAGÃO GERAL',
         icon_key: 'soul',
         times_achieved: totalAchieved,
         win_rate: avgWr,
@@ -355,36 +389,65 @@ export default function MetaWarRoom() {
         gold: findGoldValue('soul', data.goldStats)?.gold_value_team || 0
      };
   };
-
-  const baronData = getObj('baron');
   const soulData = getGenericSoul();
-  const heraldData = getObj('herald');
-  const firstDragonData = getObj('dragon');
-  const grubsData = getGrubs();
   
-  const elementalData = ['fire', 'water', 'earth', 'air', 'hextech', 'chemtech']
-    .map(key => {
-       const baseDrake = getObj(key);
-       if (!baseDrake) return null;
-       
-       let soulDrakObj = data.globalObjectives.find((row: any) => {
-           const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
-           return (combined.includes('soul') || combined.includes('alma')) && combined.includes(key);
-       });
+  const elementalData = [
+    { key: 'fire', terms: ['fire', 'infernal'] },
+    { key: 'water', terms: ['water', 'ocean'] },
+    { key: 'earth', terms: ['earth', 'mountain'] },
+    { key: 'air', terms: ['air', 'cloud'] },
+    { key: 'hextech', terms: ['hextech'] },
+    { key: 'chemtech', terms: ['chemtech', 'quimtec'] }
+  ].map(elem => {
+     
+     const baseDrake = data.globalObjectives.find((row: any) => {
+        const t = String(row.objective_type || row.objective_name || '').toLowerCase();
+        const s = String(row.subtype || row.icon_key || '').toLowerCase();
+        const combined = `${t} ${s}`;
+        
+        const isDragon = combined.includes('dragon') || combined.includes('dragão');
+        const isSoul = combined.includes('soul') || combined.includes('alma');
+        const hasElement = elem.terms.some(term => combined.includes(term));
+        
+        return isDragon && !isSoul && hasElement;
+     });
 
-       const soulGoldInfo = findGoldValue(`${key}_soul`, data.goldStats);
-       
-       const soulStat = {
-         win_rate: soulDrakObj ? MathSafe(soulDrakObj.win_rate) : 0,
-         times_achieved: soulDrakObj ? MathSafe(soulDrakObj.times_achieved) : 0,
-         delta: soulDrakObj ? MathSafe(soulDrakObj.win_rate) - 50 : 0,
-         isTrap: soulDrakObj ? (MathSafe(soulDrakObj.win_rate) - 50 < 0) : false,
-         gold: soulGoldInfo?.gold_value_team || null,
-         hasData: !!soulDrakObj
-       };
+     if (!baseDrake) return null;
+     
+     const soulDrakObj = data.globalObjectives.find((row: any) => {
+        const t = String(row.objective_type || row.objective_name || '').toLowerCase();
+        const s = String(row.subtype || row.icon_key || '').toLowerCase();
+        const combined = `${t} ${s}`;
+        
+        const isSoul = combined.includes('soul') || combined.includes('alma');
+        const hasElement = elem.terms.some(term => combined.includes(term));
+        
+        return isSoul && hasElement;
+     });
 
-       return { ...baseDrake, soulStat };
-    }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate);
+     const delta = MathSafe(baseDrake.win_rate) - 50;
+     const drakeGold = findGoldValue(elem.key, data.goldStats)?.gold_value_team;
+     
+     const soulGoldInfo = findGoldValue(`${elem.key}_soul`, data.goldStats);
+     const soulStat = {
+       win_rate: soulDrakObj ? MathSafe(soulDrakObj.win_rate) : 0,
+       times_achieved: soulDrakObj ? MathSafe(soulDrakObj.times_achieved) : 0,
+       delta: soulDrakObj ? MathSafe(soulDrakObj.win_rate) - 50 : 0,
+       isTrap: soulDrakObj ? (MathSafe(soulDrakObj.win_rate) - 50 < 0) : false,
+       gold: soulGoldInfo?.gold_value_team || null,
+       hasData: !!soulDrakObj
+     };
+
+     return { 
+       ...baseDrake, 
+       objective_name: `DRAGÃO ${elem.key.toUpperCase()}`,
+       icon_key: elem.key, 
+       delta, 
+       isTrap: delta < 0, 
+       gold: drakeGold,
+       soulStat 
+     };
+  }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate);
 
   if (loading && data.tiers.length === 0) return <div className="flex items-center justify-center h-screen text-purple-500 font-black text-2xl animate-pulse italic uppercase tracking-[0.2em]">RMD ANALYTICS: INICIANDO PROTOCOLOS...</div>;
 
@@ -392,12 +455,14 @@ export default function MetaWarRoom() {
     <div className="max-w-[1500px] mx-auto space-y-8 p-4 md:p-8 font-black uppercase italic tracking-tighter pb-20">
       
       <header className="flex flex-wrap items-center justify-between gap-6 mb-12 border-b border-white/5 pb-6 sticky top-0 bg-[#121212]/95 backdrop-blur-xl z-50 pt-4 -mx-4 px-4 md:-mx-8 md:px-8">
+        
         <div className="flex flex-col border-l-4 border-purple-500 pl-4 justify-center shrink-0">
           <h1 className="text-3xl lg:text-4xl leading-none text-white">META WAR ROOM</h1>
           <p className="text-purple-400 text-[9px] tracking-[0.4em] mt-1">High Fidelity Scouting</p>
         </div>
         
         <div className="flex flex-wrap items-center justify-start xl:justify-end gap-6 flex-1">
+          
           <div className="flex gap-4 items-center bg-transparent shrink-0">
              <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />
              <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
@@ -427,6 +492,7 @@ export default function MetaWarRoom() {
               MACRO INTEL
             </button>
           </div>
+
         </div>
       </header>
 
@@ -442,8 +508,8 @@ export default function MetaWarRoom() {
 
           {(baronData || soulData) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              {baronData && <EnderHeroCard obj={baronData} title="BARÃO NASHOR" accent="purple" />}
-              {soulData && <EnderHeroCard obj={soulData} title="ALMA DO DRAGÃO (GERAL)" accent="red" />}
+              {baronData && <EnderHeroCard obj={baronData} title="BARÃO NASHOR" accent="purple" subElements={baronData.elements} />}
+              {soulData && <EnderHeroCard obj={soulData} title={soulData.objective_name} accent="red" />}
             </div>
           )}
 
@@ -488,7 +554,7 @@ export default function MetaWarRoom() {
 
               <div className={`grid grid-cols-1 ${heraldData && firstDragonData ? 'md:grid-cols-2' : ''} gap-8 shrink-0`}>
                 {heraldData && <CompactMacroCard obj={heraldData} title="ARAUTO DO VALE" />}
-                {firstDragonData && <CompactMacroCard obj={firstDragonData} title="PRIMEIRO DRAGÃO" />}
+                {firstDragonData && <CompactMacroCard obj={firstDragonData} title="PRIMEIRO DRAGÃO" subElements={firstDragonData.elements} />}
               </div>
             </div>
 
@@ -774,13 +840,13 @@ function ImpactDeltaBadge({ delta }: { delta: number }) {
   )
 }
 
-function EnderHeroCard({ obj, title, accent }: { obj: any, title: string, accent: string }) {
+function EnderHeroCard({ obj, title, accent, subElements }: { obj: any, title: string, accent: string, subElements?: any[] }) {
   const isHigh = obj.win_rate >= 60;
   const isLow = obj.win_rate < 50;
   const ringColor = accent === 'purple' ? 'hover:ring-purple-500/40' : 'hover:ring-red-500/40';
 
   return (
-    <div className={`bg-slate-900/40 border border-slate-800 p-8 rounded-[40px] shadow-2xl relative overflow-hidden group transition-all ${ringColor}`}>
+    <div className={`bg-slate-900/40 border border-slate-800 p-8 rounded-[40px] shadow-2xl relative overflow-hidden group transition-all ${ringColor} flex flex-col h-full`}>
       <div className="absolute -right-8 -bottom-8 opacity-10 group-hover:opacity-[0.15] transition-opacity pointer-events-none">
          <img src={getObjectiveIcon(obj.icon_key)} className="w-64 h-64 grayscale" alt="" />
       </div>
@@ -794,7 +860,7 @@ function EnderHeroCard({ obj, title, accent }: { obj: any, title: string, accent
         <img src={getObjectiveIcon(obj.icon_key)} className="w-16 h-16 rounded-full shadow-xl border border-slate-700 bg-slate-950" alt="" />
       </div>
 
-      <div className="flex items-end justify-between relative z-10">
+      <div className="flex items-end justify-between relative z-10 mt-auto">
         <div>
           <p className={`text-7xl font-black italic leading-none ${isHigh ? 'text-emerald-400' : isLow ? 'text-orange-400' : 'text-blue-400'}`}>{Math.round(obj.win_rate)}%</p>
           <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-2">Win Rate Absoluto</p>
@@ -803,11 +869,28 @@ function EnderHeroCard({ obj, title, accent }: { obj: any, title: string, accent
           <ImpactDeltaBadge delta={obj.delta} />
         </div>
       </div>
+
+       {subElements && subElements.length > 0 && (
+         <div className="mt-6 pt-5 border-t border-slate-800/50 relative z-10">
+           <p className="text-[8px] text-slate-500 uppercase tracking-widest mb-3">WR POR QUANTIDADE DE BARÕES NO JOGO</p>
+           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+             {subElements.map(el => (
+               <div key={el.key} className="flex justify-between items-center bg-slate-950/50 px-3 py-2 rounded-xl border border-slate-800/60">
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${el.color}`}>{el.label}</span>
+                  <div className="text-right leading-none">
+                    <p className="text-[11px] text-white font-mono italic font-black">{Math.round(el.win_rate)}%</p>
+                    <p className="text-[7px] text-slate-500 mt-0.5">{el.count}x</p>
+                  </div>
+               </div>
+             ))}
+           </div>
+         </div>
+       )}
     </div>
   );
 }
 
-function CompactMacroCard({ obj, title }: { obj: any, title: string }) {
+function CompactMacroCard({ obj, title, subElements }: { obj: any, title: string, subElements?: any[] }) {
   return (
     <div className="bg-slate-900/30 border border-slate-800 p-6 rounded-[32px] flex flex-col justify-between shadow-xl hover:bg-slate-800/40 transition-colors h-full">
        <div className="flex items-start gap-4 mb-6">
@@ -818,6 +901,7 @@ function CompactMacroCard({ obj, title }: { obj: any, title: string }) {
            {obj.gold && <div className="mt-1"><GoldBadge gold={obj.gold} /></div>}
          </div>
        </div>
+       
        <div className="flex items-end justify-between">
          <div>
            <p className="text-[8px] text-slate-500 uppercase tracking-widest mb-1">Impact Delta</p>
@@ -825,9 +909,26 @@ function CompactMacroCard({ obj, title }: { obj: any, title: string }) {
          </div>
          <div className="text-right">
            <p className={`text-4xl font-black italic leading-none ${obj.win_rate >= 50 ? 'text-emerald-400' : 'text-orange-400'}`}>{Math.round(obj.win_rate)}%</p>
-           <p className="text-[8px] text-slate-600 uppercase tracking-widest mt-1">Win Rate</p>
+           <p className="text-[8px] text-slate-600 uppercase tracking-widest mt-1">Win Rate Geral</p>
          </div>
        </div>
+
+       {subElements && subElements.length > 0 && (
+         <div className="mt-6 pt-5 border-t border-slate-800/50">
+           <p className="text-[8px] text-slate-500 uppercase tracking-widest mb-3">WR POR ELEMENTO (1º DRAGÃO)</p>
+           <div className="grid grid-cols-2 gap-2">
+             {subElements.map(el => (
+               <div key={el.key} className="flex justify-between items-center bg-slate-950/50 px-3 py-2 rounded-xl border border-slate-800/60">
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${el.color}`}>{el.label}</span>
+                  <div className="text-right leading-none">
+                    <p className="text-[11px] text-white font-mono italic font-black">{Math.round(el.win_rate)}%</p>
+                    <p className="text-[7px] text-slate-500 mt-0.5">{el.count}x</p>
+                  </div>
+               </div>
+             ))}
+           </div>
+         </div>
+       )}
     </div>
   );
 }
@@ -870,8 +971,6 @@ function MatchupStat({ label, val, isDiff = false, color = "text-white", isBadHi
     </div>
   );
 }
-
-// --- NOVOS DROPDOWNS CUSTOMIZADOS DE CAMPEONATO E SPLIT ---
 
 function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
   const [isOpen, setIsOpen] = useState(false);
