@@ -110,7 +110,13 @@ export default function DashboardLayout({
              {/* PROTEÇÃO DE STAFF PARA AS FUNÇÕES DE ADMINISTRAÇÃO */}
              {['analista', 'treinador', 'diretor'].includes(userRole.toLowerCase()) && (
                 <>
-                  <SidebarItem title="Aprovar Usuários" subtitle="Administração" isAction />
+                  <SidebarItem 
+                    title="Aprovar Usuários" 
+                    subtitle="Administração" 
+                    isAction 
+                    href="/dashboard/admin/users" 
+                    isActive={pathname.includes('/dashboard/admin/users')}
+                  />
                   <SidebarItem 
                     title="Subir CSV" 
                     subtitle="(GRID.GG)" 
@@ -125,8 +131,8 @@ export default function DashboardLayout({
                       subtitle="Sistema Global" 
                       isAction 
                       icon={SettingsIcon}
-                      href="/dashboard/config" 
-                      isActive={pathname.includes('/dashboard/config')} 
+                      href="/dashboard/admin/config" 
+                      isActive={pathname.includes('/dashboard/admin/config')} 
                     />
                   )}
                 </>

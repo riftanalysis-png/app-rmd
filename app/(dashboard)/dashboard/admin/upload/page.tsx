@@ -3,12 +3,13 @@ import { useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import Papa from 'papaparse';
 
-// O Calendário Oficial do Circuitão (DD/MM)
-const OFFICIAL_DATES = ['30/03', '31/03', '06/04', '07/04', '08/04', '13/04', '14/04', '20/04', '21/04'];
-
 export default function UploadPage() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  
+  // ESTADOS DE CLASSIFICAÇÃO
+  const [selectedTournament, setSelectedTournament] = useState("CIRCUITO_DESAFIANTE");
+  const [selectedSplit, setSelectedSplit] = useState("SPLIT 1");
 
   const toNum = (val: any) => {
     if (val === undefined || val === null || val === '') return 0;
@@ -17,34 +18,11 @@ export default function UploadPage() {
     return parseFloat(cleanVal) || 0;
   };
 
-  // --- INTELIGÊNCIA DE CALENDÁRIO (DIA LÓGICO) BLINDADA ---
-  const determineGameType = (dateString: string) => {
-    if (!dateString) return 'SCRIM';
-    const safeDateString = dateString.replace(' ', 'T');
-    const date = new Date(safeDateString);
-
-    if (isNaN(date.getTime())) return 'SCRIM';
-
-    const hours = date.getHours();
-    const isOfficialTimeWindow = hours >= 18 || hours <= 3;
-    if (!isOfficialTimeWindow) return 'SCRIM'; 
-
-    const logicalDate = new Date(date);
-    if (hours <= 3) logicalDate.setDate(logicalDate.getDate() - 1);
-
-    const day = String(logicalDate.getDate()).padStart(2, '0');
-    const month = String(logicalDate.getMonth() + 1).padStart(2, '0');
-    const formattedDate = `${day}/${month}`; 
-
-    if (OFFICIAL_DATES.includes(formattedDate)) return 'OFFICIAL';
-    return 'SCRIM';
-  };
-
   // --- MOTOR DE RATINGS ---
   const calculateRatings = async (players: any[]) => {
     const { data: weights } = await supabase.from('lane_weights').select('*');
-    // Como apagamos os bounds antigos, começamos do zero calculando a nova realidade do CSV!
-    const localBounds: any[] = []; 
+    const { data: bounds } = await supabase.from('lane_metrics_bounds').select('*');
+    const localBounds = bounds || [];
     const updatedBounds: any[] = [];
 
     const playersWithDerived = players.map(p => {
@@ -79,8 +57,14 @@ export default function UploadPage() {
         if (vals.length === 0) return;
         const cMin = Math.min(...vals), cMax = Math.max(...vals);
 
-        updatedBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
-        localBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
+        let b = localBounds.find(b => b.lane === lane && b.metric_name === mKey);
+        if (!b) {
+          updatedBounds.push({ lane, metric_name: mKey, min_val: cMin, max_val: cMax });
+        } else if (cMin < b.min_val || cMax > b.max_val) {
+          b.min_val = Math.min(b.min_val, cMin);
+          b.max_val = Math.max(b.max_val, cMax);
+          updatedBounds.push(b);
+        }
       });
     });
 
@@ -157,14 +141,12 @@ export default function UploadPage() {
           const rawData = results.data as any[];
           const uniqueMatchIds = Array.from(new Set(rawData.map((r) => r['Match ID']))).filter(Boolean);
 
-          // 1. LÓGICA DE RECONSTRUÇÃO (APENAS AO SUBIR A PLANILHA MESTRE)
           if (tableName === 'player_stats_detailed') {
-             setStatus("SALVANDO FOTOS DOS JOGADORES E LOGOS DOS TIMES...");
+             setStatus("ATUALIZANDO TIMES, JOGADORES E PARTIDAS NO BANCO...");
+             
              const { data: existingTeams } = await supabase.from('teams').select('acronym, logo_url');
              const { data: existingPlayers } = await supabase.from('players').select('puuid, photo_url');
 
-             // Organiza as Partidas e Séries novas
-             setStatus("MAPENADO SÉRIES E IDENTIFICANDO CAMPEONATOS...");
              const uniqueSeriesMap = new Map();
              const uniqueMatchesMap = new Map();
              const uniqueTeamsMap = new Map();
@@ -174,24 +156,20 @@ export default function UploadPage() {
                 const mId = r['Match ID'];
                 if (!mId) continue;
                 
-                const seriesId = mId.split('_')[0];
                 const acronym = r['Team Acronym'];
                 const puuid = r['PUUID'];
 
-                // Separa Times Únicos (Preservando a logo antiga)
                 if (acronym && !uniqueTeamsMap.has(acronym)) {
                    const extTeam = existingTeams?.find(t => t.acronym === acronym);
                    uniqueTeamsMap.set(acronym, { acronym: acronym, name: acronym, logo_url: extTeam?.logo_url || null });
                 }
 
-                // Separa Jogadores Únicos (Preservando a foto antiga)
                 if (puuid && !uniquePlayersMap.has(puuid)) {
                    const extPlayer = existingPlayers?.find(p => p.puuid === puuid);
                    uniquePlayersMap.set(puuid, { puuid: puuid, nickname: r['Summoner Name'], team_acronym: r['Team Acronym'], primary_role: r['Lane'], photo_url: extPlayer?.photo_url || null });
                 }
              }
 
-             // Processa Séries e Matches
              for (const mId of uniqueMatchIds) {
                const seriesId = (mId as string).split('_')[0];
                const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
@@ -203,7 +181,6 @@ export default function UploadPage() {
                
                const rawDate = baseRow?.['Game Start Time'] || '';
                const safeDateString = rawDate.replace(' ', 'T');
-               const gameType = determineGameType(safeDateString);
                const finalIsoDate = !isNaN(new Date(safeDateString).getTime()) ? new Date(safeDateString).toISOString() : null;
 
                if (!uniqueSeriesMap.has(seriesId)) {
@@ -211,59 +188,45 @@ export default function UploadPage() {
                }
 
                uniqueMatchesMap.set(mId, {
-                 id: mId, series_id: seriesId, blue_team_tag: blueTag || null, red_team_tag: redTag || null,
-                 winner_side: winnerSide || null, patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
-                 game_start_time: finalIsoDate, game_type: gameType 
+                 id: mId, 
+                 series_id: seriesId, 
+                 blue_team_tag: blueTag || null, 
+                 red_team_tag: redTag || null,
+                 winner_side: winnerSide || null, 
+                 patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
+                 game_start_time: finalIsoDate, 
+                 game_type: selectedTournament,
+                 split: selectedSplit 
                });
              }
 
-             // >>> PROTOCOLO DESTRUTIVO (FULL WIPE) <<<
-             setStatus("LIMPANDO BANCO DE DADOS (FULL WIPE ATIVADO)...");
-             // Apagamos na ordem correta para respeitar a hierarquia do Banco de Dados
-             await supabase.from('player_stats_detailed').delete().not('match_id', 'is', null);
-             await supabase.from('matches').delete().not('id', 'is', null);
-             await supabase.from('series').delete().not('id', 'is', null);
-             await supabase.from('players').delete().not('puuid', 'is', null);
-             await supabase.from('teams').delete().not('acronym', 'is', null);
-             await supabase.from('lane_metrics_bounds').delete().not('lane', 'is', null);
-
-             // >>> RECONSTRUÇÃO HIERÁRQUICA <<<
-             setStatus("RECONSTRUINDO TIMES E JOGADORES...");
              const newTeams = Array.from(uniqueTeamsMap.values());
              const newPlayers = Array.from(uniquePlayersMap.values());
-             if (newTeams.length > 0) await supabase.from('teams').insert(newTeams);
-             if (newPlayers.length > 0) await supabase.from('players').insert(newPlayers);
+             if (newTeams.length > 0) await supabase.from('teams').upsert(newTeams);
+             if (newPlayers.length > 0) await supabase.from('players').upsert(newPlayers);
 
-             setStatus("RECONSTRUINDO SÉRIES E PARTIDAS...");
              const newSeries = Array.from(uniqueSeriesMap.values());
              const newMatches = Array.from(uniqueMatchesMap.values());
-             if (newSeries.length > 0) await supabase.from('series').insert(newSeries);
-             if (newMatches.length > 0) await supabase.from('matches').insert(newMatches);
+             if (newSeries.length > 0) await supabase.from('series').upsert(newSeries);
+             if (newMatches.length > 0) await supabase.from('matches').upsert(newMatches);
           }
 
-          // 2. PROCESSAMENTO E RATINGS FINAIS
-          setStatus("FORMATANDO ESTATÍSTICAS...");
+          setStatus("FORMATANDO DADOS PARA INSERÇÃO...");
           let formattedData = rawData.map((row) => mapCsvToDb(row, tableName));
 
           if (tableName === 'player_stats_detailed') {
-            setStatus("CALCULANDO NOVOS RATINGS E BOUNDS DA SEMANA...");
+            setStatus("CALCULANDO RATINGS E AJUSTANDO BOUNDS...");
             formattedData = await calculateRatings(formattedData);
-            
-            setStatus("INJETANDO ESTATÍSTICAS DETALHADAS...");
-            const { error } = await supabase.from(tableName).insert(formattedData);
-            if (error) throw new Error("Erro na Injeção de Dados (Stats): " + error.message);
-
-          } else {
-            // Se for arquivo de Ward, Draft ou Objetivo (Apenas Substitui a Tabela Alvo)
-            setStatus(`LIMPANDO TABELA ${tableName.toUpperCase()}...`);
-            await supabase.from(tableName).delete().not('match_id', 'is', null);
-
-            setStatus(`INJETANDO NOVOS DADOS EM ${tableName.toUpperCase()}...`);
-            const { error } = await supabase.from(tableName).insert(formattedData);
-            if (error) throw new Error(`Erro na Injeção (${tableName}): ` + error.message);
           }
 
-          alert(`${file.name} PROCESSADO COM SUCESSO! BD TOTALMENTE RESETADO E ATUALIZADO.`);
+          setStatus(`LIMPANDO DADOS ANTIGOS DESTAS ${uniqueMatchIds.length} PARTIDAS...`);
+          await supabase.from(tableName).delete().in('match_id', uniqueMatchIds);
+
+          setStatus("INJETANDO DADOS ATUALIZADOS NO DATABASE...");
+          const { error } = await supabase.from(tableName).insert(formattedData);
+          if (error) throw new Error(`Erro na Injeção (${tableName}): ` + error.message);
+
+          alert(`${file.name} PROCESSADO COM SUCESSO E CLASSIFICADO COMO [${selectedTournament} | ${selectedSplit}]!`);
           setStatus("CONCLUÍDO COM ÊXITO.");
         } catch (err: any) {
           alert("ERRO: " + err.message);
@@ -278,14 +241,63 @@ export default function UploadPage() {
 
   return (
     <div className="p-8 max-w-[1000px] mx-auto space-y-10 font-black uppercase italic tracking-tighter pb-20">
-      <header className="border-l-4 border-blue-500 pl-6">
-        <h1 className="text-5xl text-white">DATA CONSOLE</h1>
-        <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Hierarchical Full Wipe // Safe Photo Preserver</p>
+      <header className="border-l-4 border-blue-500 pl-6 flex justify-between items-end flex-wrap gap-4">
+        <div>
+           <h1 className="text-5xl text-white">DATA CONSOLE</h1>
+           <p className="text-blue-400 text-[10px] tracking-[0.4em] mt-2 italic font-black">Sync Engine // Smart Upsert Protocol // Pre-Classification</p>
+        </div>
+        
+        {/* DROPDOWNS DE SELEÇÃO DO CAMPEONATO E SPLIT */}
+        <div className="flex flex-row items-end gap-4">
+           <div className="flex flex-col">
+             <label className="text-[9px] text-slate-500 tracking-[0.2em] uppercase mb-2">Campeonato</label>
+             <select 
+                value={selectedTournament}
+                onChange={(e) => setSelectedTournament(e.target.value)}
+                disabled={loading}
+                className="bg-black border border-white/10 rounded-2xl px-6 py-3 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer shadow-xl disabled:opacity-50 min-w-[200px]"
+             >
+                <option value="AMERICAS_CUP">AMERICAS CUP</option>
+                <option value="CBLOL">CBLOL</option>
+                <option value="CBLOL_ACADEMY">CBLOL ACADEMY</option>
+                <option value="CIRCUITO_DESAFIANTE">CIRCUITO DESAFIANTE</option>
+                <option value="EMEA_MASTERS">EMEA MASTERS</option>
+                <option value="FIRST_STAND">FIRST STAND</option>
+                <option value="LCK">LCK</option>
+                <option value="LCS">LCS</option>
+                <option value="LEC">LEC</option>
+                <option value="LPL">LPL</option>
+                <option value="MSI">MSI (MID SEASON INVITATIONAL)</option>
+                <option value="MUNDIAL">MUNDIAL</option>
+                <option value="SCRIM">SCRIMS</option>
+             </select>
+           </div>
+
+           <div className="flex flex-col">
+             <label className="text-[9px] text-slate-500 tracking-[0.2em] uppercase mb-2">Split</label>
+             <select 
+                value={selectedSplit}
+                onChange={(e) => setSelectedSplit(e.target.value)}
+                disabled={loading}
+                className="bg-black border border-white/10 rounded-2xl px-6 py-3 text-blue-400 focus:border-blue-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer shadow-xl disabled:opacity-50 min-w-[120px]"
+             >
+                <option value="SPLIT 1">SPLIT 1</option>
+                <option value="SPLIT 2">SPLIT 2</option>
+                <option value="SPLIT 3">SPLIT 3</option>
+             </select>
+           </div>
+        </div>
       </header>
       
       {status && <div className="p-4 bg-blue-600/10 border border-blue-500/30 rounded-2xl text-blue-400 text-[10px] text-center animate-pulse italic">{status}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative mt-8">
+        <div className="absolute -top-4 right-0 bg-blue-500/10 border border-blue-500/20 text-blue-400 px-3 py-1 rounded-xl text-[8px] tracking-widest pointer-events-none z-10 flex gap-2">
+           <span>TIPO: {selectedTournament}</span>
+           <span className="opacity-50">|</span>
+           <span>{selectedSplit}</span>
+        </div>
+        
         <UploadCard title="Estatísticas" desc="Estatisticas.csv" onUp={(e: any) => handleFileUpload(e, 'player_stats_detailed')} load={loading} />
         <UploadCard title="Visão" desc="Wards.csv" onUp={(e: any) => handleFileUpload(e, 'match_wards')} load={loading} />
         <UploadCard title="Objetivos" desc="Objetivos.csv" onUp={(e: any) => handleFileUpload(e, 'match_objectives')} load={loading} />
