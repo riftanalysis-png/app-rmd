@@ -1,19 +1,19 @@
 "use client";
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase/client';
 
 const DDRAGON_VERSION = '16.5.1';
 
-// --- INTELIGÊNCIA DE TRADUÇÃO DE ROTAS (BLINDADA) ---
+// --- INTELIGÊNCIA DE TRADUÇÃO DE ROTAS ---
 function normalizeRole(lane: string | null): string {
   if (!lane) return 'mid';
   const l = lane.toLowerCase().trim();
   if (l.includes('top')) return 'top';
   if (l.includes('jungle') || l.includes('jng') || l === 'jg') return 'jungle';
   if (l.includes('mid')) return 'mid';
-  if (l.includes('bot') || l.includes('adc')) return 'adc';
+  if (l.includes('bot') || l.includes('adc') || l.includes('bottom')) return 'adc';
   if (l.includes('sup') || l.includes('utility')) return 'support';
-  return 'support'; // Fallback
+  return 'support'; 
 }
 
 const getRoleIcon = (role: string) => {
@@ -32,6 +32,7 @@ const getObjectiveIcon = (key: string) => {
     air: 'dragon_circle_air.png', chemtech: 'dragon_circle_chemtech.png', earth: 'dragon_circle_earth.png',
     fire: 'dragon_circle_fire.png', hextech: 'dragon_circle_hextech.png', water: 'dragon_circle_water.png',
     grubs_1: 'sru_voidgrub_circle.png', grubs_2: 'sru_voidgrub_circle.png', grubs_3: 'sru_voidgrub_circle.png',
+    grubs_4: 'sru_voidgrub_circle.png', grubs_5: 'sru_voidgrub_circle.png', grubs_6: 'sru_voidgrub_circle.png',
     herald: 'sruriftherald_circle.png'
   };
   return `${base}${map[key] || 'dragon_circle.png'}`;
@@ -39,9 +40,21 @@ const getObjectiveIcon = (key: string) => {
 
 interface SelectedChampProps { name: string; lane: string; }
 
+const MathSafe = (val: any) => Number(val) || 0;
+const weightedAvg = (accAvg: any, accCount: any, currAvg: any, currCount: any) => {
+  const v1 = MathSafe(accAvg); const w1 = MathSafe(accCount);
+  const v2 = MathSafe(currAvg); const w2 = MathSafe(currCount);
+  const total = w1 + w2;
+  if (total === 0) return 0;
+  return ((v1 * w1) + (v2 * w2)) / total;
+};
+
 export default function MetaWarRoom() {
   const [data, setData] = useState({ tiers: [], matchups: [], draft: [], bans: [], synergies: [], globalObjectives: [], goldStats: [] });
   
+  const [globalTournament, setGlobalTournament] = useState("ALL");
+  const [globalSplit, setGlobalSplit] = useState("ALL");
+
   const [viewMode, setViewMode] = useState<'CHAMPIONS' | 'OBJECTIVES'>('CHAMPIONS');
   const [selectedChamp, setSelectedChamp] = useState<SelectedChampProps | null>(null);
   const [activeTab, setActiveTab] = useState<'DRAFT' | 'MATCHUPS' | 'SYNERGIES'>('DRAFT');
@@ -52,29 +65,123 @@ export default function MetaWarRoom() {
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
+      
+      const buildQuery = (viewName: string) => {
+         let q = supabase.from(viewName).select('*');
+         if (globalTournament !== 'ALL') q = q.eq('game_type', globalTournament);
+         if (globalSplit !== 'ALL') q = q.eq('split', globalSplit);
+         return q;
+      };
+
       const [t, m, d, b, s, gobj, gold] = await Promise.all([
-        supabase.from('view_champion_tier_list_by_lane').select('*').order('power_score', { ascending: false }),
-        supabase.from('view_champion_matchups_detailed').select('*'),
-        supabase.from('view_meta_global_draft').select('*'),
-        supabase.from('view_champion_ban_stats').select('*'),
-        supabase.from('view_champion_synergies').select('*'),
-        supabase.from('view_global_objective_impact').select('*'),
+        buildQuery('view_champion_tier_list_by_lane').order('power_score', { ascending: false }),
+        buildQuery('view_champion_matchups_detailed'),
+        buildQuery('view_meta_global_draft'),
+        buildQuery('view_champion_ban_stats'),
+        buildQuery('view_champion_synergies'),
+        buildQuery('view_global_objective_impact'),
         supabase.from('objective_gold_efficiency').select('*') 
       ]);
+
+      const aggTiers = Array.from((t.data || []).reduce((acc, curr) => {
+          const lane = normalizeRole(curr.lane);
+          const key = `${curr.champion}_${lane}`;
+          if (!acc.has(key)) acc.set(key, { ...curr, lane, power_score: MathSafe(curr.power_score), total_picks: MathSafe(curr.total_picks) });
+          else {
+              const ex = acc.get(key);
+              ex.power_score = weightedAvg(ex.power_score, ex.total_picks, curr.power_score, curr.total_picks);
+              ex.total_picks += MathSafe(curr.total_picks);
+          }
+          return acc;
+      }, new Map()).values());
+
+      const aggMatchups = Array.from((m.data || []).reduce((acc, curr) => {
+          const lane = normalizeRole(curr.lane);
+          const key = `${curr.champion}_${lane}_${curr.opponent}`;
+          if (!acc.has(key)) acc.set(key, { ...curr, lane, total_matchups: MathSafe(curr.total_matchups) });
+          else {
+              const ex = acc.get(key);
+              ex.win_rate = weightedAvg(ex.win_rate, ex.total_matchups, curr.win_rate, curr.total_matchups);
+              ex.avg_kda_12 = weightedAvg(ex.avg_kda_12, ex.total_matchups, curr.avg_kda_12, curr.total_matchups);
+              ex.avg_gold_diff_12 = weightedAvg(ex.avg_gold_diff_12, ex.total_matchups, curr.avg_gold_diff_12, curr.total_matchups);
+              ex.avg_xp_diff_12 = weightedAvg(ex.avg_xp_diff_12, ex.total_matchups, curr.avg_xp_diff_12, curr.total_matchups);
+              ex.avg_cs_diff_12 = weightedAvg(ex.avg_cs_diff_12, ex.total_matchups, curr.avg_cs_diff_12, curr.total_matchups);
+              ex.avg_deaths_12 = weightedAvg(ex.avg_deaths_12, ex.total_matchups, curr.avg_deaths_12, curr.total_matchups);
+              ex.total_matchups += MathSafe(curr.total_matchups);
+          }
+          return acc;
+      }, new Map()).values());
+
+      const aggDrafts = Array.from((d.data || []).reduce((acc, curr) => {
+          const lane = normalizeRole(curr.lane);
+          const key = `${curr.champion}_${lane}_${curr.side}_${curr.sequence}`;
+          if (!acc.has(key)) acc.set(key, { ...curr, lane, total_picks: MathSafe(curr.total_picks) });
+          else {
+              const ex = acc.get(key);
+              ex.win_rate = weightedAvg(ex.win_rate, ex.total_picks, curr.win_rate, curr.total_picks);
+              ex.total_picks += MathSafe(curr.total_picks);
+          }
+          return acc;
+      }, new Map()).values());
+
+      const aggBans = Array.from((b.data || []).reduce((acc, curr) => {
+          const key = curr.champion;
+          if (!acc.has(key)) acc.set(key, { ...curr, total_bans: MathSafe(curr.total_bans), blue_bans: MathSafe(curr.blue_bans), red_bans: MathSafe(curr.red_bans) });
+          else {
+              const ex = acc.get(key);
+              ex.total_bans += MathSafe(curr.total_bans);
+              ex.blue_bans += MathSafe(curr.blue_bans);
+              ex.red_bans += MathSafe(curr.red_bans);
+          }
+          return acc;
+      }, new Map()).values());
+
+      const aggSynergies = Array.from((s.data || []).reduce((acc, curr) => {
+          const lane = normalizeRole(curr.lane);
+          const aLane = normalizeRole(curr.ally_lane);
+          const key = `${curr.champion}_${lane}_${curr.ally}_${aLane}`;
+          if (!acc.has(key)) acc.set(key, { ...curr, lane, ally_lane: aLane, total_games: MathSafe(curr.total_games) });
+          else {
+              const ex = acc.get(key);
+              ex.win_rate = weightedAvg(ex.win_rate, ex.total_games, curr.win_rate, curr.total_games);
+              ex.total_games += MathSafe(curr.total_games);
+          }
+          return acc;
+      }, new Map()).values());
+
+      const aggObjectives = Array.from((gobj.data || []).reduce((acc, curr) => {
+          const name = String(curr.objective_name || '').trim();
+          const sub = String(curr.icon_key || '').trim();
+          const key = `${name}_${sub}`; 
+          
+          if (!acc.has(key)) acc.set(key, { ...curr, win_rate: MathSafe(curr.win_rate), times_achieved: MathSafe(curr.times_achieved) });
+          else {
+              const ex = acc.get(key);
+              ex.win_rate = weightedAvg(ex.win_rate, ex.times_achieved, curr.win_rate, curr.times_achieved);
+              ex.times_achieved += MathSafe(curr.times_achieved);
+          }
+          return acc;
+      }, new Map()).values());
+
       setData({ 
-        tiers: t.data || [], matchups: m.data || [], draft: d.data || [], 
-        bans: b.data || [], synergies: s.data || [], globalObjectives: gobj.data || [],
+        tiers: aggTiers as any, 
+        matchups: aggMatchups as any, 
+        draft: aggDrafts as any, 
+        bans: aggBans as any, 
+        synergies: aggSynergies as any, 
+        globalObjectives: aggObjectives as any,
         goldStats: gold.data || []
       });
       setLoading(false);
     }
     fetchData();
-  }, []);
+  }, [globalTournament, globalSplit]);
 
   const filteredTiers = useMemo(() => {
     const target = normalizeRole(activeLane);
-    // Agora ele compara usando o normalizeRole para garantir que JNG = JUNGLE
     const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= minGames);
+    list.sort((a: any, b: any) => b.power_score - a.power_score);
+
     return {
       S: list.filter((c: any) => c.power_score >= 75),
       A: list.filter((c: any) => c.power_score >= 60 && c.power_score < 75),
@@ -85,7 +192,6 @@ export default function MetaWarRoom() {
 
   const champDraft = useMemo(() => {
     if (!selectedChamp) return { blue: [], red: [] };
-    // Blindado com normalizeRole
     const rawDraft = data.draft.filter((x: any) => x.champion === selectedChamp.name && normalizeRole(x.lane) === normalizeRole(selectedChamp.lane));
     
     const seqMap: Record<number, { label: string, side: string }> = {
@@ -108,14 +214,12 @@ export default function MetaWarRoom() {
 
   const champMatchups = useMemo(() => {
     if (!selectedChamp) return [];
-    // Blindado com normalizeRole
     return data.matchups.filter((m: any) => m.champion === selectedChamp.name && normalizeRole(m.lane) === normalizeRole(selectedChamp.lane))
       .sort((a: any, b: any) => b.total_matchups - a.total_matchups);
   }, [selectedChamp, data.matchups]);
 
   const champSynergies = useMemo(() => {
     if (!selectedChamp) return [];
-    // Blindado com normalizeRole
     return data.synergies.filter((s: any) => s.champion === selectedChamp.name && normalizeRole(s.lane) === normalizeRole(selectedChamp.lane) && s.total_games > 1)
       .sort((a: any, b: any) => b.win_rate !== a.win_rate ? b.win_rate - a.win_rate : b.total_games - a.total_games).slice(0, 10);
   }, [selectedChamp, data.synergies]);
@@ -177,34 +281,104 @@ export default function MetaWarRoom() {
     });
   };
 
-  const getObj = (key: string) => {
-    const obj = data.globalObjectives.find((o: any) => o.icon_key === key);
+  // === TRADUTOR FLEXÍVEL DE OBJETIVOS ===
+  const getObj = (searchKey: string) => {
+    let obj = data.globalObjectives.find((row: any) => {
+      const n = (row.objective_name || '').toLowerCase();
+      const i = (row.icon_key || '').toLowerCase();
+      const combined = `${n} ${i}`;
+
+      if (searchKey === 'baron') return combined.includes('baron') || combined.includes('nashor');
+      if (searchKey === 'herald') return combined.includes('herald') || combined.includes('arauto') || combined.includes('rift');
+      if (searchKey === 'dragon') return (combined.includes('dragon') || combined.includes('dragão')) && !combined.includes('soul') && !combined.includes('alma') && !['fire','water','earth','air','hextech','chemtech'].some(e => combined.includes(e));
+      if (searchKey === 'soul') return combined.includes('soul') || combined.includes('alma');
+      return combined.includes(searchKey);
+    });
+
     if (!obj) return null;
     const delta = obj.win_rate - 50;
-    const goldInfo = findGoldValue(key, data.goldStats);
+    const goldInfo = findGoldValue(searchKey, data.goldStats);
     
-    return { ...obj, delta, isTrap: delta < 0, gold: goldInfo?.gold_value_team };
+    return { ...obj, delta, isTrap: delta < 0, gold: goldInfo?.gold_value_team, icon_key: searchKey };
   };
-  
+
+  // === EXTRATOR DE VASTILARVAS (MÁXIMA SOBREVIVÊNCIA) ===
+  const getGrubs = () => {
+    // Tenta achar com os números exatos 1, 2, 3...
+    const specifics = [1, 2, 3, 4, 5, 6].map(num => {
+      const obj = data.globalObjectives.find((row: any) => {
+        const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
+        return (combined.includes('horde') || combined.includes('grub') || combined.includes('larva') || combined.includes('voidgrub')) && combined.includes(String(num));
+      });
+      if (!obj) return null;
+      const delta = obj.win_rate - 50;
+      return { ...obj, objective_name: `${num} VASTILARVA${num > 1 ? 'S' : ''}`, icon_key: `grubs_${num}`, delta, isTrap: delta < 0, gold: findGoldValue(`grubs_${num}`, data.goldStats)?.gold_value_team };
+    }).filter(Boolean);
+
+    if (specifics.length > 0) return specifics;
+
+    // Fallback: Se não achar os números, pega o genérico para o card não sumir da tela
+    const generic = data.globalObjectives.find((row: any) => {
+      const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
+      return combined.includes('horde') || combined.includes('grub') || combined.includes('larva') || combined.includes('voidgrub');
+    });
+
+    if (!generic) return [];
+    const delta = generic.win_rate - 50;
+    return [{ ...generic, objective_name: 'VASTILARVAS', icon_key: 'grubs_1', delta, isTrap: delta < 0, gold: findGoldValue('grubs_1', data.goldStats)?.gold_value_team }];
+  };
+
+  // === EXTRATOR GERAL DE ALMAS ===
+  const getGenericSoul = () => {
+     let exactSoul = getObj('soul');
+     if (exactSoul) return exactSoul;
+
+     // Junta todas as almas de elementos diferentes num Win Rate só
+     const allSouls = data.globalObjectives.filter((row: any) => {
+        const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
+        return combined.includes('soul') || combined.includes('alma');
+     });
+
+     if (allSouls.length === 0) return null;
+
+     const totalAchieved = allSouls.reduce((acc: number, curr: any) => acc + MathSafe(curr.times_achieved), 0);
+     const avgWr = allSouls.reduce((acc: number, curr: any) => acc + (MathSafe(curr.win_rate) * MathSafe(curr.times_achieved)), 0) / (totalAchieved || 1);
+     const delta = avgWr - 50;
+
+     return {
+        objective_name: 'ALMA DO DRAGÃO',
+        icon_key: 'soul',
+        times_achieved: totalAchieved,
+        win_rate: avgWr,
+        delta,
+        isTrap: delta < 0,
+        gold: findGoldValue('soul', data.goldStats)?.gold_value_team || 0
+     };
+  };
+
   const baronData = getObj('baron');
-  const soulData = getObj('soul');
+  const soulData = getGenericSoul();
   const heraldData = getObj('herald');
   const firstDragonData = getObj('dragon');
-  const grubsData = [getObj('grubs_1'), getObj('grubs_2'), getObj('grubs_3')].filter(Boolean);
+  const grubsData = getGrubs();
   
   const elementalData = ['fire', 'water', 'earth', 'air', 'hextech', 'chemtech']
     .map(key => {
        const baseDrake = getObj(key);
        if (!baseDrake) return null;
        
-       const soulDrakObj = data.globalObjectives.find((o: any) => o.icon_key === `${key}_soul`);
+       let soulDrakObj = data.globalObjectives.find((row: any) => {
+           const combined = `${row.objective_name} ${row.icon_key}`.toLowerCase();
+           return (combined.includes('soul') || combined.includes('alma')) && combined.includes(key);
+       });
+
        const soulGoldInfo = findGoldValue(`${key}_soul`, data.goldStats);
        
        const soulStat = {
-         win_rate: soulDrakObj ? soulDrakObj.win_rate : 0,
-         times_achieved: soulDrakObj ? soulDrakObj.times_achieved : 0,
-         delta: soulDrakObj ? soulDrakObj.win_rate - 50 : 0,
-         isTrap: soulDrakObj ? (soulDrakObj.win_rate - 50 < 0) : false,
+         win_rate: soulDrakObj ? MathSafe(soulDrakObj.win_rate) : 0,
+         times_achieved: soulDrakObj ? MathSafe(soulDrakObj.times_achieved) : 0,
+         delta: soulDrakObj ? MathSafe(soulDrakObj.win_rate) - 50 : 0,
+         isTrap: soulDrakObj ? (MathSafe(soulDrakObj.win_rate) - 50 < 0) : false,
          gold: soulGoldInfo?.gold_value_team || null,
          hasData: !!soulDrakObj
        };
@@ -212,24 +386,23 @@ export default function MetaWarRoom() {
        return { ...baseDrake, soulStat };
     }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate);
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-purple-500 font-black text-2xl animate-pulse italic uppercase tracking-[0.2em]">RMD ANALYTICS: INICIANDO PROTOCOLOS...</div>;
+  if (loading && data.tiers.length === 0) return <div className="flex items-center justify-center h-screen text-purple-500 font-black text-2xl animate-pulse italic uppercase tracking-[0.2em]">RMD ANALYTICS: INICIANDO PROTOCOLOS...</div>;
 
   return (
     <div className="max-w-[1500px] mx-auto space-y-8 p-4 md:p-8 font-black uppercase italic tracking-tighter pb-20">
       
-      {/* HEADER CORRIGIDO: Layout Fluido e Responsivo */}
       <header className="flex flex-wrap items-center justify-between gap-6 mb-12 border-b border-white/5 pb-6 sticky top-0 bg-[#121212]/95 backdrop-blur-xl z-50 pt-4 -mx-4 px-4 md:-mx-8 md:px-8">
-        
-        {/* Título (Esquerda) */}
         <div className="flex flex-col border-l-4 border-purple-500 pl-4 justify-center shrink-0">
           <h1 className="text-3xl lg:text-4xl leading-none text-white">META WAR ROOM</h1>
           <p className="text-purple-400 text-[9px] tracking-[0.4em] mt-1">High Fidelity Scouting</p>
         </div>
         
-        {/* Controles (Direita - Agrupados para evitar quebra de layout) */}
         <div className="flex flex-wrap items-center justify-start xl:justify-end gap-6 flex-1">
-          
-          {/* Filtros - MOVIDOS PARA ANTES DA CHAVE SELETORA */}
+          <div className="flex gap-4 items-center bg-transparent shrink-0">
+             <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />
+             <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
+          </div>
+
           {viewMode === 'CHAMPIONS' && !selectedChamp && (
             <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-right-4 shrink-0">
               <div className="flex bg-black/40 p-1 rounded-2xl border border-white/5 items-center shadow-inner">
@@ -246,8 +419,7 @@ export default function MetaWarRoom() {
             </div>
           )}
 
-          {/* Chave Seletora - ml-auto ADICIONADO PARA ANCORAR NA DIREITA */}
-          <div className="flex bg-black/50 p-1.5 rounded-3xl border border-white/5 shadow-2xl shrink-0 ml-auto">
+          <div className="flex bg-black/50 p-1.5 rounded-3xl border border-white/5 shadow-2xl shrink-0 xl:ml-auto">
             <button onClick={() => {setViewMode('CHAMPIONS'); setSelectedChamp(null);}} className={`px-6 py-2.5 rounded-2xl text-[10px] tracking-widest transition-all ${viewMode === 'CHAMPIONS' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
               CHAMPION META
             </button>
@@ -255,13 +427,9 @@ export default function MetaWarRoom() {
               MACRO INTEL
             </button>
           </div>
-
         </div>
       </header>
 
-      {/* =========================================
-          ABA MACRO INTEL
-      ========================================= */}
       {viewMode === 'OBJECTIVES' && (
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 max-w-[1300px] mx-auto space-y-12">
           
@@ -279,10 +447,8 @@ export default function MetaWarRoom() {
             </div>
           )}
 
-          {/* GRID ALINHADO: Esquerda determina a altura, Direita respeita e ganha Scrollbar */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            {/* COLUNA ESQUERDA: Define a altura natural da linha */}
             <div className="lg:col-span-7 flex flex-col gap-8">
               {grubsData.length > 0 && (
                 <div className="bg-slate-900/30 border border-slate-800 rounded-[32px] p-8 shadow-xl relative overflow-hidden shrink-0">
@@ -311,7 +477,7 @@ export default function MetaWarRoom() {
                         </div>
                         <div>
                           <p className="text-[10px] text-white tracking-widest mb-1 leading-tight">{obj.objective_name}</p>
-                          <p className={`text-3xl font-black italic leading-none ${obj.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{obj.win_rate}%</p>
+                          <p className={`text-3xl font-black italic leading-none ${obj.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{Math.round(obj.win_rate)}%</p>
                           {obj.gold && <GoldBadge gold={obj.gold} />}
                         </div>
                       </div>
@@ -326,7 +492,6 @@ export default function MetaWarRoom() {
               </div>
             </div>
 
-            {/* COLUNA DIREITA: Trava na altura da esquerda com SCROLL interno usando absolute inset */}
             <div className="lg:col-span-5 relative">
               {elementalData.length > 0 && (
                 <div className="lg:absolute inset-0 bg-slate-900/30 border border-slate-800 rounded-[32px] p-8 shadow-xl flex flex-col h-[700px] lg:h-auto">
@@ -340,7 +505,6 @@ export default function MetaWarRoom() {
                       {elementalData.map((obj: any, idx: number) => (
                         <div key={idx} className="group relative bg-slate-950/50 p-6 rounded-[24px] border border-slate-800/40 hover:border-slate-700 transition-all shadow-sm">
                           
-                          {/* TOOLTIP FLUTUANTE DE OURO (Visível no Hover - Dentro do flow direito) */}
                           <div className="absolute top-1/2 -translate-y-1/2 right-4 opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none z-50 translate-x-2 group-hover:translate-x-0">
                              <div className="bg-slate-900/95 backdrop-blur-xl border border-purple-500/30 p-4 rounded-2xl shadow-2xl min-w-[220px]">
                                 <p className="text-[9px] text-purple-400 uppercase tracking-[0.3em] mb-4 border-b border-purple-500/20 pb-2 text-center">GOLD EFFICIENCY</p>
@@ -367,7 +531,6 @@ export default function MetaWarRoom() {
                              </div>
                           </div>
 
-                          {/* CONTEÚDO DO CARD ELEMENTAL PRINCIPAL */}
                           <div className="flex items-center gap-4 relative z-10 mb-4">
                             <span className="text-[10px] text-slate-600 w-3 text-center font-mono">{idx + 1}</span>
                             <img src={getObjectiveIcon(obj.icon_key)} className="w-12 h-12 rounded-full bg-slate-950 border border-slate-700 shadow-md group-hover:scale-105 transition-transform shrink-0" alt="" />
@@ -378,7 +541,7 @@ export default function MetaWarRoom() {
                                    <p className="text-[12px] text-white tracking-widest leading-none">{obj.objective_name}</p>
                                    <p className="text-[7px] text-slate-500 font-mono mt-1 uppercase tracking-widest">ABATE INDIVIDUAL • EM {obj.times_achieved}x</p>
                                  </div>
-                                 <p className={`text-xl font-black italic leading-none ${obj.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{obj.win_rate}%</p>
+                                 <p className={`text-xl font-black italic leading-none ${obj.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{Math.round(obj.win_rate)}%</p>
                               </div>
                               
                               <div className="h-1.5 w-full bg-slate-900 rounded-full overflow-hidden flex relative shadow-inner border border-slate-800/50">
@@ -393,7 +556,6 @@ export default function MetaWarRoom() {
                             </div>
                           </div>
 
-                          {/* SUB-BLOCO DA ALMA (SOUL) */}
                           {obj.soulStat && (
                             <div className="ml-[3.7rem] pt-3 border-t border-slate-800/50 flex flex-col gap-1.5 pr-2">
                                <div className="flex justify-between items-end">
@@ -407,7 +569,7 @@ export default function MetaWarRoom() {
                                     </p>
                                   </div>
                                   {obj.soulStat.hasData ? (
-                                    <p className={`text-xl font-black italic leading-none ${obj.soulStat.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{obj.soulStat.win_rate}%</p>
+                                    <p className={`text-xl font-black italic leading-none ${obj.soulStat.isTrap ? 'text-orange-400' : 'text-emerald-400'}`}>{Math.round(obj.soulStat.win_rate)}%</p>
                                   ) : (
                                     <p className="text-sm font-black italic leading-none text-slate-600">N/A</p>
                                   )}
@@ -436,9 +598,6 @@ export default function MetaWarRoom() {
         </div>
       )}
 
-      {/* =========================================
-          TELA DE CHAMPION META
-      ========================================= */}
       {viewMode === 'CHAMPIONS' && (
         <div className="animate-in fade-in duration-500">
           
@@ -538,9 +697,9 @@ export default function MetaWarRoom() {
                           <div className="flex items-center justify-between mb-5">
                             <div className="flex items-center gap-4 text-white">
                               <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${m.opponent}.png`} className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700" alt="" />
-                              <div><p className="text-lg font-black italic leading-none">{m.opponent}</p><p className={`text-[10px] font-black mt-1 ${m.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{m.win_rate}% WR</p></div>
+                              <div><p className="text-lg font-black italic leading-none">{m.opponent}</p><p className={`text-[10px] font-black mt-1 ${m.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{Math.round(m.win_rate)}% WR</p></div>
                             </div>
-                            <div className="text-right text-purple-400 font-black italic"><p className="text-[7px] text-slate-600 uppercase">KDA @12</p><p className="text-xl">{m.avg_kda_12}</p></div>
+                            <div className="text-right text-purple-400 font-black italic"><p className="text-[7px] text-slate-600 uppercase">KDA @12</p><p className="text-xl">{Number(m.avg_kda_12 || 0).toFixed(1)}</p></div>
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <MatchupStat label="GOLD DIFF" val={m.avg_gold_diff_12} isDiff />
@@ -572,7 +731,7 @@ export default function MetaWarRoom() {
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className={`text-2xl font-black italic ${s.win_rate >= 50 ? 'text-blue-400' : 'text-slate-500'}`}>{s.win_rate}%</p>
+                            <p className={`text-2xl font-black italic ${s.win_rate >= 50 ? 'text-blue-400' : 'text-slate-500'}`}>{Math.round(s.win_rate)}%</p>
                             <p className="text-[7px] text-slate-600 uppercase">Win Rate</p>
                           </div>
                         </div>
@@ -586,7 +745,6 @@ export default function MetaWarRoom() {
           )}
         </div>
       )}
-
     </div>
   );
 }
@@ -606,11 +764,12 @@ function GoldBadge({ gold }: { gold: number | string }) {
 }
 
 function ImpactDeltaBadge({ delta }: { delta: number }) {
-  const isPos = delta >= 0;
+  const numDelta = Number(delta) || 0;
+  const isPos = numDelta >= 0;
   return (
     <div className={`flex items-baseline gap-1 border px-2 py-0.5 rounded-md shadow-sm ${isPos ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' : 'border-red-500/30 bg-red-500/10 text-red-400'}`}>
       <span className="text-[8px] uppercase tracking-widest">Δ</span>
-      <span className="text-[10px] font-mono leading-none">{isPos ? '+' : ''}{delta.toFixed(1)}%</span>
+      <span className="text-[10px] font-mono leading-none">{isPos ? '+' : ''}{numDelta.toFixed(1)}%</span>
     </div>
   )
 }
@@ -637,7 +796,7 @@ function EnderHeroCard({ obj, title, accent }: { obj: any, title: string, accent
 
       <div className="flex items-end justify-between relative z-10">
         <div>
-          <p className={`text-7xl font-black italic leading-none ${isHigh ? 'text-emerald-400' : isLow ? 'text-orange-400' : 'text-blue-400'}`}>{obj.win_rate}%</p>
+          <p className={`text-7xl font-black italic leading-none ${isHigh ? 'text-emerald-400' : isLow ? 'text-orange-400' : 'text-blue-400'}`}>{Math.round(obj.win_rate)}%</p>
           <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-2">Win Rate Absoluto</p>
         </div>
         <div className="pb-2">
@@ -665,7 +824,7 @@ function CompactMacroCard({ obj, title }: { obj: any, title: string }) {
            <ImpactDeltaBadge delta={obj.delta} />
          </div>
          <div className="text-right">
-           <p className={`text-4xl font-black italic leading-none ${obj.win_rate >= 50 ? 'text-emerald-400' : 'text-orange-400'}`}>{obj.win_rate}%</p>
+           <p className={`text-4xl font-black italic leading-none ${obj.win_rate >= 50 ? 'text-emerald-400' : 'text-orange-400'}`}>{Math.round(obj.win_rate)}%</p>
            <p className="text-[8px] text-slate-600 uppercase tracking-widest mt-1">Win Rate</p>
          </div>
        </div>
@@ -689,7 +848,7 @@ function DraftSide({ title, data, side }: any) {
               <span className={`w-10 h-10 flex items-center justify-center rounded-xl text-sm shadow-inner ${cBadge}`}>{d.safeLabel}</span>
               <p className="text-[9px] text-slate-500 uppercase">{d.total_picks} JOGOS</p>
             </div>
-            <p className={`text-2xl ${d.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{d.win_rate}%</p>
+            <p className={`text-2xl ${d.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{Math.round(d.win_rate)}%</p>
           </div>
         )) : <p className={`text-[9px] text-slate-700 italic py-2 ${isBlue ? '' : 'text-right'}`}>SEM DADOS NO LADO {isBlue ? 'AZUL' : 'VERMELHO'}</p>}
       </div>
@@ -698,15 +857,121 @@ function DraftSide({ title, data, side }: any) {
 }
 
 function MatchupStat({ label, val, isDiff = false, color = "text-white", isBadHigh = false }: any) {
-  const isPos = Number(val) > 0;
+  const numVal = Number(val || 0);
+  const isPos = numVal > 0;
   let finalColor = color;
   if (isDiff) { finalColor = isPos ? 'text-blue-400' : 'text-red-500'; }
-  else if (isBadHigh) { finalColor = Number(val) >= 1 ? "text-red-500" : "text-emerald-400"; }
+  else if (isBadHigh) { finalColor = numVal >= 1 ? "text-red-500" : "text-emerald-400"; }
 
   return (
     <div className="bg-slate-900/40 p-3 rounded-2xl border border-slate-800 text-center transition-all hover:bg-slate-800/40 font-black italic">
       <p className="text-[7px] text-slate-600 uppercase mb-1">{label}</p>
-      <p className={`text-[12px] font-mono ${finalColor}`}>{isDiff && isPos ? '+' : ''}{val}</p>
+      <p className={`text-[12px] font-mono ${finalColor}`}>{isDiff && isPos ? '+' : ''}{numVal.toFixed(1)}</p>
+    </div>
+  );
+}
+
+// --- NOVOS DROPDOWNS CUSTOMIZADOS DE CAMPEONATO E SPLIT ---
+
+function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  const options = [
+    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
+    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
+    { id: 'CBLOL', label: 'CBLOL' },
+    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
+    { id: 'FIRST_STAND', label: 'FIRST STAND' },
+    { id: 'LCK', label: 'LCK' },
+    { id: 'LCS', label: 'LCS' },
+    { id: 'LEC', label: 'LEC' },
+    { id: 'LPL', label: 'LPL' },
+    { id: 'MSI', label: 'MSI' },
+    { id: 'MUNDIAL', label: 'MUNDIAL' },
+    { id: 'SCRIM', label: 'SCRIMS' }
+  ];
+
+  const currentLabel = options.find(o => o.id === value)?.label || value;
+
+  return (
+    <div className="relative flex flex-col z-[9999]" ref={ref}>
+      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Campeonato</label>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[240px] hover:border-purple-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+      >
+        <span className="flex-1 text-left text-purple-400 group-hover:drop-shadow-[0_0_5px_rgba(168,85,247,0.5)] transition-all">{currentLabel}</span>
+        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] max-h-[320px] overflow-y-auto custom-scrollbar backdrop-blur-xl">
+          {options.map(opt => (
+            <button 
+              key={opt.id} 
+              onClick={() => { onChange(opt.id); setIsOpen(false); }} 
+              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-purple-500/10' : ''}`}
+            >
+              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-purple-400' : 'text-slate-400'}`}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  const options = [
+    { id: 'ALL', label: 'ANO INTEIRO' },
+    { id: 'SPLIT 1', label: 'SPLIT 1' },
+    { id: 'SPLIT 2', label: 'SPLIT 2' },
+    { id: 'SPLIT 3', label: 'SPLIT 3' }
+  ];
+
+  const currentLabel = options.find(o => o.id === value)?.label || value;
+
+  return (
+    <div className="relative flex flex-col z-[9999]" ref={ref}>
+      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Timeline</label>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[140px] hover:border-blue-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+      >
+        <span className="flex-1 text-left text-blue-400 group-hover:drop-shadow-[0_0_5px_rgba(59,130,246,0.5)] transition-all">{currentLabel}</span>
+        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-xl">
+          {options.map(opt => (
+            <button 
+              key={opt.id} 
+              onClick={() => { onChange(opt.id); setIsOpen(false); }} 
+              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-blue-500/10' : ''}`}
+            >
+              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-blue-400' : 'text-slate-400'}`}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

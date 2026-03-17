@@ -11,8 +11,6 @@ import {
 // --- CONFIGURAÇÕES GERAIS ---
 const DDRAGON_VERSION = '16.1.1'; 
 const ROLES_ORDER = ['top', 'jungle', 'mid', 'adc', 'support'];
-
-// --- CALIBRAGEM TÁTICA DO MAPA ---
 const MAP_OFFSET = 3.5; 
 const MAP_SCALE = 93;   
 const GAME_MAX = 15000; 
@@ -45,7 +43,7 @@ const OBJECTIVE_ASSETS: { [key: string]: { icon: string, hover: string } } = {
 
 const ORDERED_OBJECTIVES = ['dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
 
-// --- UTILITÁRIOS CORRIGIDOS ---
+// --- UTILITÁRIOS ---
 
 function formatTime(decimal: number) {
   if (isNaN(decimal) || decimal === null) return "00:00";
@@ -54,7 +52,6 @@ function formatTime(decimal: number) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// ⚠️ CORREÇÃO AQUI: Agora ele reconhece as abreviações do banco de dados perfeitamente
 function normalizeRole(lane: string | null): string {
   if (!lane) return 'mid';
   const l = lane.toLowerCase().trim();
@@ -63,7 +60,7 @@ function normalizeRole(lane: string | null): string {
   if (l.includes('mid')) return 'mid';
   if (l.includes('bot') || l.includes('adc')) return 'adc';
   if (l.includes('sup') || l.includes('utility')) return 'support';
-  return 'support'; // Fallback
+  return 'support'; 
 }
 
 function getChampionImageUrl(championName: string | null) {
@@ -82,14 +79,10 @@ function getScoreColor(score: number | null) {
   return "text-red-400";                               
 }
 
-// ⚠️ CORREÇÃO AQUI: A função agora traduz a role usando o NormalizeRole ANTES de buscar a foto
 function getRoleIcon(role: string, size: string = "w-5 h-5") {
   const basePath = "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-clash/global/default/assets/images/position-selector/positions";
   let iconName = "";
-  
-  // Transforma o 'JNG' ou 'SUP' que vem do banco em 'jungle' ou 'support'
   const normalizedRole = normalizeRole(role); 
-
   switch (normalizedRole) {
     case 'top': iconName = "icon-position-top.png"; break;
     case 'jungle': iconName = "icon-position-jungle.png"; break;
@@ -111,6 +104,12 @@ export default function PlayersHubPage() {
   const [filterTeam, setFilterTeam] = useState<string>("TODOS");
   const [isAdmin, setIsAdmin] = useState(false);
   
+  // =====================================
+  // ESTADOS GLOBAIS DE FILTRO (Padrões base)
+  // =====================================
+  const [globalTournament, setGlobalTournament] = useState("CIRCUITO_DESAFIANTE");
+  const [globalSplit, setGlobalSplit] = useState("SPLIT 1");
+
   const [teamChartData, setTeamChartData] = useState<any[]>([]);
   const [teamObjectiveWindows, setTeamObjectiveWindows] = useState<any[]>([]);
   const [teamWards, setTeamWards] = useState<any[]>([]);
@@ -123,8 +122,15 @@ export default function PlayersHubPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState({ puuid: '', nickname: '', team_acronym: '', photo_url: '', primary_role: '' });
 
-  useEffect(() => { checkUserRole(); fetchInitialData(); }, []);
-  useEffect(() => { if (filterTeam !== "TODOS") { fetchPerformanceData(filterTeam); fetchAnalysisData(filterTeam); } }, [filterTeam]);
+  useEffect(() => { checkUserRole(); }, []);
+  useEffect(() => { fetchInitialData(); }, [globalTournament, globalSplit]);
+  
+  useEffect(() => { 
+    if (filterTeam !== "TODOS") { 
+      fetchPerformanceData(filterTeam); 
+      fetchAnalysisData(filterTeam); 
+    } 
+  }, [filterTeam, globalTournament, globalSplit]);
 
   async function checkUserRole() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -132,30 +138,129 @@ export default function PlayersHubPage() {
   }
 
   async function fetchInitialData() {
+    setLoading(true);
     const { data: t } = await supabase.from('teams').select('*').order('acronym');
-    const { data: p } = await supabase.from('hub_players_roster').select('*');
-    if (t) setTeams(t);
-    if (p) setPlayers(p);
+    
+    let query = supabase.from('hub_players_roster').select('*');
+    if (globalTournament !== 'ALL') query = query.eq('game_type', globalTournament);
+    if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
+
+    const { data: p } = await query;
+    
+    if (t && p) {
+      const groupedPlayersMap = new Map();
+      p.forEach((curr: any) => {
+        if (!groupedPlayersMap.has(curr.puuid)) {
+          groupedPlayersMap.set(curr.puuid, { ...curr, count: 1 });
+        } else {
+          const acc = groupedPlayersMap.get(curr.puuid);
+          const totalGames = acc.games_played + curr.games_played;
+          if (totalGames > 0) {
+            acc.median_lane = ((acc.median_lane * acc.games_played) + (curr.median_lane * curr.games_played)) / totalGames;
+            acc.median_impact = ((acc.median_impact * acc.games_played) + (curr.median_impact * curr.games_played)) / totalGames;
+            acc.median_conversion = ((acc.median_conversion * acc.games_played) + (curr.median_conversion * curr.games_played)) / totalGames;
+            acc.median_vision = ((acc.median_vision * acc.games_played) + (curr.median_vision * curr.games_played)) / totalGames;
+          }
+          acc.games_played = totalGames;
+          acc.count += 1;
+        }
+      });
+
+      const aggregatedPlayers = Array.from(groupedPlayersMap.values());
+
+      let maxMvpScore = -1;
+      let mvpPuuid = null;
+      aggregatedPlayers.forEach((player: any) => {
+        player.mvp_score = (player.median_lane + player.median_impact + player.median_conversion + player.median_vision) / 4;
+        if (player.mvp_score > maxMvpScore && player.games_played > 0) {
+          maxMvpScore = player.mvp_score;
+          mvpPuuid = player.puuid;
+        }
+      });
+      aggregatedPlayers.forEach((player: any) => player.is_mvp = player.puuid === mvpPuuid);
+
+      setPlayers(aggregatedPlayers);
+
+      const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
+      const filteredTeams = t.filter(team => activeTeamTags.has(team.acronym));
+      setTeams(filteredTeams);
+
+      setFilterTeam(prev => {
+        if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS";
+        return prev;
+      });
+    }
     setLoading(false);
   }
 
   async function fetchPerformanceData(team: string) {
-    const { data } = await supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true });
+    let query = supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true });
+    if (globalTournament !== 'ALL') query = query.eq('game_type', globalTournament);
+    if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
+
+    const { data } = await query;
     if (data) setTeamChartData(data);
   }
 
   async function fetchAnalysisData(team: string) {
-    const [obj, draft, wards] = await Promise.all([
-      supabase.from('hub_players_objectives').select('*').eq('team_acronym', team),
-      supabase.from('hub_players_draft').select('*').eq('team_acronym', team),
-      supabase.from('hub_players_vision').select('*').eq('team_acronym', team)
-    ]);
-    if (obj.data) setTeamObjectiveWindows(obj.data);
-    if (draft.data) setDraftStats(draft.data);
+    let objQuery = supabase.from('hub_players_objectives').select('*').eq('team_acronym', team);
+    let draftQuery = supabase.from('hub_players_draft').select('*').eq('team_acronym', team);
+    let wardsQuery = supabase.from('hub_players_vision').select('*').eq('team_acronym', team);
+
+    if (globalTournament !== 'ALL') {
+      objQuery = objQuery.eq('game_type', globalTournament);
+      draftQuery = draftQuery.eq('game_type', globalTournament);
+      wardsQuery = wardsQuery.eq('game_type', globalTournament);
+    }
+    if (globalSplit !== 'ALL') {
+      objQuery = objQuery.eq('split', globalSplit);
+      draftQuery = draftQuery.eq('split', globalSplit);
+      wardsQuery = wardsQuery.eq('split', globalSplit);
+    }
+
+    const [obj, draft, wards] = await Promise.all([objQuery, draftQuery, wardsQuery]);
+    
+    if (obj.data) {
+      const groupedObjMap = new Map();
+      obj.data.forEach((curr: any) => {
+        const key = `${curr.objective_type}_${curr.side}`;
+        if (!groupedObjMap.has(key)) {
+          groupedObjMap.set(key, { ...curr, count: 1 });
+        } else {
+          const acc = groupedObjMap.get(key);
+          acc.min_minute = Math.min(acc.min_minute, curr.min_minute);
+          acc.max_minute = Math.max(acc.max_minute, curr.max_minute);
+          acc.avg_minute = ((acc.avg_minute * acc.count) + curr.avg_minute) / (acc.count + 1);
+          acc.count += 1;
+        }
+      });
+      setTeamObjectiveWindows(Array.from(groupedObjMap.values()));
+    }
+
+    if (draft.data) {
+      const groupedDraftMap = new Map();
+      draft.data.forEach((curr: any) => {
+        const key = `${curr.sequence}_${curr.champion}_${curr.type}`;
+        if (!groupedDraftMap.has(key)) {
+          groupedDraftMap.set(key, { ...curr });
+        } else {
+          const acc = groupedDraftMap.get(key);
+          const total = acc.total_count + curr.total_count;
+          if (total > 0) {
+            acc.win_rate = ((acc.win_rate * acc.total_count) + (curr.win_rate * curr.total_count)) / total;
+            if(curr.avg_lane) acc.avg_lane = ((acc.avg_lane * acc.total_count) + (curr.avg_lane * curr.total_count)) / total;
+            if(curr.avg_impact) acc.avg_impact = ((acc.avg_impact * acc.total_count) + (curr.avg_impact * curr.total_count)) / total;
+            if(curr.avg_conv) acc.avg_conv = ((acc.avg_conv * acc.total_count) + (curr.avg_conv * curr.total_count)) / total;
+            if(curr.avg_vision) acc.avg_vision = ((acc.avg_vision * acc.total_count) + (curr.avg_vision * curr.total_count)) / total;
+          }
+          acc.total_count = total;
+        }
+      });
+      setDraftStats(Array.from(groupedDraftMap.values()));
+    }
+    
     if (wards.data) setTeamWards(wards.data);
   }
-
-  // --- MEMOS DE DADOS ---
 
   const sideStatsData = useMemo(() => {
     if (filterTeam === "TODOS" || teamChartData.length === 0) return null;
@@ -227,7 +332,7 @@ export default function PlayersHubPage() {
     setIsEditModalOpen(false); await fetchInitialData();
   };
 
-  if (loading) return (
+  if (loading && players.length === 0) return (
     <div className="flex items-center justify-center h-[80vh]">
       <p className="text-blue-500 font-black italic animate-pulse tracking-widest text-xs uppercase">// INITIALIZING_SCOUTING_PROTOCOL_...</p>
     </div>
@@ -236,15 +341,20 @@ export default function PlayersHubPage() {
   return (
     <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-black uppercase italic tracking-tighter pb-20 overflow-visible">
       
-      {/* HEADER PRINCIPAL */}
-      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-white/5 pb-8">
+      {/* HEADER PRINCIPAL & FILTROS GLOBAIS ESTILIZADOS */}
+      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-white/5 pb-8 relative z-[200]">
         <div className="border-l-4 border-blue-500 pl-4">
           <h1 className="text-4xl text-white leading-none">SCOUTING <span className="text-blue-500">HUB</span></h1>
           <p className="text-[9px] text-slate-500 tracking-[0.4em] mt-2 font-black">DATABASE: {players.length} ACTIVE OPERATIVES</p>
         </div>
+
+        <div className="flex gap-6 items-end bg-transparent">
+           <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />
+           <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
+        </div>
       </header>
 
-      {/* FILTROS E SIDE BIAS DOUGHNUT */}
+      {/* FILTROS DE TEAM E SIDE BIAS DOUGHNUT */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[100] overflow-visible">
         <div className="flex flex-wrap gap-2 flex-1">
           <button onClick={() => setFilterTeam("TODOS")} className={`px-5 py-2 rounded-xl text-[10px] transition-all ${filterTeam === "TODOS" ? 'bg-white text-black' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>TODOS</button>
@@ -294,7 +404,6 @@ export default function PlayersHubPage() {
                   <span className="bg-[#121212] p-2 rounded-lg border border-white/5">{getRoleIcon(role, "w-6 h-6")}</span>
                   {role}
                 </h2>
-                {/* CARROSSEL TÁTICO: pt-6 e -mt-6 para o badge de MVP não ser cortado */}
                 <div className="flex overflow-x-auto gap-6 pb-8 pt-6 -mt-6 snap-x custom-scrollbar overflow-y-visible">
                   {rolePlayers.map(p => (
                     <div key={p.puuid} className="min-w-[280px] snap-start py-2">
@@ -309,7 +418,6 @@ export default function PlayersHubPage() {
       ) : (
         <div className="space-y-12">
           
-          {/* 1. PERFORMANCE TIMELINE */}
           <div className="bg-[#121212] border border-white/5 rounded-[32px] p-8 h-[380px] shadow-2xl relative overflow-visible">
             <h3 className="text-lg text-white mb-6 flex items-center gap-3">
               <div className="w-1.5 h-5 bg-blue-500 rounded-full shadow-[0_0_10px_#3b82f6]" /> 
@@ -330,7 +438,6 @@ export default function PlayersHubPage() {
             </ResponsiveContainer>
           </div>
 
-          {/* 2. ACTIVE ROSTER (ABAIXO DO GRÁFICO) */}
           <section className="overflow-visible pt-4">
             <h2 className="text-xl text-white mb-8 italic font-black flex items-center gap-3">
               <div className="w-2 h-5 bg-blue-600 rounded-full shadow-[0_0_10px_#2563eb]" /> 
@@ -341,7 +448,6 @@ export default function PlayersHubPage() {
             </div>
           </section>
 
-          {/* 3. TACTICAL VISION & OBJECTIVE STRATEGY (GRID) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-visible">
             <div className="bg-[#121212] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl items-center relative overflow-visible group">
               <div className="w-full flex justify-between mb-8 items-center relative z-50">
@@ -394,7 +500,6 @@ export default function PlayersHubPage() {
             </div>
           </div>
 
-          {/* 4. DRAFT STRATEGY PATTERN */}
           <section className="bg-[#121212] border border-white/5 rounded-[48px] p-10 shadow-2xl relative overflow-visible">
             <div className="flex justify-between items-center mb-16 relative z-10">
                <h3 className="text-3xl text-white italic">Draft Strategy Pattern</h3>
@@ -445,7 +550,6 @@ export default function PlayersHubPage() {
         </div>
       )}
 
-      {/* MODAL EDITAR JOGADOR */}
       {isEditModalOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-6 backdrop-blur-md">
           <form onSubmit={handleSaveChanges} className="w-full max-w-lg bg-[#121212] border border-white/10 rounded-[40px] p-10 space-y-6 shadow-[0_0_100px_rgba(0,0,0,1)] font-black italic uppercase">
@@ -502,7 +606,6 @@ function PlayerCard({ player, teams, isAdmin, onEdit }: any) {
             </div>
           </div>
           <div className="absolute -bottom-2 -right-2 bg-[#121212] p-2 rounded-xl border border-white/10 shadow-2xl z-20">
-            {/* O ícone da rota agora é exibido corretamente */}
             {getRoleIcon(player.primary_role, "w-4 h-4")}
           </div>
         </div>
@@ -559,7 +662,6 @@ function DraftPickCard({ label, data, side, mode }: any) {
             <div className="relative">
               {mode === 'role' ? (
                 <div className="w-12 h-12 flex items-center justify-center bg-black border border-white/10 rounded-xl shadow-lg">
-                  {/* Corrige o Bug do Icone quando no modo de visualizar por Role */}
                   {getRoleIcon(data.name, "w-7 h-7")}
                 </div>
               ) : (
@@ -604,7 +706,112 @@ function RatingLine({ label, value }: { label: string, value: number }) {
   );
 }
 
-// --- DROPDOWNS E TOOLTIPS ---
+// --- NOVOS DROPDOWNS CUSTOMIZADOS DE CAMPEONATO E SPLIT ---
+
+function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  const options = [
+    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
+    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
+    { id: 'CBLOL', label: 'CBLOL' },
+    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
+    { id: 'FIRST_STAND', label: 'FIRST STAND' },
+    { id: 'LCK', label: 'LCK' },
+    { id: 'LCS', label: 'LCS' },
+    { id: 'LEC', label: 'LEC' },
+    { id: 'LPL', label: 'LPL' },
+    { id: 'MSI', label: 'MSI' },
+    { id: 'MUNDIAL', label: 'MUNDIAL' },
+    { id: 'SCRIM', label: 'SCRIMS' }
+  ];
+
+  const currentLabel = options.find(o => o.id === value)?.label || value;
+
+  return (
+    <div className="relative flex flex-col" ref={ref}>
+      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Campeonato</label>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[240px] hover:border-blue-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+      >
+        <span className="flex-1 text-left text-blue-400 group-hover:drop-shadow-[0_0_5px_rgba(59,130,246,0.5)] transition-all">{currentLabel}</span>
+        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] z-[9999] max-h-[320px] overflow-y-auto custom-scrollbar backdrop-blur-xl">
+          {options.map(opt => (
+            <button 
+              key={opt.id} 
+              onClick={() => { onChange(opt.id); setIsOpen(false); }} 
+              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-blue-500/10' : ''}`}
+            >
+              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-blue-400' : 'text-slate-400'}`}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  const options = [
+    { id: 'ALL', label: 'ANO INTEIRO' },
+    { id: 'SPLIT 1', label: 'SPLIT 1' },
+    { id: 'SPLIT 2', label: 'SPLIT 2' },
+    { id: 'SPLIT 3', label: 'SPLIT 3' }
+  ];
+
+  const currentLabel = options.find(o => o.id === value)?.label || value;
+
+  return (
+    <div className="relative flex flex-col" ref={ref}>
+      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Timeline</label>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[140px] hover:border-emerald-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+      >
+        <span className="flex-1 text-left text-emerald-400 group-hover:drop-shadow-[0_0_5px_rgba(16,185,129,0.5)] transition-all">{currentLabel}</span>
+        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] z-[9999] backdrop-blur-xl">
+          {options.map(opt => (
+            <button 
+              key={opt.id} 
+              onClick={() => { onChange(opt.id); setIsOpen(false); }} 
+              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-emerald-500/10' : ''}`}
+            >
+              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-emerald-400' : 'text-slate-400'}`}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- DROPDOWNS E TOOLTIPS ANTIGOS ---
 
 function ObjectiveSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -663,8 +870,6 @@ function SideSelector({ value, onChange }: { value: string, onChange: (val: stri
     </div>
   );
 }
-
-// --- TICKS & TOOLTIPS CUSTOMIZADOS ---
 
 const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
   const match = teamChartData?.find((d: any) => d.match_id === payload.value);
