@@ -462,8 +462,9 @@ export default function PlayersHubPage() {
                 <div className="absolute inset-0 z-21 opacity-[0.05] pointer-events-none" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                 <div className="absolute inset-0 z-25 pointer-events-none">
                   {activeWards.map(w => {
-                    const posX = MAP_OFFSET + (w.player_x / GAME_MAX) * MAP_SCALE;
-                    const posY = MAP_OFFSET + (w.player_y / GAME_MAX) * MAP_SCALE;
+                    // MUDANÇA OFICIAL: Lendo direto das colunas puras ward_x e ward_y
+                    const posX = MAP_OFFSET + ((w.ward_x || 0) / GAME_MAX) * MAP_SCALE;
+                    const posY = MAP_OFFSET + ((w.ward_y || 0) / GAME_MAX) * MAP_SCALE;
                     const isControl = w.type?.toLowerCase().includes('control');
                     const sensorColor = isControl ? '#ef4444' : '#eab308';
                     return (

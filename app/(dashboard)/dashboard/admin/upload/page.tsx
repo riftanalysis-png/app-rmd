@@ -124,7 +124,19 @@ export default function UploadPage() {
     }
     if (tableName === 'match_drafts') return { match_id: row['Match ID'], team_acronym: row['Team Acronym'], tipo: row['Tipo'], side: row['Time'], jogador: row['Jogador'], champion: row['Campeão'] || row['Campeao'], sequence: parseInt(row['Sequence']) || 0 };
     if (tableName === 'match_objectives') return { match_id: row['Match ID'], minuto: parseInt(row['Minuto']) || 0, team_acronym: row['Team Acronym'], objective_type: row['Objetivo'], subtype: row['Subtipo'], player_name: row['Jogador'] };
-    if (tableName === 'match_wards') return { match_id: row['Match ID'], player_name: row['Jogador'], team_acronym: row['Team Acronym'], minute: parseInt(row['Minuto']) || 0, type: row['Tipo'], ward_x: toNum(row['Ward X']), ward_y: toNum(row['Ward Y']), player_x: toNum(row['Player X']), player_y: toNum(row['Player Y']) };
+    
+    // --- MAPEAMENTO NOVO DO WARDS.CSV ---
+    if (tableName === 'match_wards') {
+      return { 
+        match_id: row['Match ID'], 
+        player_name: row['Player Name'], 
+        minute: toNum(row['Minute']), 
+        type: row['Type'], 
+        ward_x: toNum(row['Ward X']), 
+        ward_y: toNum(row['Ward Y']) 
+      };
+    }
+    
     return row;
   };
 
@@ -142,73 +154,73 @@ export default function UploadPage() {
           const uniqueMatchIds = Array.from(new Set(rawData.map((r) => r['Match ID']))).filter(Boolean);
 
           if (tableName === 'player_stats_detailed') {
-             setStatus("ATUALIZANDO TIMES, JOGADORES E PARTIDAS NO BANCO...");
-             
-             const { data: existingTeams } = await supabase.from('teams').select('acronym, logo_url');
-             const { data: existingPlayers } = await supabase.from('players').select('puuid, photo_url');
+              setStatus("ATUALIZANDO TIMES, JOGADORES E PARTIDAS NO BANCO...");
+              
+              const { data: existingTeams } = await supabase.from('teams').select('acronym, logo_url');
+              const { data: existingPlayers } = await supabase.from('players').select('puuid, photo_url');
 
-             const uniqueSeriesMap = new Map();
-             const uniqueMatchesMap = new Map();
-             const uniqueTeamsMap = new Map();
-             const uniquePlayersMap = new Map();
+              const uniqueSeriesMap = new Map();
+              const uniqueMatchesMap = new Map();
+              const uniqueTeamsMap = new Map();
+              const uniquePlayersMap = new Map();
 
-             for (const r of rawData) {
-                const mId = r['Match ID'];
-                if (!mId) continue;
+              for (const r of rawData) {
+                 const mId = r['Match ID'];
+                 if (!mId) continue;
+                 
+                 const acronym = r['Team Acronym'];
+                 const puuid = r['PUUID'];
+
+                 if (acronym && !uniqueTeamsMap.has(acronym)) {
+                    const extTeam = existingTeams?.find(t => t.acronym === acronym);
+                    uniqueTeamsMap.set(acronym, { acronym: acronym, name: acronym, logo_url: extTeam?.logo_url || null });
+                 }
+
+                 if (puuid && !uniquePlayersMap.has(puuid)) {
+                    const extPlayer = existingPlayers?.find(p => p.puuid === puuid);
+                    uniquePlayersMap.set(puuid, { puuid: puuid, nickname: r['Summoner Name'], team_acronym: r['Team Acronym'], primary_role: r['Lane'], photo_url: extPlayer?.photo_url || null });
+                 }
+              }
+
+              for (const mId of uniqueMatchIds) {
+                const seriesId = (mId as string).split('_')[0];
+                const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
+                const baseRow = rowsOfMatch[0];
                 
-                const acronym = r['Team Acronym'];
-                const puuid = r['PUUID'];
+                const blueTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'blue')?.['Team Acronym'];
+                const redTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'red')?.['Team Acronym'];
+                const winnerSide = rowsOfMatch.find(r => String(r['Win']).toLowerCase() === 'true')?.['Side']?.toLowerCase();
+                
+                const rawDate = baseRow?.['Game Start Time'] || '';
+                const safeDateString = rawDate.replace(' ', 'T');
+                const finalIsoDate = !isNaN(new Date(safeDateString).getTime()) ? new Date(safeDateString).toISOString() : null;
 
-                if (acronym && !uniqueTeamsMap.has(acronym)) {
-                   const extTeam = existingTeams?.find(t => t.acronym === acronym);
-                   uniqueTeamsMap.set(acronym, { acronym: acronym, name: acronym, logo_url: extTeam?.logo_url || null });
+                if (!uniqueSeriesMap.has(seriesId)) {
+                   uniqueSeriesMap.set(seriesId, { id: seriesId, description: blueTag && redTag ? `${blueTag} x ${redTag}` : `Série ${seriesId}` });
                 }
 
-                if (puuid && !uniquePlayersMap.has(puuid)) {
-                   const extPlayer = existingPlayers?.find(p => p.puuid === puuid);
-                   uniquePlayersMap.set(puuid, { puuid: puuid, nickname: r['Summoner Name'], team_acronym: r['Team Acronym'], primary_role: r['Lane'], photo_url: extPlayer?.photo_url || null });
-                }
-             }
+                uniqueMatchesMap.set(mId, {
+                  id: mId, 
+                  series_id: seriesId, 
+                  blue_team_tag: blueTag || null, 
+                  red_team_tag: redTag || null,
+                  winner_side: winnerSide || null, 
+                  patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
+                  game_start_time: finalIsoDate, 
+                  game_type: selectedTournament,
+                  split: selectedSplit 
+                });
+              }
 
-             for (const mId of uniqueMatchIds) {
-               const seriesId = (mId as string).split('_')[0];
-               const rowsOfMatch = rawData.filter(r => r['Match ID'] === mId);
-               const baseRow = rowsOfMatch[0];
-               
-               const blueTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'blue')?.['Team Acronym'];
-               const redTag = rowsOfMatch.find(r => String(r['Side']).toLowerCase() === 'red')?.['Team Acronym'];
-               const winnerSide = rowsOfMatch.find(r => String(r['Win']).toLowerCase() === 'true')?.['Side']?.toLowerCase();
-               
-               const rawDate = baseRow?.['Game Start Time'] || '';
-               const safeDateString = rawDate.replace(' ', 'T');
-               const finalIsoDate = !isNaN(new Date(safeDateString).getTime()) ? new Date(safeDateString).toISOString() : null;
+              const newTeams = Array.from(uniqueTeamsMap.values());
+              const newPlayers = Array.from(uniquePlayersMap.values());
+              if (newTeams.length > 0) await supabase.from('teams').upsert(newTeams);
+              if (newPlayers.length > 0) await supabase.from('players').upsert(newPlayers);
 
-               if (!uniqueSeriesMap.has(seriesId)) {
-                  uniqueSeriesMap.set(seriesId, { id: seriesId, description: blueTag && redTag ? `${blueTag} x ${redTag}` : `Série ${seriesId}` });
-               }
-
-               uniqueMatchesMap.set(mId, {
-                 id: mId, 
-                 series_id: seriesId, 
-                 blue_team_tag: blueTag || null, 
-                 red_team_tag: redTag || null,
-                 winner_side: winnerSide || null, 
-                 patch: baseRow?.['Patch']?.toString().replace(',', '.') || 'N/A',
-                 game_start_time: finalIsoDate, 
-                 game_type: selectedTournament,
-                 split: selectedSplit 
-               });
-             }
-
-             const newTeams = Array.from(uniqueTeamsMap.values());
-             const newPlayers = Array.from(uniquePlayersMap.values());
-             if (newTeams.length > 0) await supabase.from('teams').upsert(newTeams);
-             if (newPlayers.length > 0) await supabase.from('players').upsert(newPlayers);
-
-             const newSeries = Array.from(uniqueSeriesMap.values());
-             const newMatches = Array.from(uniqueMatchesMap.values());
-             if (newSeries.length > 0) await supabase.from('series').upsert(newSeries);
-             if (newMatches.length > 0) await supabase.from('matches').upsert(newMatches);
+              const newSeries = Array.from(uniqueSeriesMap.values());
+              const newMatches = Array.from(uniqueMatchesMap.values());
+              if (newSeries.length > 0) await supabase.from('series').upsert(newSeries);
+              if (newMatches.length > 0) await supabase.from('matches').upsert(newMatches);
           }
 
           setStatus("FORMATANDO DADOS PARA INSERÇÃO...");
@@ -259,7 +271,6 @@ export default function UploadPage() {
              >
                 <option value="AMERICAS_CUP">AMERICAS CUP</option>
                 <option value="CBLOL">CBLOL</option>
-                <option value="CBLOL_ACADEMY">CBLOL ACADEMY</option>
                 <option value="CIRCUITO_DESAFIANTE">CIRCUITO DESAFIANTE</option>
                 <option value="EMEA_MASTERS">EMEA MASTERS</option>
                 <option value="FIRST_STAND">FIRST STAND</option>
