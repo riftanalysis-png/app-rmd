@@ -297,6 +297,7 @@ export default function DashboardPage() {
     for(let i = 1; i <= daysInMonth; i++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
         
+        // 1. Pega os eventos reais (jogos que já aconteceram e foram upados)
         const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
             const weAreBlue = String(g.teamA.tag).toUpperCase().includes(myTeamTag);
             const opp = weAreBlue ? g.teamB.tag : g.teamA.tag;
@@ -305,10 +306,17 @@ export default function DashboardPage() {
             return { id: g.id, time: g.time, opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${ourScore} - ${theirScore} ${ourScore > theirScore ? 'W' : theirScore > ourScore ? 'L' : 'D'}`, isWin: ourScore > theirScore, isPast: true };
         });
 
+        // NOME DA MÁGICA: Extrai uma lista com as tags dos oponentes que já jogamos nesse dia
+        const opponentsPlayedToday = pastEvents.map(ev => ev.opp);
+
+        // 2. Pega os eventos agendados, MAS FILTRA se já tivermos jogos reais contra eles
         const futureEvents = missionsRaw.filter(m => m.mission_date === dateStr).map(m => {
             const info = m.status ? m.status.split('|') : [];
             const gamesCount = info[1] ? info[1].trim() : 'TBD';
             return { id: m.id, time: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', opp: m.opponent_acronym, type: m.mission_type, mode: gamesCount, isPast: false, rawMission: m };
+        }).filter(mission => {
+            // Se o oponente da missão já está na lista de jogos reais do dia, não renderiza a missão
+            return !opponentsPlayedToday.includes(mission.opp);
         });
 
         grid.push({ day: i, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0], events: [...pastEvents, ...futureEvents].sort((a,b) => a.time.localeCompare(b.time)) });
