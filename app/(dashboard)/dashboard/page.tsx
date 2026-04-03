@@ -1,872 +1,1197 @@
 "use client";
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { 
   ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, 
-  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
+  BarChart, Bar, AreaChart, Area
 } from 'recharts';
 
+// --- FUNÇÕES UTILITÁRIAS GLOBAIS (Imunes a erros de leitura do React) ---
+function getSafeTimestamp(dateString: any) {
+  if (!dateString) return 0;
+  const time = new Date(String(dateString).replace(' ', 'T')).getTime();
+  return isNaN(time) ? 0 : time;
+}
+
+const getDifficultyColor = (diff: string) => { switch (diff) { case 'STOMPAMOS': return 'bg-blue-600 text-white border-blue-500'; case 'MUITO FÁCIL': return 'bg-blue-400 text-white border-blue-300'; case 'FÁCIL': return 'bg-sky-400 text-white border-sky-300'; case 'CONTROLADO': return 'bg-slate-400 text-white border-slate-300'; case 'DIFÍCIL': return 'bg-amber-400 text-white border-amber-300'; case 'MT DIFÍCIL': return 'bg-orange-500 text-white border-orange-400'; case 'STOMPADOS': return 'bg-red-600 text-white border-red-500 animate-pulse'; default: return 'bg-slate-800 text-slate-300 border-slate-700'; } };
+const getPunctualityColor = (punct: string) => { if (punct.includes('PONTUAIS')) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'; if (punct.includes('NOSSO ATRASO')) return 'text-red-400 border-red-500/30 bg-red-500/10'; if (punct.includes('ATRASO DELES')) return 'text-orange-400 border-orange-500/30 bg-orange-500/10'; return 'text-slate-400 border-slate-500/30 bg-slate-500/10'; };
+const formatDate = (dateString: string) => { if (!dateString) return ''; const p = dateString.split('-'); return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; };
+const formatTimeStr = (timeString: string) => { if (!timeString) return ''; return timeString.substring(0, 5); };
+
+// --- DADOS FICTÍCIOS (PLACEHOLDERS) ---
+const mockStressData = [
+  { name: 'Seg', estresse: 40, carga: 35 },
+  { name: 'Ter', estresse: 65, carga: 60 },
+  { name: 'Qua', estresse: 85, carga: 80 },
+  { name: 'Qui', estresse: 20, carga: 15 },
+  { name: 'Sex', estresse: 50, carga: 45 },
+  { name: 'Sab', estresse: 90, carga: 95 },
+  { name: 'Dom', estresse: 95, carga: 100 },
+];
+
+const mockEfficiencyData = [
+  { name: 'Bad', micro: 60, macro: 30, tf: 10 },
+  { name: 'Average', micro: 30, macro: 50, tf: 20 },
+  { name: 'Good', micro: 10, macro: 40, tf: 50 },
+  { name: 'Excellent', micro: 5, macro: 35, tf: 60 },
+];
+
 export default function DashboardPage() {
-  // ==========================================
-  // AUTENTICAÇÃO E USUÁRIO LOGADO
-  // ==========================================
-  const [currentUser, setCurrentUser] = useState({ 
-    id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' 
-  });
-  
+  const [currentUser, setCurrentUser] = useState({ id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' });
   const isStaff = ['analista', 'treinador', 'diretor'].includes(currentUser.role.toLowerCase());
 
-  const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ 
-    isOpen: false, player: null, history: [] 
-  });
-
-  const [stats, setStats] = useState({ matches: 0, winrate: 0, players: 0 });
-  const [myStats, setMyStats] = useState({ lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 }); 
   const [loading, setLoading] = useState(true);
   
-  // ==========================================
-  // ESTADOS CONECTADOS AO SUPABASE
-  // ==========================================
-  const [configId, setConfigId] = useState<string | null>(null);
-  const [squadConfig, setSquadConfig] = useState({ teamAcronym: '...', directive: "CARREGANDO...", phase: 'LOADING', week: 0, intensity: 0, load: 'N/A' });
-  const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
-  const [upcomingMissions, setUpcomingMissions] = useState<any[]>([]);
-  const [scrimReports, setScrimReports] = useState<any[]>([]);
+  // NOVOS FILTROS
+  const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filterPatch, setFilterPatch] = useState('');
+  
+  const [myTeamTag, setMyTeamTag] = useState('RMD'); 
+  
+  const [matchesRaw, setMatchesRaw] = useState<any[]>([]);
+  const [statsDetailed, setStatsDetailed] = useState<any[]>([]);
+  const [missionsRaw, setMissionsRaw] = useState<any[]>([]);
+  const [scrimReportsManual, setScrimReportsManual] = useState<any[]>([]);
   const [vodTasks, setVodTasks] = useState<any[]>([]);
   const [roster, setRoster] = useState<any[]>([]);
   const [teamWellness, setTeamWellness] = useState<any[]>([]);
-  const [squadForm, setSquadForm] = useState<any[]>([]);
+  const [teamMetricsRaw, setTeamMetricsRaw] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
+  const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
   
-  // ==========================================
-  // ESTADOS DOS MODAIS E FORMULÁRIOS
-  // ==========================================
+  // MODAIS
   const [isWellnessModalOpen, setWellnessModalOpen] = useState(false);
   const [isMissionModalOpen, setMissionModalOpen] = useState(false);
   const [isScrimModalOpen, setScrimModalOpen] = useState(false);
-  const [isConfigModalOpen, setConfigModalOpen] = useState(false);
   const [isTargetModalOpen, setTargetModalOpen] = useState(false);
   const [isVodModalOpen, setVodModalOpen] = useState(false);
+  const [isMetricsModalOpen, setMetricsModalOpen] = useState(false);
+  const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ isOpen: false, player: null, history: [] });
+  const [isProfileModalOpen, setProfileModalOpen] = useState(false);
+  
+  const [expandedWellnessId, setExpandedWellnessId] = useState<string | null>(null);
 
+  // FORMS
+  const [profileForm, setProfileForm] = useState({ name: '', photo_url: '' });
   const [editMissionId, setEditMissionId] = useState<string | null>(null);
   const [editScrimId, setEditScrimId] = useState<string | null>(null);
 
   const [wellnessForm, setWellnessForm] = useState({ puuid: '', sleep: 3, mental: 3, physical: 3, focus: 3 });
-  const [missionForm, setMissionForm] = useState({ date: '', time: '', opponent: '', type: 'SCRIM' });
+  const [missionForm, setMissionForm] = useState({ date: '', time: '', opponent: '', type: 'SCRIM', gamesCount: '3 JOGOS', draftMode: 'PADRÃO' });
   const [scrimForm, setScrimForm] = useState({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' });
-  const [configForm, setConfigForm] = useState({ teamAcronym: '', directive: '', phase: '', week: 1, intensity: 50, load: 'MODERATE' });
   const [targetForm, setTargetForm] = useState({ team: '', win1: '', win2: '', win3: '' });
   const [vodForm, setVodForm] = useState({ tag: 'MACRO', text: '' });
+  
+  const [metricsForm, setMetricsForm] = useState({
+     date: new Date().toISOString().split('T')[0],
+     stress: 50, load: 50,
+     early_micro: 33, early_macro: 33, early_tf: 34,
+     mid_micro: 33, mid_macro: 33, mid_tf: 34,
+     late_micro: 33, late_macro: 33, late_tf: 34,
+  });
 
-  const [teamKpiData, setTeamKpiData] = useState([
-    { subject: 'Lane Dom.', A: 0, B: 65 }, { subject: 'Impact', A: 0, B: 70 }, { subject: 'Conversion', A: 0, B: 75 }, { subject: 'Vision', A: 0, B: 80 }, { subject: 'Overall', A: 0, B: 70 }
-  ]);
+  const [radarCompareMode, setRadarCompareMode] = useState<'OFFICIAL_VS_SCRIM' | 'US_VS_OPP'>('OFFICIAL_VS_SCRIM');
+  const [currentDate, setCurrentDate] = useState(new Date());
 
-  // ==========================================
-  // FETCH INICIAL
-  // ==========================================
+  const upcomingMissions = useMemo(() => {
+     const today = new Date();
+     const tomorrow = new Date();
+     tomorrow.setDate(today.getDate() + 1);
+
+     const todayStr = today.toISOString().split('T')[0];
+     const tomorrowStr = tomorrow.toISOString().split('T')[0];
+     
+     return missionsRaw
+        .filter(m => m.mission_date === todayStr || m.mission_date === tomorrowStr)
+        .sort((a, b) => {
+           const dateTimeA = `${a.mission_date}T${a.mission_time || '00:00:00'}`;
+           const dateTimeB = `${b.mission_date}T${b.mission_time || '00:00:00'}`;
+           return dateTimeA.localeCompare(dateTimeB);
+        });
+  }, [missionsRaw]);
+
   useEffect(() => {
     async function fetchDashboardData() {
+      setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       let loggedUser = { id: '', role: 'jogador', puuid: '', name: 'JOGADOR', photo: `https://ui-avatars.com/api/?name=User&background=1e293b&color=3b82f6` };
 
       if (user) {
-         const { data: profile } = await supabase.from('profiles').select('full_name, role, puuid').eq('id', user.id).maybeSingle();
+         const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
          if (profile) {
             loggedUser.id = user.id;
             loggedUser.role = profile.role || 'jogador';
             loggedUser.puuid = profile.puuid || '';
             loggedUser.name = profile.full_name || 'JOGADOR';
-            loggedUser.photo = `https://ui-avatars.com/api/?name=${profile.full_name || 'User'}&background=1e293b&color=3b82f6`;
+            loggedUser.photo = profile.photo_url || `https://ui-avatars.com/api/?name=${profile.full_name || 'User'}&background=1e293b&color=3b82f6`;
          }
       } else {
-         // MUDE PARA 'analista' PARA TESTAR A VISÃO DA STAFF
-         loggedUser = { id: 'dev', role: 'jogador', puuid: 'TESTE', name: 'CHOVY', photo: `https://ui-avatars.com/api/?name=C&background=1e293b&color=3b82f6` };
+         loggedUser = { id: 'dev', role: 'analista', puuid: 'TESTE', name: 'HEAD COACH', photo: `https://ui-avatars.com/api/?name=C&background=1e293b&color=3b82f6` };
       }
-
-      const userIsStaff = ['analista', 'treinador', 'diretor'].includes(loggedUser.role.toLowerCase());
 
       const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
-      let myTeam = 'SEM TAG'; 
-      if (configData && configData.my_team_tag) {
-        myTeam = configData.my_team_tag;
-        setConfigId(configData.id);
-        setSquadConfig({ teamAcronym: myTeam, directive: configData.tactical_directive || 'NENHUMA', phase: configData.periodization_phase || 'N/A', week: configData.periodization_week || 0, intensity: configData.intensity_score || 0, load: configData.cognitive_load || 'N/A' });
-      }
+      const myTeam = configData?.my_team_tag?.toUpperCase() || 'RMD';
+      setMyTeamTag(myTeam);
 
-      const { data: rosterData } = await supabase.from('players').select('puuid, nickname, primary_role, photo_url').ilike('team_acronym', `%${myTeam}%`);
-      const activeRoster = rosterData || [];
+      const [rosterRes, teamsRes, matchesRes, viewRes, statsRes, missionsRes, scrimsRes, vodRes, wellnessRes, metricsRes] = await Promise.all([
+        supabase.from('players').select('*'),
+        supabase.from('teams').select('*'),
+        supabase.from('matches').select('*'),
+        supabase.from('view_matches_with_teams').select('*'),
+        supabase.from('player_stats_detailed').select('*'),
+        supabase.from('missions').select('*'),
+        supabase.from('scrim_reports').select('*'),
+        supabase.from('vod_tasks').select('*'),
+        supabase.from('player_wellness').select('*').order('record_date', { ascending: false }),
+        supabase.from('team_daily_metrics').select('*').order('record_date', { ascending: true }) 
+      ]);
+
+      const activeRoster = (rosterRes.data || []).filter(p => String(p.team_acronym || p.team || '').toUpperCase().includes(myTeam));
       setRoster(activeRoster);
 
       const myPlayerInfo = activeRoster.find(p => p.puuid === loggedUser.puuid);
-      const myNickname = myPlayerInfo ? myPlayerInfo.nickname : loggedUser.name;
-      if (myPlayerInfo && myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url;
-      setCurrentUser({...loggedUser, name: myNickname});
+      if (myPlayerInfo) { loggedUser.name = myPlayerInfo.nickname || myPlayerInfo.name; if(myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url; }
+      setCurrentUser(loggedUser);
 
-      const { data: teamsData } = await supabase.from('teams').select('acronym, name, logo_url');
-      if (teamsData) setTeamsList(teamsData);
+      if (teamsRes.data) setTeamsList(teamsRes.data);
+      if (statsRes.data) setStatsDetailed(statsRes.data);
+      
+      const safeMissions = (missionsRes.data || []).filter(m => String(m.team_acronym || '').toUpperCase().includes(myTeam));
+      setMissionsRaw(safeMissions);
+      
+      const safeScrims = (scrimsRes.data || []).filter(s => String(s.team_acronym || '').toUpperCase().includes(myTeam));
+      setScrimReportsManual(safeScrims);
+      
+      const safeVod = (vodRes.data || []).filter(v => String(v.team_acronym || '').toUpperCase().includes(myTeam));
+      setVodTasks(safeVod);
 
-      const { data: teamMatches } = await supabase.from('matches').select('id, blue_team_tag, red_team_tag, winner_side').or(`blue_team_tag.ilike."%${myTeam}%",red_team_tag.ilike."%${myTeam}%"`);
-      const analyticCycles = teamMatches ? teamMatches.length : 0;
-      let wins = 0;
-      if (teamMatches) {
-        teamMatches.forEach(match => {
-          const blueTag = String(match.blue_team_tag || '').toUpperCase(); const redTag = String(match.red_team_tag || '').toUpperCase(); const myTag = String(myTeam).toUpperCase();
-          const weAreBlue = blueTag.includes(myTag); const weAreRed = redTag.includes(myTag);
-          const winner = String(match.winner_side || '').toLowerCase();
-          if ((weAreBlue && (winner === 'blue' || winner === '100')) || (weAreRed && (winner === 'red' || winner === '200'))) wins++;
-        });
-      }
-      const globalEfficiency = analyticCycles > 0 ? Math.round((wins / analyticCycles) * 100) : 0;
+      const safeMetrics = (metricsRes.data || []).filter(v => String(v.team_acronym || '').toUpperCase().includes(myTeam));
+      setTeamMetricsRaw(safeMetrics);
 
-      if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
-
-      let tempMyStats = { lane: 0, impact: 0, conversion: 0, vision: 0, mvp: 0, streak: 'STABLE', rank: 0 };
-      const { data: mvpData } = await supabase.from('hub_players_roster').select('nickname, primary_role, mvp_score').ilike('team_acronym', `%${myTeam}%`).order('mvp_score', { ascending: false });
-
-      if (mvpData) {
-        setSquadForm(mvpData.map(p => ({ name: p.nickname, role: p.primary_role, rating: (Number(p.mvp_score) || 0).toFixed(1), streak: Number(p.mvp_score) >= 8 ? 'ON FIRE' : Number(p.mvp_score) < 6 ? 'COLD' : 'STABLE' })));
-        const myMvpIndex = mvpData.findIndex(p => p.nickname.toUpperCase() === myNickname.toUpperCase());
-        if(myMvpIndex !== -1) {
-           tempMyStats.mvp = Number(mvpData[myMvpIndex].mvp_score) || 0;
-           tempMyStats.streak = tempMyStats.mvp >= 8 ? 'ON FIRE' : tempMyStats.mvp < 6 ? 'COLD' : 'STABLE';
-           tempMyStats.rank = myMvpIndex + 1;
-        }
-      }
-
-      const { data: perfData } = await supabase.from('hub_players_performance').select('player_name, nickname, avg_lane, avg_impact, avg_conversion, avg_vision').ilike('team_acronym', `%${myTeam}%`);
-
-      if (perfData && perfData.length > 0) {
-        const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
-        const ml = getMed(perfData.map(p => Number(p.avg_lane || 0))), mi = getMed(perfData.map(p => Number(p.avg_impact || 0))), mc = getMed(perfData.map(p => Number(p.avg_conversion || 0))), mv = getMed(perfData.map(p => Number(p.avg_vision || 0)));
-        setTeamKpiData([{ subject: 'Lane Dom.', A: Math.round(ml), B: 65 }, { subject: 'Impact', A: Math.round(mi), B: 70 }, { subject: 'Conversion', A: Math.round(mc), B: 75 }, { subject: 'Vision', A: Math.round(mv), B: 80 }, { subject: 'Overall', A: Math.round((ml+mi+mc+mv)/4), B: 70 }]);
+      if (viewRes.data && matchesRes.data) {
+        const matchMeta: Record<string, any> = {};
+        matchesRes.data.forEach(m => { matchMeta[m.id || m.match_id] = m; });
+        const enriched = viewRes.data
+          .filter(v => {
+             const b = String(v.blue_team_tag || v.blue_tag || '').toUpperCase();
+             const r = String(v.red_team_tag || v.red_tag || '').toUpperCase();
+             return b.includes(myTeam) || r.includes(myTeam);
+          })
+          .map(v => {
+             const meta = matchMeta[v.match_id || v.id] || {};
+             return { ...v, game_start_time: meta.game_start_time, game_type: meta.game_type || v.game_type, game_duration: meta.game_duration || 0, patch: meta.patch || v.patch };
+          });
+        setMatchesRaw(enriched.sort((a,b) => getSafeTimestamp(b.game_start_time) - getSafeTimestamp(a.game_start_time)));
       }
 
-      if (!userIsStaff && loggedUser.puuid) {
-         const { data: detailStats } = await supabase.from('player_stats_detailed').select('lane_rating, impact_rating, conversion_rating, vision_rating').eq('puuid', loggedUser.puuid);
-         if (detailStats && detailStats.length > 0) {
-            const getMed = (arr: number[]) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
-            tempMyStats.lane = Math.round(getMed(detailStats.map(s => Number(s.lane_rating) || 0)));
-            tempMyStats.impact = Math.round(getMed(detailStats.map(s => Number(s.impact_rating) || 0)));
-            tempMyStats.conversion = Math.round(getMed(detailStats.map(s => Number(s.conversion_rating) || 0)));
-            tempMyStats.vision = Math.round(getMed(detailStats.map(s => Number(s.vision_rating) || 0)));
+      if (safeMissions.length > 0) {
+         const today = new Date();
+         const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+         const upcoming = safeMissions.filter(m => m.mission_date >= todayStr).sort((a,b) => `${a.mission_date}T${a.mission_time||'00:00'}`.localeCompare(`${b.mission_date}T${b.mission_time||'00:00'}`)).slice(0, 5);
+         if (upcoming.length > 0) {
+            const nextOp = upcoming[0].opponent_acronym;
+            const { data: opData } = await supabase.from('opponent_intel').select('*').eq('opponent_acronym', nextOp).maybeSingle();
+            if (opData) setNextTargetIntel({ team: nextOp, topPicks: opData.top_picks || [], topBans: opData.top_bans || [], winConditions: opData.win_conditions || [] });
+            else setNextTargetIntel({ team: nextOp, topPicks: [], topBans: [], winConditions: [] });
          }
       }
-      setMyStats(tempMyStats);
 
-      const { data: missions } = await supabase.from('missions').select('*').ilike('team_acronym', `%${myTeam}%`).order('mission_date', { ascending: true }).limit(5);
-      let nextOp = '';
-      if (missions && missions.length > 0) { setUpcomingMissions(missions); nextOp = missions[0].opponent_acronym; }
-      if (nextOp) {
-         const { data: opData } = await supabase.from('opponent_intel').select('*').eq('opponent_acronym', nextOp).maybeSingle();
-         if (opData) setNextTargetIntel({ team: nextOp, topPicks: opData.top_picks || [], topBans: opData.top_bans || [], winConditions: opData.win_conditions || [] });
-         else setNextTargetIntel({ team: nextOp, topPicks: [], topBans: [], winConditions: [] });
-      } else {
-         setNextTargetIntel({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [] });
-      }
-
-      const { data: scrims } = await supabase.from('scrim_reports').select('*').ilike('team_acronym', `%${myTeam}%`).order('scrim_date', { ascending: false }).limit(6);
-      if (scrims) setScrimReports(scrims);
-      const { data: tasks } = await supabase.from('vod_tasks').select('*').ilike('team_acronym', `%${myTeam}%`).order('created_at', { ascending: false });
-      if (tasks) setVodTasks(tasks);
-
-      const { data: wData } = await supabase.from('player_wellness').select('*').order('record_date', { ascending: false });
       const todayStr = new Date().toISOString().split('T')[0];
-      setTeamWellness(activeRoster.map(p => {
-         const pRecs = wData?.filter((w: any) => w.puuid === p.puuid) || [];
-         const lRec = pRecs.length > 0 ? pRecs[0] : null;
-         return { puuid: p.puuid, name: p.nickname, role: p.primary_role, photo: p.photo_url, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
-      }));
+      if (wellnessRes.data) {
+        setTeamWellness(activeRoster.map(p => {
+           const pRecs = wellnessRes.data.filter((w: any) => w.puuid === p.puuid);
+           const lRec = pRecs.length > 0 ? pRecs[0] : null;
+           return { puuid: p.puuid, name: p.nickname || p.name, role: p.primary_role || p.role, photo: p.photo_url || p.photo, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
+        }));
+      }
+      if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
 
-      setStats({ matches: analyticCycles, winrate: globalEfficiency, players: activeRoster.length });
       setLoading(false);
     }
     fetchDashboardData();
   }, []);
 
-  // ==========================================
-  // HANDLERS (SUPABASE)
-  // ==========================================
-  const handleUpdateConfig = async (e: React.FormEvent) => { e.preventDefault(); const payload = { my_team_tag: configForm.teamAcronym.toUpperCase(), tactical_directive: configForm.directive, periodization_phase: configForm.phase, periodization_week: configForm.week, intensity_score: configForm.intensity, cognitive_load: configForm.load }; if (configId) { await supabase.from('squad_config').update(payload).eq('id', configId); window.location.reload(); } else { await supabase.from('squad_config').insert([payload]).select(); window.location.reload(); } };
+  const squadConfig = useMemo(() => {
+    const day = new Date().getDay(); 
+    let intensity = 0; let load = 'RECOVERY'; let directive = 'DAY OFF / DESCANDO';
+    
+    if (day === 4) { intensity = 0; load = 'RECOVERY'; directive = 'REST & RECOVERY'; } 
+    else if (day === 5) { intensity = 40; load = 'MODERATE'; directive = 'LIGHT PREP & MACRO REVIEW'; } 
+    else if (day === 6 || day === 0) { intensity = 95; load = 'MAXIMUM'; directive = 'HEAVY SCRIM BLOCKS'; } 
+    else { intensity = 75; load = 'HIGH'; directive = 'OFFICIAL MATCH PREP'; }
+    
+    return { directive, load, intensity };
+  }, []);
+
+  const filteredMatches = useMemo(() => {
+    return matchesRaw.filter(m => {
+      const isScrim = String(m.game_type).toUpperCase().includes('SCRIM');
+      if (matchType === 'SCRIM' && !isScrim) return false;
+      if (matchType === 'OFICIAL' && isScrim) return false;
+
+      // Filtro de Data
+      if (filterStartDate || filterEndDate) {
+          let matchDateStr = '';
+          if (m.game_start_time) {
+              const d = new Date(String(m.game_start_time).replace(' ', 'T'));
+              if (!isNaN(d.getTime())) {
+                  matchDateStr = d.toISOString().split('T')[0];
+              }
+          }
+          if (filterStartDate && matchDateStr && matchDateStr < filterStartDate) return false;
+          if (filterEndDate && matchDateStr && matchDateStr > filterEndDate) return false;
+      }
+
+      // Filtro de Patch
+      if (filterPatch && m.patch && !String(m.patch).includes(filterPatch)) return false;
+
+      return true;
+    });
+  }, [matchesRaw, matchType, filterStartDate, filterEndDate, filterPatch]);
+
+  const groupedSeries = useMemo(() => {
+    const groups: { [key: string]: any } = {};
+    filteredMatches.forEach(m => {
+      const blueTag = m.blue_team_tag || m.blue_tag || 'BLU';
+      const redTag = m.red_team_tag || m.red_tag || 'RED';
+      const isScrim = String(m.game_type).toUpperCase().includes('SCRIM');
+      
+      let dateRaw = 'unknown-date';
+      let timeRaw = '00:00';
+      if (m.game_start_time) {
+          const d = new Date(String(m.game_start_time).replace(' ', 'T'));
+          if (!isNaN(d.getTime())) {
+             const originalHour = d.getHours();
+             const originalMin = String(d.getMinutes()).padStart(2, '0');
+             timeRaw = `${String(originalHour).padStart(2, '0')}:${originalMin}`;
+             
+             if (isScrim && originalHour < 6) d.setHours(d.getHours() - 6);
+             const year = d.getFullYear(); const month = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
+             dateRaw = `${year}-${month}-${day}`;
+          }
+      }
+      
+      let sId = isScrim ? `SCRIM_${dateRaw}_${[blueTag, redTag].sort().join('-')}` : (m.series_id || `solo_${m.id || m.match_id}`);
+      if (!groups[sId]) {
+        groups[sId] = { id: sId, isScrim: isScrim, calendarDate: dateRaw, time: timeRaw, teamA: { tag: blueTag, logo: m.blue_logo }, teamB: { tag: redTag, logo: m.red_logo }, scoreA: 0, scoreB: 0, games: [] };
+      }
+      groups[sId].games.push(m);
+      if (m.winner_side === 'blue') groups[sId].scoreA++;
+      else if (m.winner_side === 'red') groups[sId].scoreB++;
+    });
+    return Object.values(groups);
+  }, [filteredMatches]);
+
+  const calendarGrid = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    const grid = [];
+    for(let i = 0; i < firstDayIndex; i++) grid.push(null);
+    
+    for(let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+        
+        const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
+            const weAreBlue = String(g.teamA.tag).toUpperCase().includes(myTeamTag);
+            const opp = weAreBlue ? g.teamB.tag : g.teamA.tag;
+            const ourScore = weAreBlue ? g.scoreA : g.scoreB;
+            const theirScore = weAreBlue ? g.scoreB : g.scoreA;
+            return { id: g.id, time: g.time, opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${ourScore} - ${theirScore} ${ourScore > theirScore ? 'W' : theirScore > ourScore ? 'L' : 'D'}`, isWin: ourScore > theirScore, isPast: true };
+        });
+
+        const futureEvents = missionsRaw.filter(m => m.mission_date === dateStr).map(m => {
+            const info = m.status ? m.status.split('|') : [];
+            const gamesCount = info[1] ? info[1].trim() : 'TBD';
+            return { id: m.id, time: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', opp: m.opponent_acronym, type: m.mission_type, mode: gamesCount, isPast: false, rawMission: m };
+        });
+
+        grid.push({ day: i, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0], events: [...pastEvents, ...futureEvents].sort((a,b) => a.time.localeCompare(b.time)) });
+    }
+    
+    while(grid.length % 7 !== 0) grid.push(null);
+    return grid;
+  }, [currentDate, groupedSeries, missionsRaw, myTeamTag]);
+
+  const stats = useMemo(() => {
+    const total = filteredMatches.length;
+    let blueTotal = 0; let blueWins = 0;
+    let redTotal = 0; let redWins = 0;
+    let totalDuration = 0;
+    
+    filteredMatches.forEach(m => {
+      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
+      const weAreRed = String(m.red_team_tag || m.red_tag || '').toUpperCase().includes(myTeamTag);
+
+      if (weAreBlue) {
+          blueTotal++;
+          if (m.winner_side === 'blue') blueWins++;
+      } else if (weAreRed) {
+          redTotal++;
+          if (m.winner_side === 'red') redWins++;
+      }
+      totalDuration += (m.game_duration || 0);
+    });
+
+    const activeMatchIds = new Set(filteredMatches.map(m => String(m.id || m.match_id)));
+    const teamStatsFiltered = statsDetailed.filter(s => activeMatchIds.has(String(s.match_id)) && String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag));
+    const avgGold12 = teamStatsFiltered.length > 0 ? Math.round(teamStatsFiltered.reduce((acc, curr) => acc + (Number(curr.gold_diff_at_12) || 0), 0) / teamStatsFiltered.length) : 0;
+
+    return { 
+      totalGames: total, 
+      blueWR: blueTotal ? Math.round((blueWins / blueTotal) * 100) : 0, 
+      redWR: redTotal ? Math.round((redWins / redTotal) * 100) : 0, 
+      blueWins, blueTotal,
+      redWins, redTotal,
+      avgDuration: total && totalDuration ? Math.round(totalDuration / total / 60) : 0, 
+      avgGold12 
+    };
+  }, [filteredMatches, statsDetailed, myTeamTag]);
+
+  const squadForm = useMemo(() => {
+    const activeMatchIds = new Set(filteredMatches.map(m => String(m.id || m.match_id)));
+    const teamStats = statsDetailed.filter(s => activeMatchIds.has(String(s.match_id)) && String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag));
+    const playerMap: Record<string, { role: string, scores: number[] }> = {};
+    
+    teamStats.forEach(s => {
+       const roleToUse = s.role || s.primary_role || 'Unknown';
+       if (!playerMap[s.puuid]) playerMap[s.puuid] = { role: roleToUse, scores: [] };
+       const avgMatch = (Number(s.lane_rating) + Number(s.impact_rating) + Number(s.conversion_rating) + Number(s.vision_rating)) / 4;
+       if (!isNaN(avgMatch)) playerMap[s.puuid].scores.push(avgMatch);
+    });
+
+    return roster.map(p => {
+       const pData = playerMap[p.puuid];
+       const scores = pData ? pData.scores : [];
+       const rating = scores.length > 0 ? scores.reduce((a,b)=>a+b, 0) / scores.length : 0;
+       return { name: p.nickname || p.name, role: p.primary_role || p.role || 'N/A', puuid: p.puuid, rating: (rating / 10).toFixed(1), streak: rating >= 80 ? 'ON FIRE' : rating < 60 ? 'COLD' : 'STABLE' };
+    }).sort((a, b) => Number(b.rating) - Number(a.rating));
+  }, [statsDetailed, filteredMatches, roster, myTeamTag]);
+
+  const myStats = useMemo(() => {
+     let temp = { lane: 0, impact: 0, conversion: 0, vision: 0, rank: 0, streak: 'STABLE' };
+     const activeMatchIds = new Set(filteredMatches.map(m => String(m.id || m.match_id)));
+     const myGames = statsDetailed.filter(s => activeMatchIds.has(String(s.match_id)) && s.puuid === currentUser.puuid);
+     
+     if (myGames.length > 0) {
+        const getMed = (arr: number[]) => { const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
+        temp.lane = Math.round(getMed(myGames.map(s => Number(s.lane_rating) || 0)));
+        temp.impact = Math.round(getMed(myGames.map(s => Number(s.impact_rating) || 0)));
+        temp.conversion = Math.round(getMed(myGames.map(s => Number(s.conversion_rating) || 0)));
+        temp.vision = Math.round(getMed(myGames.map(s => Number(s.vision_rating) || 0)));
+     }
+     const myRankIndex = squadForm.findIndex(p => p.puuid === currentUser.puuid);
+     if (myRankIndex !== -1) { temp.rank = myRankIndex + 1; temp.streak = squadForm[myRankIndex].streak; }
+     return temp;
+  }, [statsDetailed, filteredMatches, currentUser.puuid, squadForm]);
+
+  const radarData = useMemo<any[]>(() => {
+    const calcAvg = (matchesSet: Set<string>, getOp: boolean = false) => {
+       const relevantStats = statsDetailed.filter(s => matchesSet.has(String(s.match_id)));
+       const filtered = relevantStats.filter(s => { const isUs = String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag); return getOp ? !isUs : isUs; });
+       if (!filtered.length) return { l: 0, i: 0, c: 0, v: 0, o: 0 };
+       const l = filtered.reduce((a,b)=>a+(Number(b.lane_rating)||0),0)/filtered.length;
+       const i = filtered.reduce((a,b)=>a+(Number(b.impact_rating)||0),0)/filtered.length;
+       const c = filtered.reduce((a,b)=>a+(Number(b.conversion_rating)||0),0)/filtered.length;
+       const v = filtered.reduce((a,b)=>a+(Number(b.vision_rating)||0),0)/filtered.length;
+       return { l: Math.round(l), i: Math.round(i), c: Math.round(c), v: Math.round(v), o: Math.round((l+i+c+v)/4) };
+    };
+
+    if (radarCompareMode === 'OFFICIAL_VS_SCRIM') {
+       const offIds = new Set(matchesRaw.filter(m => !String(m.game_type).toUpperCase().includes('SCRIM')).map(m => String(m.id || m.match_id)));
+       const scrimIds = new Set(matchesRaw.filter(m => String(m.game_type).toUpperCase().includes('SCRIM')).map(m => String(m.id || m.match_id)));
+       const offStats = calcAvg(offIds, false); const scrimStats = calcAvg(scrimIds, false);
+       return [
+         { subject: 'Lane Dom.', Oficial: offStats.l, Scrim: scrimStats.l }, 
+         { subject: 'Impact', Oficial: offStats.i, Scrim: scrimStats.i }, 
+         { subject: 'Conversion', Oficial: offStats.c, Scrim: scrimStats.c }, 
+         { subject: 'Vision', Oficial: offStats.v, Scrim: scrimStats.v }, 
+         { subject: 'Overall', Oficial: offStats.o, Scrim: scrimStats.o }
+       ];
+    } else {
+       const activeIds = new Set(filteredMatches.map(m => String(m.id || m.match_id)));
+       const usStats = calcAvg(activeIds, false); const oppStats = calcAvg(activeIds, true);
+       return [
+         { subject: 'Lane Dom.', [myTeamTag]: usStats.l, Oponentes: oppStats.l }, 
+         { subject: 'Impact', [myTeamTag]: usStats.i, Oponentes: oppStats.i }, 
+         { subject: 'Conversion', [myTeamTag]: usStats.c, Oponentes: oppStats.c }, 
+         { subject: 'Vision', [myTeamTag]: usStats.v, Oponentes: oppStats.v }, 
+         { subject: 'Overall', [myTeamTag]: usStats.o, Oponentes: oppStats.o }
+       ];
+    }
+  }, [radarCompareMode, statsDetailed, matchesRaw, filteredMatches, myTeamTag]);
+
+  const advancedScrims = useMemo(() => {
+    const autoScrimBlocks = new Map();
+    matchesRaw.filter(m => String(m.game_type).toUpperCase().includes('SCRIM')).forEach(m => {
+       const d = new Date(String(m.game_start_time).replace(' ', 'T'));
+       if (!isNaN(d.getTime())) d.setHours(d.getHours() - 6);
+       const dateRaw = isNaN(d.getTime()) ? 'unknown' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+       const opp = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag) ? (m.red_team_tag || m.red_tag) : (m.blue_team_tag || m.blue_tag);
+       const key = `${dateRaw}_${opp}`;
+       
+       if (!autoScrimBlocks.has(key)) autoScrimBlocks.set(key, { date: dateRaw, opp, wins: 0, losses: 0, games: [] });
+       const block = autoScrimBlocks.get(key); block.games.push(m);
+       const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
+       if ((weAreBlue && m.winner_side === 'blue') || (!weAreBlue && m.winner_side === 'red')) block.wins++; else block.losses++;
+    });
+
+    const finalList: any[] = [];
+    autoScrimBlocks.forEach((block, key) => {
+       const manual = scrimReportsManual.find(sm => sm.scrim_date === block.date && sm.opponent_acronym === block.opp) || {};
+       finalList.push({
+         id: manual.id || `auto_${key}`, date: block.date, opponent: block.opp, result: block.wins > block.losses ? 'W' : block.losses > block.wins ? 'L' : 'D',
+         score: `${block.wins} - ${block.losses}`, mode: manual.mode || `MD${block.games.length}`, comp: manual.comp_tested || 'AUTOMATIC LOG',
+         difficulty: manual.difficulty || 'N/A', punctuality: manual.punctuality || 'N/A', remakes: manual.remakes || 0, isManual: !!manual.id
+       });
+    });
+    scrimReportsManual.forEach(sm => { if (!finalList.find(f => f.id === sm.id)) finalList.push({ id: sm.id, date: sm.scrim_date, opponent: sm.opponent_acronym, result: sm.result, score: sm.score, mode: sm.mode, comp: sm.comp_tested, difficulty: sm.difficulty, punctuality: sm.punctuality, remakes: sm.remakes, isManual: true }); });
+    return finalList.sort((a,b) => getSafeTimestamp(b.date) - getSafeTimestamp(a.date));
+  }, [matchesRaw, scrimReportsManual, myTeamTag]);
+
+  // --- MOTOR DOS GRÁFICOS MINI (LÊ O HISTÓRICO REAL DE SCRIMS E O TIER DOS TIMES) ---
+  const chartIntelligence = useMemo(() => {
+      const diffOrder = ['STOMPAMOS', 'MUITO FÁCIL', 'FÁCIL', 'CONTROLADO', 'DIFÍCIL', 'MT DIFÍCIL', 'STOMPADOS'];
+
+      const diffCounts: Record<string, number> = {};
+      diffOrder.forEach(d => diffCounts[d] = 0);
+
+      const tierCounts: Record<string, Record<string, number>> = {
+          'Bad': {}, 'Average': {}, 'Good': {}, 'Excellent': {}
+      };
+      ['Bad', 'Average', 'Good', 'Excellent'].forEach(t => {
+          diffOrder.forEach(d => tierCounts[t][d] = 0);
+      });
+
+      advancedScrims.forEach((scrim) => {
+          const diff = scrim.difficulty && diffOrder.includes(scrim.difficulty.toUpperCase()) 
+            ? scrim.difficulty.toUpperCase() 
+            : 'CONTROLADO';
+            
+          diffCounts[diff]++;
+
+          // Procura o time na lista que veio do Supabase
+          const opponentData = teamsList.find(t => t.acronym === scrim.opponent);
+          
+          // Pega a coluna tier do banco. Se não existir, cai para 'Average'
+          let rawTier = opponentData?.tier ? String(opponentData.tier).trim() : 'Average';
+          
+          // Formata a string para garantir que fique igual aos nomes das nossas chaves (ex: 'bad' ou 'BAD' vira 'Bad')
+          rawTier = rawTier.charAt(0).toUpperCase() + rawTier.slice(1).toLowerCase();
+          
+          const validTiers = ['Bad', 'Average', 'Good', 'Excellent'];
+          const assignedTier = validTiers.includes(rawTier) ? rawTier : 'Average';
+          
+          tierCounts[assignedTier][diff]++;
+      });
+
+      const stressData = diffOrder.map(diff => ({
+          name: diff.replace('MUITO', 'MT').replace('STOMPAMOS', 'STOMP.').replace('STOMPADOS', 'STOMP.'), 
+          count: diffCounts[diff]
+      }));
+
+      const efficiencyData = ['Bad', 'Average', 'Good', 'Excellent'].map(tier => ({
+          name: tier,
+          ...tierCounts[tier]
+      }));
+
+      return { stressData, efficiencyData };
+  }, [advancedScrims, teamsList]); 
+
+  const renderCustomBarLabel = (props: any) => {
+    const { x, y, width, height, payload, dataKey } = props;
+    
+    // Pega o valor real direto do objeto de dados original, ignorando a matemática empilhada do Recharts
+    const val = payload?.[dataKey];
+    
+    // Só renderiza se for maior que zero
+    if (!val || val === 0) return null;
+    
+    return (
+      <text x={x + width / 2} y={y + height / 2} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize="10" fontWeight="bold">
+        {Math.round(val)}
+      </text>
+    );
+  };
+
+  // --- HANDLERS ---
   const toggleTask = async (id: string, currentStatus: boolean) => { if(!isStaff) return; setVodTasks(tasks => tasks.map(t => t.id === id ? { ...t, is_done: !currentStatus } : t)); await supabase.from('vod_tasks').update({ is_done: !currentStatus }).eq('id', id); };
-  const handleSaveMission = async (e: React.FormEvent) => { e.preventDefault(); let d = missionForm.date; if (d.includes('/')) { const p = d.split('/'); d = `${p.length === 3 ? p[2] : new Date().getFullYear()}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`; } const t = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time; const payload = { team_acronym: squadConfig.teamAcronym, mission_date: d, mission_time: t, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: 'SCHEDULED' }; if (editMissionId) { const { data } = await supabase.from('missions').update(payload).eq('id', editMissionId).select(); if (data) { setUpcomingMissions(prev => prev.map(m => m.id === editMissionId ? data[0] : m).sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime())); setMissionModalOpen(false); } } else { const { data } = await supabase.from('missions').insert([payload]).select(); if (data) { setUpcomingMissions(prev => [...prev, data[0]].sort((a, b) => new Date(a.mission_date).getTime() - new Date(b.mission_date).getTime())); setMissionModalOpen(false); } } };
-  const handleDeleteMission = async (id: string) => { if (!window.confirm("Deseja excluir?")) return; await supabase.from('missions').delete().eq('id', id); setUpcomingMissions(prev => prev.filter(m => m.id !== id)); };
-  const handleSaveScrim = async (e: React.FormEvent) => { e.preventDefault(); const payload = { team_acronym: squadConfig.teamAcronym, scrim_date: scrimForm.date || new Date().toISOString().split('T')[0], opponent_acronym: scrimForm.opponent, result: scrimForm.result, score: scrimForm.score, mode: scrimForm.mode, comp_tested: scrimForm.comp, difficulty: scrimForm.difficulty, punctuality: scrimForm.punctuality, remakes: scrimForm.remakes, match_ids: scrimForm.match_ids }; if (editScrimId) { const { data } = await supabase.from('scrim_reports').update(payload).eq('id', editScrimId).select(); if (data) { setScrimReports(prev => prev.map(s => s.id === editScrimId ? data[0] : s).sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime())); setScrimModalOpen(false); } } else { const { data } = await supabase.from('scrim_reports').insert([payload]).select(); if (data) { setScrimReports(prev => [data[0], ...prev].sort((a, b) => new Date(b.scrim_date).getTime() - new Date(a.scrim_date).getTime())); setScrimModalOpen(false); } } };
-  const handleDeleteScrim = async (id: string) => { if (!window.confirm("Excluir Report?")) return; await supabase.from('scrim_reports').delete().eq('id', id); setScrimReports(prev => prev.filter(s => s.id !== id)); };
+  
+  const handleDayClick = (dateStr: string) => {
+     if(!isStaff) return;
+     setEditMissionId(null);
+     setMissionForm({ date: dateStr, time: '14:00', opponent: '', type: 'SCRIM', gamesCount: '3 JOGOS', draftMode: 'PADRÃO' });
+     setMissionModalOpen(true);
+  };
+  
+  const handleEditMission = (e: React.MouseEvent, m: any) => {
+     e.stopPropagation(); if(!isStaff) return;
+     setEditMissionId(m.id);
+     const info = m.status ? m.status.split('|') : [];
+     let gc = '3 JOGOS'; let dm = 'PADRÃO';
+     if (info.length >= 3) { gc = info[1].trim(); dm = info[2].trim(); }
+     setMissionForm({ date: m.mission_date, time: m.mission_time.substring(0,5), opponent: m.opponent_acronym, type: m.mission_type, gamesCount: gc, draftMode: dm });
+     setMissionModalOpen(true);
+  }
+
+  const handleSaveMission = async (e: React.FormEvent) => { 
+      e.preventDefault(); 
+      let d = missionForm.date; 
+      if (d.includes('/')) { const p = d.split('/'); d = `${p.length === 3 ? p[2] : new Date().getFullYear()}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`; } 
+      const t = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time; 
+      const statusEncoded = `SCHEDULED | ${missionForm.gamesCount} | ${missionForm.draftMode}`;
+      const payload = { team_acronym: myTeamTag, mission_date: d, mission_time: t, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: statusEncoded }; 
+      if (editMissionId) { 
+          const { data, error } = await supabase.from('missions').update(payload).eq('id', editMissionId).select(); 
+          if (data) { setMissionsRaw(prev => prev.map(m => m.id === editMissionId ? data[0] : m)); setMissionModalOpen(false); } 
+      } else { 
+          const { data, error } = await supabase.from('missions').insert([payload]).select(); 
+          if (data) { setMissionsRaw(prev => [...prev, data[0]]); setMissionModalOpen(false); } 
+      } 
+  };
+
+  const handleDeleteMission = async (id: string) => { if (!window.confirm("Deseja excluir?")) return; await supabase.from('missions').delete().eq('id', id); setMissionsRaw(prev => prev.filter(m => m.id !== id)); setMissionModalOpen(false); };
+  
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (currentUser.id === 'dev') return alert('Modo Dev Ativo. Faça login com uma conta real para salvar as edições.');
+      const { error } = await supabase.from('profiles').update({ full_name: profileForm.name, photo_url: profileForm.photo_url }).eq('id', currentUser.id);
+      if (!error) { setCurrentUser({ ...currentUser, name: profileForm.name, photo: profileForm.photo_url || `https://ui-avatars.com/api/?name=${profileForm.name}&background=1e293b&color=3b82f6` }); setProfileModalOpen(false); } 
+  };
+
+  const handleSaveScrim = async (e: React.FormEvent) => { e.preventDefault(); const payload = { team_acronym: myTeamTag, scrim_date: scrimForm.date || new Date().toISOString().split('T')[0], opponent_acronym: scrimForm.opponent, result: scrimForm.result, score: scrimForm.score, mode: scrimForm.mode, comp_tested: scrimForm.comp, difficulty: scrimForm.difficulty, punctuality: scrimForm.punctuality, remakes: scrimForm.remakes, match_ids: scrimForm.match_ids }; if (editScrimId) { const { data } = await supabase.from('scrim_reports').update(payload).eq('id', editScrimId).select(); if (data) { setScrimReportsManual(prev => prev.map(s => s.id === editScrimId ? data[0] : s)); setScrimModalOpen(false); } } else { const { data } = await supabase.from('scrim_reports').insert([payload]).select(); if (data) { setScrimReportsManual(prev => [data[0], ...prev]); setScrimModalOpen(false); } } };
+  const handleDeleteScrim = async (id: string) => { if (!window.confirm("Excluir Report Manual?")) return; await supabase.from('scrim_reports').delete().eq('id', id); setScrimReportsManual(prev => prev.filter(s => s.id !== id)); };
   const handleUpdateTarget = async (e: React.FormEvent) => { e.preventDefault(); const c = [targetForm.win1, targetForm.win2, targetForm.win3].filter(Boolean); await supabase.from('opponent_intel').upsert({ opponent_acronym: targetForm.team.toUpperCase(), top_picks: [], top_bans: [], win_conditions: c }, { onConflict: 'opponent_acronym' }).select(); setNextTargetIntel(prev => ({ ...prev, team: targetForm.team.toUpperCase(), winConditions: c })); setTargetModalOpen(false); };
-  const handleAddVodTask = async (e: React.FormEvent) => { e.preventDefault(); const { data } = await supabase.from('vod_tasks').insert([{ team_acronym: squadConfig.teamAcronym, tag: vodForm.tag, task_text: vodForm.text, is_done: false }]).select(); if (data) { setVodTasks(prev => [data[0], ...prev]); setVodModalOpen(false); } };
+  const handleAddVodTask = async (e: React.FormEvent) => { e.preventDefault(); const { data } = await supabase.from('vod_tasks').insert([{ team_acronym: myTeamTag, tag: vodForm.tag, task_text: vodForm.text, is_done: false }]).select(); if (data) { setVodTasks(prev => [data[0], ...prev]); setVodModalOpen(false); } };
   const handleWellnessSubmit = async (e: React.FormEvent) => { e.preventDefault(); const r = Math.round(((wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical) / 15) * 100); const td = new Date().toISOString().split('T')[0]; const { data } = await supabase.from('player_wellness').upsert({ puuid: wellnessForm.puuid, record_date: td, sleep_score: wellnessForm.sleep, mental_score: wellnessForm.mental, physical_score: wellnessForm.physical, focus_score: wellnessForm.focus, readiness_percent: r }, { onConflict: 'puuid, record_date' }).select(); if (data) { setTeamWellness(prev => prev.map(p => p.puuid === wellnessForm.puuid ? { ...p, score: r, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true } : p)); setWellnessModalOpen(false); } };
 
-  // --- HELPERS ---
-  const getDifficultyColor = (diff: string) => { switch (diff) { case 'STOMPAMOS': return 'bg-blue-600 text-white border-blue-500'; case 'FÁCIL': return 'bg-emerald-500 text-white border-emerald-400'; case 'CONTROLADO': return 'bg-emerald-700 text-emerald-100 border-emerald-600'; case 'DIFÍCIL': return 'bg-orange-600 text-white border-orange-500'; case 'MT DIFÍCIL': return 'bg-red-500 text-white border-red-400'; case 'STOMPADOS': return 'bg-red-600 text-white border-red-500 animate-pulse'; default: return 'bg-slate-800 text-slate-300 border-slate-700'; } };
-  const getPunctualityColor = (punct: string) => { if (punct.includes('PONTUAIS')) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'; if (punct.includes('NOSSO ATRASO')) return 'text-red-400 border-red-500/30 bg-red-500/10'; if (punct.includes('ATRASO DELES')) return 'text-orange-400 border-orange-500/30 bg-orange-500/10'; if (punct.includes('DESMARCARAM')) return 'text-slate-400 border-slate-500/30 bg-slate-500/10 line-through'; return 'text-slate-400 border-slate-500/30 bg-slate-500/10'; };
-  const formatDate = (dateString: string) => { if (!dateString) return ''; const p = dateString.split('-'); return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; };
-  const formatTime = (timeString: string) => { if (!timeString) return ''; return timeString.substring(0, 5); };
+  const handleSaveMetrics = async (e: React.FormEvent) => {
+     e.preventDefault();
+     const payload = {
+        team_acronym: myTeamTag, record_date: metricsForm.date,
+        stress_level: metricsForm.stress, cognitive_load: metricsForm.load,
+        early_micro: metricsForm.early_micro, early_macro: metricsForm.early_macro, early_tf: metricsForm.early_tf,
+        mid_micro: metricsForm.mid_micro, mid_macro: metricsForm.mid_macro, mid_tf: metricsForm.mid_tf,
+        late_micro: metricsForm.late_micro, late_macro: metricsForm.late_macro, late_tf: metricsForm.late_tf
+     };
+     
+     const { data, error } = await supabase.from('team_daily_metrics').upsert(payload, { onConflict: 'team_acronym, record_date' }).select();
+     if (!error && data) {
+         setTeamMetricsRaw(prev => {
+            const arr = prev.filter(m => m.record_date !== metricsForm.date);
+            return [...arr, data[0]].sort((a,b) => new Date(a.record_date).getTime() - new Date(b.record_date).getTime());
+         });
+         setMetricsModalOpen(false);
+     } else {
+         alert("Erro ao salvar métricas. Garanta que a tabela team_daily_metrics existe no Supabase.");
+     }
+  };
+
   const getTeamLogo = (acronym: string) => { const t = teamsList.find(t => t.acronym.toUpperCase() === (acronym||'').toUpperCase()); return t?.logo_url || `https://ui-avatars.com/api/?name=${acronym}&background=1e293b&color=fff&bold=true`; };
   const intensityTheme = squadConfig.intensity < 40 ? { text: 'text-emerald-400', bg: 'bg-emerald-500', shadow: 'shadow-[0_0_10px_rgba(16,185,129,0.8)]' } : squadConfig.intensity < 75 ? { text: 'text-amber-400', bg: 'bg-amber-500', shadow: 'shadow-[0_0_10px_rgba(245,158,11,0.8)]' } : { text: 'text-red-400', bg: 'bg-red-500', shadow: 'shadow-[0_0_10px_rgba(239,68,68,0.8)]' };
 
-  // ==========================================
-  // DADOS DINÂMICOS DO RADAR CHART (A MÁGICA ACONTECE AQUI)
-  // ==========================================
-  // B: 65, 70, 75, etc, representam a Média do Circuitão/Role (Pode ser dinâmico no futuro)
-  const radarData = isStaff ? teamKpiData : [
-    { subject: 'Lane Dom.', A: myStats.lane || 0, B: 65 }, 
-    { subject: 'Impact', A: myStats.impact || 0, B: 70 }, 
-    { subject: 'Conversion', A: myStats.conversion || 0, B: 75 }, 
-    { subject: 'Vision', A: myStats.vision || 0, B: 80 }, 
-    { subject: 'Overall', A: Math.round((myStats.lane + myStats.impact + myStats.conversion + myStats.vision) / 4) || 0, B: 70 }
-  ];
-
   if (loading) return <div className="flex items-center justify-center h-screen text-blue-500 font-black italic animate-pulse text-xs tracking-widest">// ACESSANDO SERVIDORES DO SUPABASE...</div>;
 
-  return (
-    <div className="max-w-[1600px] mx-auto p-4 md:p-8 space-y-10 font-black uppercase italic tracking-tighter pb-20">
-      
-      {/* HEADER & PLAYER HUB */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-        <div className="lg:col-span-8 relative group overflow-hidden bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 rounded-[48px] p-8 flex flex-col md:flex-row items-center md:items-stretch gap-8 shadow-2xl transition-all hover:border-blue-500/30">
-          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none"></div>
+  const expandedPlayer = teamWellness.find(p => p.puuid === expandedWellnessId);
 
-          <div className={`flex items-center md:items-start gap-6 relative z-10 w-full md:w-auto border-b md:border-b-0 ${!isStaff ? 'md:border-r border-white/5 pb-6 md:pb-0 md:pr-8' : ''} shrink-0`}>
-             <div className="relative shrink-0">
-                 <div className="w-32 h-32 md:w-40 md:h-40 rounded-[40px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
-                    <img src={currentUser.photo} className="w-full h-full object-cover" alt="Profile" />
-                 </div>
-                 <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-lg shadow-xl border border-white/20">{isStaff ? 'STAFF' : 'ROSTER'}</div>
+  return (
+    <div className="max-w-[1600px] mx-auto p-4 md:p-8 space-y-8 font-black uppercase italic tracking-tighter pb-20">
+      
+      {/* BARRA DE FILTROS SUPERIOR (ATUALIZADA) */}
+      <div className="flex flex-wrap items-center justify-center gap-4 bg-slate-950/80 p-3 rounded-2xl border border-slate-800 shadow-xl max-w-fit mx-auto sticky top-4 z-[999] backdrop-blur-md">
+         <div className="flex bg-black p-1.5 rounded-xl border border-slate-800">
+           <button onClick={() => setMatchType('ALL')} className={`px-4 md:px-6 py-2 rounded-lg text-[10px] transition-all ${matchType === 'ALL' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>AMBOS</button>
+           <button onClick={() => setMatchType('OFICIAL')} className={`px-4 md:px-6 py-2 rounded-lg text-[10px] transition-all ${matchType === 'OFICIAL' ? 'bg-blue-600 text-white' : 'text-blue-900 hover:text-blue-400'}`}>OFICIAL</button>
+           <button onClick={() => setMatchType('SCRIM')} className={`px-4 md:px-6 py-2 rounded-lg text-[10px] transition-all ${matchType === 'SCRIM' ? 'bg-amber-500 text-black' : 'text-amber-900 hover:text-amber-500'}`}>SCRIMS</button>
+         </div>
+         
+         <div className="h-6 w-px bg-slate-800 hidden md:block"></div>
+         
+         <div className="flex items-center gap-2">
+            <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="bg-black border border-slate-800 rounded-lg px-2 py-1 text-[10px] text-slate-300 outline-none focus:border-blue-500" />
+            <span className="text-slate-500 text-[10px]">até</span>
+            <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="bg-black border border-slate-800 rounded-lg px-2 py-1 text-[10px] text-slate-300 outline-none focus:border-blue-500" />
+         </div>
+
+         <div className="flex items-center gap-2 bg-black border border-slate-800 rounded-lg px-3 py-1">
+            <span className="text-slate-500 text-[10px]">Patch:</span>
+            <input type="text" placeholder="Ex: 14.5" value={filterPatch} onChange={e => setFilterPatch(e.target.value)} className="w-12 bg-transparent text-[10px] text-slate-300 outline-none focus:text-white" />
+         </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+        <div className="lg:col-span-7 flex flex-col gap-8 h-full">
+          
+          <div className="relative group overflow-hidden bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 rounded-[32px] p-6 flex flex-col md:flex-row items-center gap-6 shadow-2xl shrink-0">
+            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none"></div>
+            <div className={`flex items-center md:items-start gap-6 relative z-10 w-full md:w-auto shrink-0`}>
+               <div className="relative shrink-0">
+                   <div className="w-24 h-24 md:w-32 md:h-32 rounded-[32px] bg-slate-900 border-4 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] overflow-hidden">
+                      <img src={currentUser.photo} className="w-full h-full object-cover" alt="Profile" />
+                   </div>
+                   <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white text-[9px] px-2 py-0.5 rounded-lg shadow-xl border border-white/20">{isStaff ? 'STAFF' : 'ROSTER'}</div>
+               </div>
+               <div className="flex flex-col justify-center h-full py-2 w-full">
+                  <div className="flex items-center justify-between mb-2 w-full">
+                     <p className="text-blue-400 text-[10px] tracking-[0.5em] leading-none">{isStaff ? 'ACTIVE ANALYST PROTOCOL' : 'PLAYER TACTICAL HUB'}</p>
+                     <button onClick={() => { setProfileForm({ name: currentUser.name, photo_url: currentUser.photo }); setProfileModalOpen(true); }} className="text-[10px] text-slate-500 hover:text-white bg-white/5 px-2 py-1 rounded">⚙️ EDITAR</button>
+                  </div>
+                  <h2 className="text-3xl md:text-4xl lg:text-5xl text-white mb-3 leading-tight break-words max-w-[300px]">{currentUser.name}</h2>
+                  <div className="flex flex-wrap gap-2">
+                     <Badge text={currentUser.role} color="bg-blue-500" />
+                     <Badge text="CBLOL ACADEMY" color="bg-purple-600" />
+                  </div>
+               </div>
+            </div>
+
+            {!isStaff && (
+               <div className="relative z-10 flex-1 flex flex-col justify-center w-full">
+                  <div className="flex justify-between items-center mb-4">
+                     <span className="text-[9px] text-slate-400 tracking-[0.2em] uppercase">Tactical Matrix</span>
+                  </div>
+                  <div className="space-y-2">
+                     <MiniStatBar label="Lane" value={myStats.lane} color="bg-blue-500" />
+                     <MiniStatBar label="Impact" value={myStats.impact} color="bg-emerald-500" />
+                     <MiniStatBar label="Conv." value={myStats.conversion} color="bg-amber-500" />
+                     <MiniStatBar label="Vision" value={myStats.vision} color="bg-purple-500" />
+                  </div>
+               </div>
+            )}
+          </div>
+
+          <div className="bg-[#121212] border border-white/5 rounded-[32px] p-6 shadow-2xl flex flex-col xl:flex-row items-center justify-between gap-6 relative overflow-hidden group shrink-0">
+             <div className={`absolute left-0 top-0 bottom-0 w-1 ${intensityTheme.bg} transition-colors duration-1000`}></div>
+             <div className="flex flex-col min-w-0 ml-4 flex-1">
+                <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5 flex items-center gap-2">Tactical Directive <span className="bg-yellow-500/20 text-yellow-500 px-1.5 rounded border border-yellow-500/30">AUTO</span></span>
+                <span className="text-white text-sm tracking-[0.2em] font-black italic truncate">{squadConfig.directive}</span>
              </div>
-             <div className="flex flex-col justify-center h-full">
-                <div className="flex items-center gap-3 mb-2">
-                   <p className="text-blue-400 text-xs tracking-[0.5em]">{isStaff ? 'ACTIVE ANALYST PROTOCOL' : 'PLAYER TACTICAL HUB'}</p>
+             <div className="flex flex-col w-full xl:w-[260px] shrink-0 gap-3">
+                <div className="flex items-end justify-between w-full text-[10px] font-black italic uppercase">
+                   <span className="text-white">WORKLOAD</span><span className={intensityTheme.text}>{squadConfig.load}</span>
                 </div>
-                <h2 className="text-4xl md:text-5xl lg:text-6xl text-white mb-3 leading-none truncate max-w-[250px]">{currentUser.name.split(' ')[0]}</h2>
-                <div className="flex flex-wrap gap-2">
-                   <Badge text={currentUser.role} color="bg-blue-500" />
-                   <Badge text="CIRCUITO DESAFIANTE" color="bg-purple-600" />
-                   {!isStaff && (
-                      <>
-                        <span className="text-[9px] bg-slate-800 text-slate-300 px-2 py-1 rounded-full border border-slate-700 tracking-widest uppercase">RANK #{myStats.rank || '-'}</span>
-                        <span className={`text-[9px] px-2 py-1 rounded-full border tracking-widest uppercase ${myStats.streak === 'ON FIRE' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>{myStats.streak}</span>
-                      </>
-                   )}
+                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden relative shadow-inner">
+                   <div className={`absolute top-0 bottom-0 left-0 ${intensityTheme.bg} transition-all duration-1000`} style={{ width: `${squadConfig.intensity}%` }}></div>
                 </div>
              </div>
           </div>
 
-          {!isStaff && (
-             <div className="relative z-10 flex-1 flex flex-col justify-center w-full">
-                <div className="flex justify-between items-center mb-4">
-                   <span className="text-[10px] text-slate-400 tracking-[0.2em] uppercase">Tactical Performance Matrix</span>
-                   <span className="text-xl opacity-30">📊</span>
-                </div>
-                <div className="space-y-3">
-                   <MiniStatBar label="Lane Dom." value={myStats.lane} color="bg-blue-500" />
-                   <MiniStatBar label="Impact" value={myStats.impact} color="bg-emerald-500" />
-                   <MiniStatBar label="Conversion" value={myStats.conversion} color="bg-amber-500" />
-                   <MiniStatBar label="Vision" value={myStats.vision} color="bg-purple-500" />
-                </div>
-             </div>
-          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1">
+            <div className="bg-[#121212] border border-white/5 rounded-[32px] p-6 shadow-2xl relative overflow-hidden group flex flex-col h-full min-h-[220px]">
+              <div className="absolute top-0 left-0 w-full h-1 bg-[#3b82f6] opacity-20 group-hover:opacity-100 transition-all"></div>
+              <div className="flex items-center justify-between mb-4 z-10 shrink-0">
+                 <h3 className="text-xs text-white italic flex items-center gap-2">
+                    <div className="w-1 h-3 bg-[#3b82f6] rounded-full"></div> 
+                    Curva de Estresse e Carga Cognitiva
+                 </h3>
+              </div>
+              <div className="flex-1 w-full min-h-0">
+                 <ResponsiveContainer width="100%" height="100%">
+                   <AreaChart data={chartIntelligence.stressData} margin={{ top: 25, right: 15, left: -25, bottom: 0 }}>
+                     <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                     <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 7, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                     <YAxis hide />
+                     <Tooltip contentStyle={{ backgroundColor: '#121212', borderColor: '#1e293b', fontSize: '9px' }} />
+                     <Area type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.2} label={{ fill: '#fff', fontSize: 12, fontWeight: '900', position: 'top' }} />
+                   </AreaChart>
+                 </ResponsiveContainer>
+              </div>
+            </div>
+            
+            <div className="bg-[#121212] border border-white/5 rounded-[32px] p-6 shadow-2xl relative overflow-hidden group flex flex-col h-full min-h-[220px]">
+              <div className="absolute top-0 left-0 w-full h-1 bg-slate-500 opacity-20 group-hover:opacity-100 transition-all"></div>
+              <div className="flex items-center justify-between mb-4 z-10 shrink-0">
+                 <h3 className="text-xs text-white italic flex items-center gap-2">
+                    <div className="w-1 h-3 bg-slate-500 rounded-full"></div> 
+                    Eficiência Proporcional por Nível
+                 </h3>
+              </div>
+              <div className="flex-1 w-full min-h-0">
+                 <ResponsiveContainer width="100%" height="100%">
+                   <BarChart data={chartIntelligence.efficiencyData} margin={{ top: 15, right: 5, left: -25, bottom: 0 }} stackOffset="none">
+                     <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                     <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 9, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                     <Tooltip cursor={{ fill: '#ffffff05' }} contentStyle={{ backgroundColor: '#121212', borderColor: '#1e293b', fontSize: '9px' }} />
+                     
+                     <Bar dataKey="STOMPADOS" stackId="a" fill="#dc2626" label={(p: any) => renderCustomBarLabel({...p, dataKey: "STOMPADOS"})} />
+                     <Bar dataKey="MT DIFÍCIL" stackId="a" fill="#f97316" label={(p: any) => renderCustomBarLabel({...p, dataKey: "MT DIFÍCIL"})} />
+                     <Bar dataKey="DIFÍCIL" stackId="a" fill="#fbbf24" label={(p: any) => renderCustomBarLabel({...p, dataKey: "DIFÍCIL"})} />
+                     <Bar dataKey="CONTROLADO" stackId="a" fill="#94a3b8" label={(p: any) => renderCustomBarLabel({...p, dataKey: "CONTROLADO"})} />
+                     <Bar dataKey="FÁCIL" stackId="a" fill="#38bdf8" label={(p: any) => renderCustomBarLabel({...p, dataKey: "FÁCIL"})} />
+                     <Bar dataKey="MUITO FÁCIL" stackId="a" fill="#3b82f6" label={(p: any) => renderCustomBarLabel({...p, dataKey: "MUITO FÁCIL"})} />
+                     <Bar dataKey="STOMPAMOS" stackId="a" fill="#1e40af" label={(p: any) => renderCustomBarLabel({...p, dataKey: "STOMPAMOS"})} />
+                   </BarChart>
+                 </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* AGENDA DE EVENTOS & TARGET INTEL */}
-        <div className="lg:col-span-4 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-xl flex flex-col relative overflow-hidden group">
+        <div className="lg:col-span-5 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-xl flex flex-col h-full relative overflow-hidden group min-h-[400px]">
            <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
-           <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
-             <div><h3 className="text-sm text-slate-400 tracking-widest leading-none">AGENDA DE EVENTOS</h3></div>
-             {isStaff && (
-               <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '', opponent: '', type: 'SCRIM' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[9px] tracking-widest transition-all">+ NOVO EVENTO</button>
-             )}
-           </div>
-           
-           <div className="space-y-3 mb-6 flex-1 overflow-y-auto custom-scrollbar pr-2">
-              {upcomingMissions.length > 0 ? upcomingMissions.map(m => (
-                <div key={m.id} className="flex flex-col p-4 bg-white/[0.02] rounded-2xl border border-white/5 hover:bg-white/[0.05] transition-all group/card relative">
-                   <div className="flex items-center justify-between">
-                     <div className="flex items-center gap-4">
-                        <img src={getTeamLogo(m.opponent_acronym)} alt={m.opponent_acronym} className="w-11 h-11 object-contain drop-shadow-[0_0_12px_rgba(255,255,255,0.25)]" />
-                        <div className="flex flex-col">
-                           <span className="text-blue-400 text-[10px] tracking-widest mb-1">{formatDate(m.mission_date)} - {formatTime(m.mission_time)}</span>
-                           <span className="text-white text-lg font-black tracking-tighter leading-none">{m.opponent_acronym}</span>
-                        </div>
-                     </div>
-                     <span className="text-[9px] px-2 py-1 bg-black/40 rounded-lg border border-white/10 text-slate-400">{m.mission_type}</span>
-                   </div>
-                   
-                   {isStaff && (
-                     <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/card:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
-                        <button onClick={() => { setEditMissionId(m.id); setMissionForm({ date: m.mission_date, time: formatTime(m.mission_time), opponent: m.opponent_acronym, type: m.mission_type }); setMissionModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
-                        <button onClick={() => handleDeleteMission(m.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
-                     </div>
-                   )}
-                </div>
-              )) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUM EVENTO AGENDADO.</p>}
-           </div>
-
-           <div className="mt-auto pt-6 border-t border-white/5 relative">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-3xl pointer-events-none"></div>
-
-              <div className="flex items-center justify-between mb-4 relative z-10">
-                 <div className="flex items-center gap-3">
-                    <div className="relative">
-                       <img src={getTeamLogo(nextTargetIntel.team)} alt="Target Logo" className="w-10 h-10 object-contain drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]" />
-                       <div className="absolute -bottom-1 -right-1 bg-purple-600 w-4 h-4 rounded-full border-2 border-[#121212] flex items-center justify-center text-[8px]">🎯</div>
-                    </div>
-                    <div className="flex flex-col">
-                       <h4 className="text-[8px] text-purple-400 tracking-[0.3em] uppercase mb-0.5">PRIMARY TARGET</h4>
-                       <span className="text-white text-sm font-black italic tracking-widest">{nextTargetIntel.team !== 'SEM ALVO' ? `VS ${nextTargetIntel.team}` : 'AWAITING ASSIGNMENT'}</span>
-                    </div>
+           <div className="mb-6 border-b border-white/5 pb-6">
+              <div className="flex justify-between items-center mb-4">
+                 <h3 className="text-sm text-slate-400 tracking-widest leading-none">CALENDÁRIO ({currentDate.toLocaleDateString('pt-BR', { month: 'short' }).toUpperCase()})</h3>
+                 <div className="flex gap-1">
+                    <button onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1))} className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white font-black text-[8px]">&lt;</button>
+                    <button onClick={() => setCurrentDate(new Date())} className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white font-black text-[8px]">HOJE</button>
+                    <button onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1))} className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white font-black text-[8px]">&gt;</button>
                  </div>
-                 {isStaff && (
-                   <button onClick={() => { if(nextTargetIntel.team === 'SEM ALVO') return; setTargetForm({ team: nextTargetIntel.team, win1: nextTargetIntel.winConditions[0] || '', win2: nextTargetIntel.winConditions[1] || '', win3: nextTargetIntel.winConditions[2] || '' }); setTargetModalOpen(true); }} className="text-[9px] bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 px-3 py-2 rounded-lg text-purple-400 transition-colors tracking-widest flex items-center gap-2"><span>✏️</span> UPDATE</button>
-                 )}
               </div>
+              <div className="grid grid-cols-7 gap-1.5">
+                 {['D','S','T','Q','Q','S','S'].map(d => <div key={d} className="text-center text-[8px] text-slate-600 font-black mb-1">{d}</div>)}
+                 {calendarGrid.map((cell, idx) => {
+                    if (!cell) return <div key={`empty-${idx}`} className="min-h-[85px]"></div>;
+                    let borderClass = 'border-white/5 hover:border-white/20 hover:bg-white/[0.05]';
+                    if (cell.isToday) borderClass = 'border-blue-500/50 bg-blue-500/10 shadow-inner';
+                    return (
+                      <div key={cell.dateStr} onClick={() => handleDayClick(cell.dateStr)} className={`relative flex flex-col min-h-[85px] rounded-lg border transition-all p-1.5 group/day ${isStaff ? 'cursor-pointer' : ''} ${borderClass}`}>
+                        <div className="flex justify-between items-center mb-1">
+                           <span className={`text-[10px] font-black ${cell.isToday ? 'text-white' : 'text-slate-400'}`}>{cell.day}</span>
+                           {isStaff && <span className="opacity-0 group-hover/day:opacity-100 text-blue-500 text-[10px]">+</span>}
+                        </div>
+                        <div className="flex flex-col gap-1 overflow-y-auto custom-scrollbar flex-1 pr-0.5">
+                           {cell.events.map((ev: any) => {
+                              const isScrim = ev.type === 'SCRIM';
+                              const bgClass = ev.isPast 
+                                  ? (isScrim ? 'bg-amber-950/40 border-amber-500/30' : 'bg-blue-950/40 border-blue-500/30')
+                                  : (isScrim ? 'bg-amber-500/20 border-amber-500/50' : 'bg-blue-500/20 border-blue-500/50');
+                              const textClass = isScrim ? 'text-amber-400' : 'text-blue-400';
 
-              <div className="space-y-2 relative z-10">
-                 {nextTargetIntel.winConditions.length > 0 ? nextTargetIntel.winConditions.map((cond, i) => (
-                   <div key={i} className="flex items-start gap-3 p-3 bg-gradient-to-r from-purple-900/20 to-transparent border-l-2 border-purple-500 rounded-r-xl">
-                      <span className="text-[10px] text-purple-500 font-mono font-black pt-0.5">0{i+1}</span><p className="text-[10px] text-slate-300 tracking-widest leading-relaxed">{cond}</p>
-                   </div>
-                 )) : <div className="flex flex-col items-center justify-center py-4 bg-white/[0.02] border border-dashed border-white/10 rounded-xl"><span className="text-[9px] text-slate-500 tracking-widest">NO INTEL ACQUIRED</span></div>}
+                              return (
+                                 <div key={ev.id} onClick={(e) => { if(!ev.isPast) handleEditMission(e, ev.rawMission); else e.stopPropagation(); }} className={`p-1 rounded flex flex-col gap-0.5 border ${bgClass} transition-colors`}>
+                                    <div className={`flex justify-between items-center text-[7px] font-mono ${textClass}`}>
+                                       <span>{ev.time}</span><span>{isScrim ? 'SCR' : 'OFI'}</span>
+                                    </div>
+                                    <span className="text-[8px] font-black text-white truncate pt-0.5">VS {ev.opp}</span>
+                                    <span className={`text-[7px] font-black text-right ${ev.isPast ? (ev.isWin ? 'text-emerald-400' : 'text-red-400') : 'text-slate-400'}`}>{ev.isPast ? ev.resultText : ev.mode}</span>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                      </div>
+                    )
+                 })}
+              </div>
+           </div>
+           <div className="flex flex-col flex-1">
+              <div className="flex items-center justify-between mb-4">
+                 <h3 className="text-sm text-slate-400 tracking-widest leading-none">PRÓXIMAS MISSÕES</h3>
+                 {isStaff && <button onClick={() => { setEditMissionId(null); setMissionForm({ date: '', time: '14:00', opponent: '', type: 'SCRIM', gamesCount: '3 JOGOS', draftMode: 'PADRÃO' }); setMissionModalOpen(true); }} className="bg-blue-500/10 border border-blue-500/30 text-blue-400 px-3 py-1.5 rounded-lg text-[9px] hover:bg-blue-600 hover:text-white transition-all">+ NOVO</button>}
+              </div>
+              <div className="space-y-3 flex-1 overflow-y-auto max-h-[180px] custom-scrollbar pr-2">
+                 {upcomingMissions.length > 0 ? upcomingMissions.map(m => (
+                    <div key={m.id} className="flex flex-col p-3 bg-white/[0.02] rounded-xl border border-white/5 hover:bg-white/[0.05] group/card relative">
+                       <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                             <img src={getTeamLogo(m.opponent_acronym)} className="w-8 h-8 object-contain" />
+                             <div className="flex flex-col"><span className="text-blue-400 text-[8px] tracking-widest">{formatDate(m.mission_date)} - {formatTimeStr(m.mission_time)}</span><span className="text-white text-sm font-black">VS {m.opponent_acronym}</span></div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1"><span className="text-[7px] px-2 py-0.5 bg-black/40 rounded border border-white/10 text-slate-400">{m.mission_type}</span><span className="text-[7px] text-amber-500/80 font-black">{m.status?.split('|')[1] || m.mode}</span></div>
+                       </div>
+                       {isStaff && <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/card:opacity-100 flex gap-2 transition-all bg-[#121212]/90 p-1.5 rounded-lg border border-white/10"><button onClick={(e) => handleEditMission(e, m)} className="text-[8px] text-blue-400 hover:text-white px-2 py-1">EDIT</button><button onClick={() => handleDeleteMission(m.id)} className="text-[8px] text-red-400 hover:text-white px-2 py-1">DEL</button></div>}
+                    </div>
+                 )) : <p className="text-[10px] text-slate-600 text-center py-2 italic font-black">LIVRE (NADA HOJE/AMANHÃ).</p>}
               </div>
            </div>
         </div>
       </div>
 
-      {/* TACTICAL COMMAND BAR */}
-      <div className="bg-[#121212] border border-white/5 rounded-[32px] p-6 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-8 relative overflow-hidden group">
-         <div className={`absolute left-0 top-0 bottom-0 w-1 ${intensityTheme.bg} transition-colors duration-1000`}></div>
-         
-         <div className="flex items-center gap-5 flex-1 w-full min-w-0">
-            {isStaff && (
-               <button onClick={() => { setConfigForm({ teamAcronym: squadConfig.teamAcronym, directive: squadConfig.directive, phase: squadConfig.phase, week: squadConfig.week, intensity: squadConfig.intensity, load: squadConfig.load }); setConfigModalOpen(true); }} className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 hover:bg-yellow-500 hover:text-black transition-colors font-black px-4 py-3 rounded-xl text-[10px] tracking-widest shadow-lg shrink-0 flex items-center gap-2">⚙️ CONFIG</button>
-            )}
-            <div className="flex flex-col min-w-0">
-               <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5">Tactical Directive</span>
-               <span className="text-white text-sm tracking-[0.2em] font-black italic truncate">{squadConfig.directive}</span>
-            </div>
-         </div>
-
-         <div className="w-px h-12 bg-white/10 hidden lg:block shrink-0"></div>
-
-         <div className="flex flex-col w-full lg:w-[340px] shrink-0 gap-3">
-            <div className="flex items-end justify-between w-full">
-               <div className="flex flex-col">
-                  <span className="text-[9px] text-slate-500 tracking-widest uppercase mb-0.5">Periodization</span>
-                  <span className="text-white text-[11px] tracking-[0.2em] font-black italic uppercase">WEEK {squadConfig.week}: {squadConfig.phase}</span>
-               </div>
-               <span className={`text-[10px] font-black italic tracking-widest uppercase ${intensityTheme.text}`}>{squadConfig.load} LOAD</span>
-            </div>
-            <div className="flex items-center gap-3 w-full">
-               <div className="h-1.5 flex-1 bg-slate-800 rounded-full overflow-hidden relative shadow-inner">
-                  <div className={`absolute top-0 bottom-0 left-0 ${intensityTheme.bg} ${intensityTheme.shadow} transition-all duration-1000`} style={{ width: `${squadConfig.intensity}%` }}></div>
-               </div>
-               <span className={`text-[10px] font-black ${intensityTheme.text} w-8 text-right`}>{squadConfig.intensity}%</span>
-            </div>
-         </div>
-      </div>
-
-      {/* BIOMETRIC & COGNITIVE TELEMETRY */}
-      <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative overflow-hidden group">
+      <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative overflow-hidden group w-full mt-8">
          <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500 opacity-20 group-hover:opacity-100 transition-all"></div>
          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4 border-b border-white/5 pb-6">
             <div><h3 className="text-xl text-white italic flex items-center gap-3"><div className="w-1.5 h-5 bg-emerald-500 rounded-full shadow-[0_0_10px_#10b981]"></div> Squad Readiness</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-2">PREVENÇÃO DE LESÕES E BURN-OUT TÁTICO</p></div>
-            <button onClick={() => { if(!isStaff) setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); setWellnessModalOpen(true); }} className="bg-emerald-600/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white px-6 py-3 rounded-2xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> DAILY SYNC</button>
+            <button onClick={() => { if(!isStaff) setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); setWellnessModalOpen(true); }} className="bg-emerald-600/10 border border-emerald-500/30 text-emerald-400 px-6 py-3 rounded-2xl text-[10px] hover:bg-emerald-600 hover:text-white transition-all flex items-center gap-2"><span className="text-lg leading-none">+</span> DAILY SYNC</button>
          </div>
 
-         {teamWellness.length > 0 ? (
-           <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-5'}`}>
-              
-              {teamWellness
-                .filter(p => isStaff || p.puuid === currentUser.puuid)
-                .map((p) => {
-                 const isDanger = p.score < 65; const isOptimal = p.score > 85;
-                 const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/5';
+         <div className={`grid gap-4 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-5'}`}>
+            {teamWellness.filter(p => isStaff || p.puuid === currentUser.puuid).map((p) => {
+               const isDanger = p.score < 65; const isOptimal = p.score > 85;
+               const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/5';
+               const isExpanded = expandedWellnessId === p.puuid;
 
-                 return (
-                   <div key={p.puuid} className={`relative p-5 rounded-[24px] border transition-all overflow-hidden ${colorClass} ${!isStaff ? 'col-span-1 h-full' : ''}`}>
-                      {!p.hasAnsweredToday && (
-                        <div className="absolute inset-0 bg-[#121212]/90 backdrop-blur-sm z-20 flex flex-col items-center justify-center border border-white/5">
-                           <span className="text-3xl mb-3 animate-pulse opacity-50">⏳</span><span className="text-[9px] text-slate-400 tracking-[0.2em] font-black text-center px-4 leading-relaxed">PENDENTE DE<br/>RESPOSTA HOJE</span>
-                        </div>
-                      )}
-                      {isStaff && p.history.length > 0 && (
-                         <button onClick={() => setWellnessHistoryModal({ isOpen: true, player: p, history: p.history })} className="absolute top-4 right-4 z-30 text-[8px] bg-black/40 hover:bg-white/10 text-slate-400 hover:text-white px-2 py-1 rounded border border-white/5 transition-all">HISTÓRICO</button>
-                      )}
-                      <div className="flex justify-between items-start mb-4 relative z-10">
-                         <div className="flex items-start gap-3 flex-1 min-w-0 pr-2">
-                           {p.photo && <img src={p.photo} alt={p.name} className="w-9 h-9 rounded-full border border-white/10 object-cover shrink-0 mt-0.5" />}
-                           <div className="flex-1 min-w-0">
-                             <span className="text-[8px] text-slate-500 uppercase tracking-widest block mb-0.5">{p.role}</span>
-                             <span className="text-sm font-black text-white break-words leading-tight block">{p.name}</span>
-                           </div>
-                         </div>
-                         <span className={`text-2xl font-black italic leading-none shrink-0 pt-1 ${isDanger ? 'text-red-400 animate-pulse' : ''}`}>{p.score}%</span>
+               return (
+                 <div key={p.puuid} onClick={() => setExpandedWellnessId(isExpanded ? null : p.puuid)} className={`relative p-5 rounded-[24px] border transition-all cursor-pointer hover:scale-[1.02] ${colorClass} ${isExpanded ? 'ring-2 ring-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]' : ''}`}>
+                    {!p.hasAnsweredToday && !isStaff && (
+                      <div className="absolute inset-0 bg-[#121212]/90 backdrop-blur-sm z-20 flex flex-col items-center justify-center border border-white/5">
+                         <span className="text-3xl mb-3 animate-pulse opacity-50">⏳</span><span className="text-[9px] text-slate-400 tracking-[0.2em] font-black text-center px-4 leading-relaxed">PENDENTE DE<br/>RESPOSTA HOJE</span>
                       </div>
-                      <div className="space-y-2 relative z-10"><WellnessBar label="SONO" value={p.sleep} /><WellnessBar label="MENTAL" value={p.mental} /><WellnessBar label="FÍSICO" value={p.physical} /></div>
-                   </div>
-                 );
-              })}
-
-              {!isStaff && teamWellness.find(p => p.puuid === currentUser.puuid) && (
-                 <div className="col-span-1 lg:col-span-3 xl:col-span-4 bg-gradient-to-br from-black/40 to-emerald-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group min-h-[200px]">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
-                    
-                    <div className="flex items-center justify-between mb-4">
-                       <div>
-                          <h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Biometric Evolution (Readiness)</h4>
-                          <p className="text-[9px] text-slate-500 tracking-widest mt-1">ACOMPANHAMENTO DE ENERGIA E FOCO</p>
-                       </div>
-                       <span className="text-2xl opacity-20 group-hover:opacity-100 transition-all">📈</span>
-                    </div>
-                    
-                    {teamWellness.find(p => p.puuid === currentUser.puuid)?.history.length! > 0 ? (
-                       <div className="flex-1 w-full mt-2 min-h-[120px]">
-                          <ResponsiveContainer width="100%" height="100%">
-                             <LineChart data={[...teamWellness.find(p => p.puuid === currentUser.puuid)!.history].reverse()}>
-                               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
-                               <XAxis dataKey="record_date" tickFormatter={formatDate} tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} axisLine={false} tickLine={false} />
-                               <YAxis hide domain={[0, 100]} />
-                               <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
-                               <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
-                             </LineChart>
-                          </ResponsiveContainer>
-                       </div>
-                    ) : (
-                       <p className="text-[10px] text-slate-600 text-center italic py-6">Sincronize seus dados diários para gerar o gráfico.</p>
                     )}
+                    {isStaff && p.history.length > 0 && (
+                       <button onClick={(e) => { e.stopPropagation(); setWellnessHistoryModal({ isOpen: true, player: p, history: p.history }); }} className="absolute top-4 right-4 z-30 text-[8px] bg-black/40 hover:bg-white/10 text-slate-400 hover:text-white px-2 py-1 rounded border border-white/5 transition-all">HISTÓRICO</button>
+                    )}
+                    <div className="flex justify-between items-start mb-4 relative z-10">
+                       <div className="flex items-start gap-3 flex-1 min-w-0 pr-2">
+                         {p.photo && <img src={p.photo} className="w-9 h-9 rounded-full border border-white/10 object-cover shrink-0 mt-0.5" />}
+                         <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2 mb-0.5"><span className="text-[8px] text-slate-500 uppercase">{String(p.role).replace(/jug/i, 'JNG')}</span>{!p.hasAnsweredToday && isStaff && <span className="text-[6px] bg-red-500/20 text-red-400 border border-red-500/30 px-1 py-0.5 rounded animate-pulse">PENDENTE</span>}</div>
+                           <span className="text-sm font-black text-white break-words leading-tight block">{p.name}</span>
+                         </div>
+                       </div>
+                       <span className={`text-2xl font-black italic leading-none shrink-0 pt-1 ${isDanger ? 'text-red-400 animate-pulse' : ''}`}>{p.score}%</span>
+                    </div>
+                    <div className="space-y-2 relative z-10"><WellnessBar label="SONO" value={p.sleep} /><WellnessBar label="MENTAL" value={p.mental} /><WellnessBar label="FÍSICO" value={p.physical} /></div>
                  </div>
-              )}
+               );
+            })}
+         </div>
 
-           </div>
-         ) : <div className="text-center py-10"><p className="text-slate-500 text-xs tracking-widest">NENHUM JOGADOR ATIVO NO ROSTER.</p></div>}
+         {expandedPlayer && expandedPlayer.history.length > 0 && (
+            <div className="w-full bg-gradient-to-br from-black/40 to-emerald-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group min-h-[250px] mt-6 animate-in slide-in-from-top-4">
+               <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
+               <div className="flex items-center justify-between mb-4">
+                  <div>
+                     <h4 className="text-[10px] text-emerald-400 tracking-[0.3em] uppercase">Evolução Biométrica: {expandedPlayer.name}</h4>
+                     <p className="text-[9px] text-slate-500 tracking-widest mt-1">ACOMPANHAMENTO DE ENERGIA E FOCO</p>
+                  </div>
+                  <button onClick={() => setExpandedWellnessId(null)} className="text-slate-500 hover:text-white font-black text-xl">&times;</button>
+               </div>
+               <div className="flex-1 w-full mt-2 min-h-[150px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                     <LineChart data={[...expandedPlayer.history].reverse()}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                        <XAxis dataKey="record_date" tickFormatter={formatDate} tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} axisLine={false} tickLine={false} />
+                        <YAxis hide domain={[0, 100]} />
+                        <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
+                        <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
+                     </LineChart>
+                  </ResponsiveContainer>
+               </div>
+            </div>
+         )}
       </div>
 
-      {/* SQUAD FORM & KPI GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <StatCard label="Analytic Cycles" value={stats.matches} color="text-blue-400" sub={`Matches (${squadConfig.teamAcronym})`} icon="⚡" />
-          <StatCard label="Global Efficiency" value={`${stats.winrate}%`} color="text-emerald-400" sub="Squad Win Rate" icon="📈" />
-          <StatCard label="Active Units" value={stats.players} color="text-purple-400" sub="Roster Depth" icon="👥" />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch mt-8">
+        <div className="lg:col-span-7 bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl h-[450px] relative flex flex-col overflow-hidden group">
+          <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
+          <div className="flex justify-between items-start mb-6 shrink-0">
+             <h3 className="text-xl text-white italic flex items-center gap-3"><div className="w-1.5 h-5 bg-blue-500 rounded-full"></div> Squad Performance Index</h3>
+             <div className="flex bg-black border border-white/10 rounded-lg p-1">
+                <button onClick={() => setRadarCompareMode('OFFICIAL_VS_SCRIM')} className={`px-3 py-1.5 text-[8px] rounded-md transition-all ${radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>OFF VS SCRIM</button>
+                <button onClick={() => setRadarCompareMode('US_VS_OPP')} className={`px-3 py-1.5 text-[8px] rounded-md transition-all ${radarCompareMode === 'US_VS_OPP' ? 'bg-red-600 text-white' : 'text-slate-500'}`}>US VS OPP</button>
+             </div>
+          </div>
+          <div className="flex-1 w-full min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                <PolarGrid stroke="#1e293b" />
+                <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900' }} />
+                <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                <Radar name={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Oficial' : myTeamTag} dataKey={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Oficial' : myTeamTag} stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.4} />
+                <Radar name={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Scrim' : 'Oponentes'} dataKey={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Scrim' : 'Oponentes'} stroke={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444"} strokeWidth={3} fill={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444"} fillOpacity={0.4} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '15px' }} />
+                <Tooltip contentStyle={{ backgroundColor: '#121212', borderColor: '#1e293b', fontSize: '10px' }} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
-        <div className="lg:col-span-4 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-xl relative overflow-hidden group">
+        <div className="lg:col-span-5 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-xl relative flex flex-col h-[450px] overflow-hidden group">
           <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-20 group-hover:opacity-100 transition-all"></div>
-          <h3 className="text-sm text-slate-500 tracking-widest leading-none mb-6">INTERNAL MVP RACE</h3>
-          <div className="space-y-4">
-             {squadForm.length > 0 ? squadForm.map((player, idx) => (
-                <div key={player.name} className="flex items-center justify-between border-b border-white/5 pb-3 last:border-0 last:pb-0">
-                   <div className="flex items-center gap-3 flex-1 pr-4">
-                      <span className="text-[10px] text-slate-600 font-mono w-2 shrink-0">{idx + 1}</span>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded border shrink-0 ${player.rating >= 8 ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>{player.role}</span>
-                      <span className="text-white text-xs break-words leading-tight">{player.name}</span>
+          <div className="flex items-center justify-between mb-6 shrink-0">
+             <h3 className="text-sm text-slate-500 tracking-widest leading-none">INTERNAL MVP RACE</h3>
+             <span className="text-[9px] bg-amber-500/10 text-amber-500 border border-amber-500/30 px-2 py-1 rounded-lg animate-pulse">LIVE RANKING</span>
+          </div>
+          
+          <div className="flex flex-col gap-2 overflow-y-hidden flex-1">
+             {squadForm.length > 0 ? squadForm.map((player, idx) => {
+                const isFirst = idx === 0;
+                const isSecond = idx === 1;
+                const isThird = idx === 2;
+                
+                let rankColor = 'text-slate-500 bg-slate-800/50 border-slate-700/50';
+                let borderGlow = 'border-white/5 hover:border-white/20 bg-white/[0.02]';
+                let nameSize = 'text-xs text-slate-300';
+                let ratingSize = 'text-lg text-white';
+                let numberBox = 'w-7 h-7 text-xs';
+
+                if (isFirst) {
+                   rankColor = 'text-amber-400 bg-amber-500/20 border-amber-500/50 drop-shadow-[0_0_5px_rgba(251,191,36,0.8)]';
+                   borderGlow = 'border-amber-500/30 bg-gradient-to-r from-amber-500/10 to-transparent shadow-[inset_4px_0_0_#f59e0b]';
+                   nameSize = 'text-lg text-amber-400';
+                   ratingSize = 'text-3xl text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.5)]';
+                   numberBox = 'w-10 h-10 text-lg';
+                } else if (isSecond) {
+                   rankColor = 'text-slate-200 bg-slate-400/20 border-slate-400/50';
+                   borderGlow = 'border-slate-500/30 bg-gradient-to-r from-slate-400/10 to-transparent shadow-[inset_4px_0_0_#94a3b8]';
+                   nameSize = 'text-base text-slate-200';
+                   ratingSize = 'text-2xl text-slate-200';
+                   numberBox = 'w-9 h-9 text-base';
+                } else if (isThird) {
+                   rankColor = 'text-orange-400 bg-orange-900/30 border-orange-700/50';
+                   borderGlow = 'border-orange-900/50 bg-gradient-to-r from-orange-900/20 to-transparent shadow-[inset_4px_0_0_#c2410c]';
+                   nameSize = 'text-sm text-orange-200';
+                   ratingSize = 'text-xl text-orange-400';
+                   numberBox = 'w-8 h-8 text-sm';
+                }
+
+                return (
+                   <div key={player.name} className={`flex items-center justify-between px-4 py-2.5 rounded-2xl transition-all border ${borderGlow}`}>
+                      <div className="flex items-center gap-4 flex-1 pr-4">
+                         <div className={`flex items-center justify-center rounded-xl border-2 font-black italic shrink-0 ${numberBox} ${rankColor}`}>
+                            {idx + 1}
+                         </div>
+                         <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                               <span className={`text-[8px] px-1.5 py-0.5 rounded border bg-black/50 ${isFirst ? 'border-amber-500/30 text-amber-500' : 'border-white/10 text-slate-400'}`}>
+                                  {String(player.role).replace(/jug/i, 'JNG')}
+                               </span>
+                               {player.streak.includes('FIRE') && (
+                                  <span className="text-[7px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded animate-pulse border border-red-500/30 font-black">
+                                     ON FIRE
+                                  </span>
+                               )}
+                            </div>
+                            <span className={`${nameSize} break-words font-black uppercase tracking-tighter leading-none`}>
+                               {player.name}
+                            </span>
+                         </div>
+                      </div>
+                      <div className="flex flex-col items-end shrink-0">
+                         <span className="text-[7px] text-slate-500 tracking-[0.3em] mb-1">RATING</span>
+                         <span className={`${ratingSize} font-black italic leading-none`}>{player.rating}</span>
+                      </div>
                    </div>
-                   <div className="flex items-center gap-4 shrink-0">
-                      <span className={`text-[8px] tracking-widest ${player.streak.includes('FIRE') ? 'text-amber-500 animate-pulse' : 'text-slate-500'}`}>{player.streak}</span>
-                      <span className="text-sm font-black italic text-white w-6 text-right">{player.rating}</span>
-                   </div>
-                </div>
-             )) : <p className="text-[10px] text-slate-600">SEM DADOS.</p>}
+                );
+             }) : <p className="text-[10px] text-slate-600 text-center py-10">SEM DADOS NO FILTRO.</p>}
           </div>
         </div>
       </div>
 
-      {/* ADVANCED SCRIM REPORT */}
-      <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative overflow-hidden group">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch mt-8">
+        <div className="lg:col-span-7 bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative flex flex-col min-h-[350px] overflow-hidden group">
+           <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-20 group-hover:opacity-100 transition-all"></div>
+           <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4 shrink-0">
+              <div><h3 className="text-xl text-white italic">VOD Review Queue</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">PENDING TASKS</p></div>
+              <div className="text-[10px] text-amber-500 border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 rounded-lg">{vodTasks.filter(t => !t.is_done).length} PENDING</div>
+           </div>
+           <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-2 mb-4">
+              {vodTasks.map((task) => (
+                  <div key={task.id} onClick={() => toggleTask(task.id, task.is_done)} className={`p-4 rounded-2xl border transition-all ${isStaff ? 'cursor-pointer hover:bg-white/[0.05]' : 'cursor-default'} flex gap-4 items-start ${task.is_done ? 'opacity-40' : 'bg-white/[0.02] border-white/10'}`}>
+                     <div className={`w-5 h-5 shrink-0 rounded-md border-2 mt-0.5 flex items-center justify-center ${task.is_done ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>{task.is_done && <span className="text-white text-[10px]">✓</span>}</div>
+                     <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2"><span className={`text-[8px] px-2 py-0.5 rounded-md border ${task.tag === 'URGENTE' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-blue-400 border-blue-500/30 bg-blue-500/10'} tracking-widest`}>{task.tag}</span></div>
+                        <p className={`text-xs text-white leading-snug ${task.is_done ? 'line-through' : ''}`}>{task.task_text}</p>
+                     </div>
+                  </div>
+              ))}
+           </div>
+           {isStaff && <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/20 text-slate-500 text-[10px] hover:text-white transition-all">+ ADICIONAR TAREFA</button>}
+        </div>
+
+        {/* --- NOVOS STAT CARDS COM WR POR LADO E FILTROS DINÂMICOS --- */}
+        <div className="lg:col-span-5 grid grid-cols-2 gap-4">
+          <StatCard label="WR Blue Side" value={`${stats.blueWR}%`} color="text-blue-400" sub={`${stats.blueWins}V - ${stats.blueTotal - stats.blueWins}D`} icon="🛡️" />
+          <StatCard label="WR Red Side" value={`${stats.redWR}%`} color="text-red-400" sub={`${stats.redWins}V - ${stats.redTotal - stats.redWins}D`} icon="⚔️" />
+          
+          <div className="col-span-2 grid grid-cols-2 gap-4">
+             <StatCard label="Avg Duration" value={`${stats.avgDuration}m`} color="text-emerald-400" sub={`Em ${stats.totalGames} jogos`} icon="⏱️" />
+             <StatCard label="Gold Diff @12" value={`${stats.avgGold12 > 0 ? '+' : ''}${stats.avgGold12}`} color={stats.avgGold12 >= 0 ? 'text-amber-400' : 'text-red-400'} sub="Early Rating" icon="💰" />
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative w-full mt-8 overflow-hidden group">
          <div className="absolute top-0 left-0 w-full h-1 bg-white opacity-20 group-hover:opacity-100 transition-all"></div>
-         <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4">
-            <div><h3 className="text-xl text-white italic">Advanced Scrim Report</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">HISTÓRICO COMPORTAMENTAL</p></div>
-            {isStaff && (
-               <button onClick={() => { setEditScrimId(null); setScrimForm({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' }); setScrimModalOpen(true); }} className="bg-white/10 border border-white/20 text-white hover:bg-white hover:text-black px-4 py-2 rounded-xl text-[10px] tracking-widest transition-all shadow-lg flex items-center gap-2"><span className="text-lg leading-none">+</span> LOG REPORT</button>
-            )}
-         </div>
+         <h3 className="text-xl text-white italic mb-8 border-b border-white/5 pb-4">Advanced Scrim Report</h3>
          <div className="overflow-x-auto custom-scrollbar pb-4 max-h-[400px]">
             <table className="w-full text-left border-separate border-spacing-y-3 min-w-[800px]">
-               <thead className="sticky top-0 bg-[#121212] z-10">
-                 <tr className="text-[9px] text-slate-600 tracking-[0.2em] uppercase">
-                   <th className="px-4 pb-2">DATA / OPONENTE</th>
-                   <th className="px-4 pb-2 text-center">RES / PLACAR</th>
-                   <th className="px-4 pb-2 text-center">MODO / COMP TESTADA</th>
-                   <th className="px-4 pb-2 text-center">DIFICULDADE</th>
-                   <th className="px-4 pb-2 text-center">PONTUALIDADE</th>
-                   <th className="px-4 pb-2 text-center">REMAKES</th>
-                 </tr>
+               <thead className="sticky top-0 bg-[#121212] z-10 text-[9px] text-slate-600 tracking-[0.2em] uppercase">
+                 <tr><th className="px-4 pb-2">DATA / OPONENTE</th><th className="px-4 pb-2 text-center">RES / PLACAR</th><th className="px-4 pb-2 text-center">MODO / COMP TESTADA</th><th className="px-4 pb-2 text-center">DIFICULDADE</th><th className="px-4 pb-2 text-center">PONTUALIDADE</th><th className="px-4 pb-2 text-center">REMAKES</th></tr>
                </thead>
                <tbody>
-                 {scrimReports.length > 0 ? scrimReports.map((scrim) => (
-                   <tr key={scrim.id} className="bg-white/[0.02] hover:bg-white/[0.05] transition-all group/row relative">
-                     <td className="p-4 rounded-l-2xl">
-                        <div className="flex items-center gap-4">
-                           <img src={getTeamLogo(scrim.opponent_acronym)} alt={scrim.opponent_acronym} className="w-11 h-11 object-contain drop-shadow-[0_0_12px_rgba(255,255,255,0.25)] shrink-0" />
-                           <div className="flex flex-col">
-                              <span className="text-blue-400 text-[10px] tracking-widest mb-1">{formatDate(scrim.scrim_date)}</span>
-                              <span className="text-white text-lg font-black tracking-tighter leading-none">VS {scrim.opponent_acronym}</span>
-                           </div>
-                        </div>
-                     </td>
-                     <td className="p-4 text-center">
-                         <div className="flex flex-col items-center">
-                            <span className={`text-xl font-black italic leading-none ${scrim.result === 'W' ? 'text-emerald-400' : scrim.result === 'L' ? 'text-red-400' : 'text-slate-500'}`}>{scrim.result}</span>
-                            {scrim.score && <span className="text-[10px] text-white mt-1 font-black">{scrim.score}</span>}
-                         </div>
-                     </td>
-                     <td className="p-4 text-center">
-                         <div className="flex flex-col items-center">
-                            <span className="text-[10px] text-white font-black tracking-widest bg-white/5 px-2 py-0.5 rounded border border-white/10 mb-1">{scrim.mode || 'MD1'}</span>
-                            <span className="text-[9px] text-slate-400 tracking-widest">{scrim.comp_tested || 'N/A'}</span>
-                         </div>
-                     </td>
-                     <td className="p-4 text-center"><span className={`text-[9px] px-3 py-1.5 rounded-lg border tracking-widest ${getDifficultyColor(scrim.difficulty)}`}>{scrim.difficulty}</span></td>
-                     <td className="p-4 text-center"><span className={`text-[9px] px-3 py-1 rounded border tracking-widest ${getPunctualityColor(scrim.punctuality)}`}>{scrim.punctuality}</span></td>
-                     <td className="p-4 text-center rounded-r-2xl relative">
-                        <span className={`text-[10px] font-black ${scrim.remakes === 0 ? 'text-slate-600' : scrim.remakes > 1 ? 'text-red-400' : 'text-yellow-400'}`}>{scrim.remakes} RMK</span>
-                        {isStaff && (
-                           <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 transition-all bg-[#121212]/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-xl">
-                              <button onClick={() => { setEditScrimId(scrim.id); setScrimForm({ date: scrim.scrim_date, opponent: scrim.opponent_acronym, result: scrim.result, score: scrim.score || '', mode: scrim.mode || 'MD1', comp: scrim.comp_tested, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: scrim.match_ids || '' }); setScrimModalOpen(true); }} className="text-[9px] text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded hover:bg-blue-600 transition-colors tracking-widest">EDITAR</button>
-                              <button onClick={() => handleDeleteScrim(scrim.id)} className="text-[9px] text-red-400 hover:text-white px-3 py-1 bg-red-500/10 rounded hover:bg-red-600 transition-colors tracking-widest">EXCLUIR</button>
-                           </div>
-                        )}
+                 {advancedScrims.length > 0 ? advancedScrims.map((scrim) => (
+                   <tr key={scrim.id} className="bg-white/[0.02] hover:bg-white/[0.05] transition-all group/row text-[10px]">
+                     <td className="p-4 rounded-l-2xl"><div className="flex items-center gap-4"><img src={getTeamLogo(scrim.opponent)} className="w-11 h-11 object-contain shrink-0" /><div className="flex flex-col"><span className="text-blue-400 tracking-widest">{formatDate(scrim.date)}</span><span className="text-white text-lg font-black leading-none">VS {scrim.opponent}</span></div></div></td>
+                     <td className="p-4 text-center"><div className="flex flex-col items-center"><span className={`text-xl font-black italic ${scrim.result === 'W' ? 'text-emerald-400' : 'text-red-400'}`}>{scrim.result}</span><span className="text-white font-black">{scrim.score}</span></div></td>
+                     <td className="p-4 text-center"><div className="flex flex-col items-center"><span className="bg-white/5 px-2 py-0.5 rounded border border-white/10 mb-1">{scrim.mode}</span><span className="text-slate-400">{scrim.comp}</span></div></td>
+                     <td className="p-4 text-center"><span className={`px-3 py-1.5 rounded-lg border font-black ${getDifficultyColor(scrim.difficulty)}`}>{scrim.difficulty}</span></td>
+                     <td className="p-4 text-center"><span className={`px-3 py-1 rounded border ${getPunctualityColor(scrim.punctuality)}`}>{scrim.punctuality}</span></td>
+                     <td className="p-4 text-center rounded-r-2xl relative"><span className={`font-black ${scrim.remakes > 0 ? 'text-yellow-400' : 'text-slate-600'}`}>{scrim.remakes} RMK</span>
+                        {isStaff && <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 flex gap-2 bg-[#121212]/90 p-2 rounded-xl border border-white/10"><button onClick={() => { setEditScrimId(scrim.isManual ? scrim.id : null); setScrimForm({ date: scrim.date, opponent: scrim.opponent, result: scrim.result, score: scrim.score, mode: scrim.mode, comp: scrim.comp, difficulty: scrim.difficulty, punctuality: scrim.punctuality, remakes: scrim.remakes, match_ids: '' }); setScrimModalOpen(true); }} className="text-blue-400 hover:text-white px-3 py-1 bg-blue-500/10 rounded">LOGAR DETALHES</button></div>}
                      </td>
                    </tr>
-                 )) : <tr><td colSpan={6} className="text-center py-6 text-[10px] text-slate-600">NENHUM REPORT CADASTRADO PARA {squadConfig.teamAcronym}.</td></tr>}
+                 )) : <tr><td colSpan={6} className="text-center py-6 text-slate-600">NENHUMA SCRIM LOGADA.</td></tr>}
                </tbody>
             </table>
          </div>
       </div>
 
-      {/* TACTICAL DATA BLOCKS E VOD REVIEW QUEUE */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        
-        {/* RADAR CHART INTELIGENTE (STAFF VS JOGADOR) */}
-        <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl h-[450px] relative overflow-hidden group">
-          <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 opacity-20 group-hover:opacity-100 transition-all"></div>
-          <h3 className="text-xl text-white mb-6 italic flex items-center gap-3">
-             <div className="w-1.5 h-5 bg-blue-500 rounded-full"></div> 
-             {isStaff ? 'Squad Performance Index' : 'Personal Performance Index'}
-          </h3>
-          <ResponsiveContainer width="100%" height="90%">
-            <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
-              <PolarGrid stroke="#1e293b" />
-              <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} />
-              <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-              
-              {/* O nome da teia muda dependendo de quem tá vendo */}
-              <Radar name={isStaff ? "Squad" : "My Stats"} dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.4} />
-              <Radar name={isStaff ? "Circuitão Avg" : "Role Avg"} dataKey="B" stroke="#64748b" strokeWidth={2} strokeDasharray="3 3" fill="transparent" />
-              
-              <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#1e293b', fontSize: '10px', borderRadius: '12px', fontWeight: '900', fontStyle: 'italic' }} itemStyle={{ color: '#fff' }} />
-            </RadarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* VOD REVIEW QUEUE */}
-        <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 md:p-10 shadow-2xl relative overflow-hidden group h-[450px] flex flex-col">
-           <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-20 group-hover:opacity-100 transition-all"></div>
-           <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-4 shrink-0">
-              <div><h3 className="text-xl text-white italic">VOD Review Queue</h3><p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">PENDING ANALYTICAL TASKS</p></div>
-              <div className="text-[10px] text-amber-500 border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 rounded-lg">{vodTasks.filter(t => !t.is_done).length} PENDING</div>
-           </div>
-           
-           <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-2 mb-4">
-              {vodTasks.length > 0 ? vodTasks.map((task) => {
-                let colorClass = 'text-slate-400 border-slate-500/30 bg-slate-500/10';
-                if (task.tag === 'URGENTE') colorClass = 'text-red-400 border-red-500/30 bg-red-500/10';
-                if (task.tag === 'MACRO') colorClass = 'text-blue-400 border-blue-500/30 bg-blue-500/10';
-                if (task.tag === 'MICRO') colorClass = 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
-                if (task.tag === 'DRAFT') colorClass = 'text-purple-400 border-purple-500/30 bg-purple-500/10';
-
-                return (
-                  <div key={task.id} onClick={() => toggleTask(task.id, task.is_done)} className={`p-4 rounded-2xl border transition-all ${isStaff ? 'cursor-pointer' : 'cursor-default'} flex gap-4 items-start ${task.is_done ? 'bg-black/40 border-white/5 opacity-50 hover:opacity-100' : 'bg-white/[0.02] border-white/10 hover:border-white/20 hover:bg-white/[0.05]'}`}>
-                     <div className={`w-5 h-5 shrink-0 rounded-md border-2 mt-0.5 flex items-center justify-center transition-colors ${task.is_done ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>{task.is_done && <span className="text-white text-[10px]">✓</span>}</div>
-                     <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2"><span className={`text-[8px] px-2 py-0.5 rounded-md border ${colorClass} tracking-widest`}>{task.tag}</span></div>
-                        <p className={`text-xs text-white leading-snug ${task.is_done ? 'line-through text-slate-500' : ''}`}>{task.task_text}</p>
-                     </div>
-                  </div>
-                );
-              }) : <p className="text-[10px] text-slate-600 text-center py-4">NENHUMA TAREFA PENDENTE.</p>}
-           </div>
-
-           {isStaff && (
-              <button onClick={() => setVodModalOpen(true)} className="w-full py-3 rounded-2xl border border-dashed border-white/10 text-slate-500 text-[10px] tracking-widest hover:border-white/30 hover:text-white transition-all bg-black/20 shrink-0 mt-auto">
-                 + ADICIONAR NOVA TAREFA
-              </button>
-           )}
-        </div>
-      </div>
-
-      {/* =========================================
-         MODAIS DE CONTROLE (ANALYST TOOLS)
-      ========================================= */}
-
-      {/* MODAL 0: COMMAND BAR CONFIG */}
-      {isConfigModalOpen && isStaff && (
+      {isProfileModalOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleUpdateConfig} className="w-full max-w-2xl bg-[#121212] border border-yellow-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(234,179,8,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-yellow-900 to-yellow-500"></div>
-            <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">COMMAND PROTOCOL</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">ATUALIZAR DIRETRIZES E CONFIGURAÇÕES DA SQUAD</p></div>
-            
+          <form onSubmit={handleUpdateProfile} className="w-full max-w-md bg-[#121212] border border-blue-500/20 rounded-[40px] p-8 space-y-6 shadow-2xl relative">
+            <h2 className="text-3xl font-black text-white italic text-center">EDITAR PERFIL</h2>
             <div className="space-y-4">
-              <div><label className="text-[10px] text-blue-400 ml-2 font-black">Nossa Tag (Filtro Global da Equipe)</label><input type="text" required className="w-full bg-blue-900/10 border border-blue-500/30 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase" placeholder="Ex: RMD" value={configForm.teamAcronym} onChange={e => setConfigForm({...configForm, teamAcronym: e.target.value.toUpperCase()})} /></div>
-              <div><label className="text-[10px] text-slate-500 ml-2">Diretriz Tática Global (Foco da Semana)</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic uppercase" value={configForm.directive} onChange={e => setConfigForm({...configForm, directive: e.target.value.toUpperCase()})} /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] text-slate-500 ml-2">Fase da Temporada</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic uppercase" value={configForm.phase} onChange={e => setConfigForm({...configForm, phase: e.target.value.toUpperCase()})} /></div>
-                <div><label className="text-[10px] text-slate-500 ml-2">Semana Atual</label><input type="number" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic" value={configForm.week} onChange={e => setConfigForm({...configForm, week: Number(e.target.value)})} /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] text-slate-500 ml-2 flex justify-between"><span>Intensidade de Treino</span> <span className="text-yellow-500">{configForm.intensity}%</span></label><div className="flex items-center h-14 bg-black border border-white/10 rounded-2xl px-4 mt-1"><input type="range" min="0" max="100" className="w-full accent-yellow-500" value={configForm.intensity} onChange={e => setConfigForm({...configForm, intensity: Number(e.target.value)})} /></div></div>
-                <div>
-                   <label className="text-[10px] text-slate-500 ml-2">Carga Cognitiva</label>
-                   <select value={configForm.load} onChange={e => setConfigForm({...configForm, load: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 mt-1 text-white focus:border-yellow-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                     <option value="RECOVERY">RECOVERY (LOW)</option><option value="MODERATE">MODERATE (MAINTENANCE)</option><option value="MAXIMUM">MAXIMUM (HIGH LOAD)</option>
-                   </select>
-                </div>
-              </div>
+              <div><label className="text-[10px] text-slate-500 ml-2">Nickname</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic focus:border-blue-500 outline-none" value={profileForm.name} onChange={e => setProfileForm({...profileForm, name: e.target.value})} /></div>
+              <div><label className="text-[10px] text-slate-500 ml-2">URL da Foto</label><input type="url" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic focus:border-blue-500 outline-none" value={profileForm.photo_url} onChange={e => setProfileForm({...profileForm, photo_url: e.target.value})} /></div>
             </div>
             <div className="flex gap-4 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setConfigModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-yellow-500 text-black rounded-2xl hover:bg-yellow-400 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(234,179,8,0.3)]">SALVAR & RECARREGAR</button>
+              <button type="button" onClick={() => setProfileModalOpen(false)} className="px-6 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+              <button type="submit" className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs hover:bg-blue-500">SALVAR</button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL 1: TARGET INTEL */}
-      {isTargetModalOpen && isStaff && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleUpdateTarget} className="w-full max-w-xl bg-[#121212] border border-purple-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(168,85,247,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-900 to-purple-500"></div>
-            <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">TARGET INTEL</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">DEFINIR CONDIÇÕES DE VITÓRIA</p></div>
-            <div className="space-y-4">
-              <div className="flex gap-4 items-center mb-6 p-4 bg-purple-900/10 border border-purple-500/20 rounded-2xl">
-                 <img src={getTeamLogo(targetForm.team)} className="w-12 h-12 object-contain drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" />
-                 <div>
-                    <p className="text-[9px] text-purple-400 tracking-[0.3em]">LOCKED TARGET</p>
-                    <p className="text-2xl text-white font-black italic">{targetForm.team}</p>
-                 </div>
-              </div>
-              
-              <div><label className="text-[10px] text-slate-500 ml-2">Win Condition #1 (Prioridade)</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-purple-500 outline-none transition-all font-black italic" placeholder="Ex: Isolar o Top laner no early game..." value={targetForm.win1} onChange={e => setTargetForm({...targetForm, win1: e.target.value})} /></div>
-              <div><label className="text-[10px] text-slate-500 ml-2">Win Condition #2</label><input type="text" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-purple-500 outline-none transition-all font-black italic" value={targetForm.win2} onChange={e => setTargetForm({...targetForm, win2: e.target.value})} /></div>
-              <div><label className="text-[10px] text-slate-500 ml-2">Win Condition #3</label><input type="text" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-purple-500 outline-none transition-all font-black italic" value={targetForm.win3} onChange={e => setTargetForm({...targetForm, win3: e.target.value})} /></div>
-            </div>
-            <div className="flex gap-4 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setTargetModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-purple-600 text-white rounded-2xl hover:bg-purple-500 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(168,85,247,0.3)]">SALVAR INTEL</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL 2: ADD VOD TASK */}
-      {isVodModalOpen && isStaff && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleAddVodTask} className="w-full max-w-xl bg-[#121212] border border-amber-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(245,158,11,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-900 to-amber-500"></div>
-            <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">VOD REVIEW TASK</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">ADICIONAR TAREFA DE ANÁLISE</p></div>
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] text-slate-500 ml-2">Tag da Categoria</label>
-                <div className="flex gap-2 mt-1">
-                  <button type="button" onClick={() => setVodForm({...vodForm, tag: 'URGENTE'})} className={`flex-1 py-3 rounded-xl border transition-all text-xs font-black ${vodForm.tag === 'URGENTE' ? 'bg-red-500/20 border-red-500 text-red-400' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>URGENTE</button>
-                  <button type="button" onClick={() => setVodForm({...vodForm, tag: 'MACRO'})} className={`flex-1 py-3 rounded-xl border transition-all text-xs font-black ${vodForm.tag === 'MACRO' ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>MACRO</button>
-                  <button type="button" onClick={() => setVodForm({...vodForm, tag: 'MICRO'})} className={`flex-1 py-3 rounded-xl border transition-all text-xs font-black ${vodForm.tag === 'MICRO' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>MICRO</button>
-                  <button type="button" onClick={() => setVodForm({...vodForm, tag: 'DRAFT'})} className={`flex-1 py-3 rounded-xl border transition-all text-xs font-black ${vodForm.tag === 'DRAFT' ? 'bg-purple-500/20 border-purple-500 text-purple-400' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>DRAFT</button>
-                </div>
-              </div>
-              <div><label className="text-[10px] text-slate-500 ml-2">Descrição da Tarefa</label><textarea required rows={3} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-amber-500 outline-none transition-all font-black italic resize-none" value={vodForm.text} onChange={e => setVodForm({...vodForm, text: e.target.value})}></textarea></div>
-            </div>
-            <div className="flex gap-4 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setVodModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-amber-500 text-black rounded-2xl hover:bg-amber-400 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(245,158,11,0.3)]">ADICIONAR TAREFA</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL 3: DAILY SYNC */}
-      {isWellnessModalOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleWellnessSubmit} className="w-full max-w-2xl bg-[#121212] border border-emerald-500/20 rounded-[40px] p-8 md:p-10 space-y-8 shadow-[0_0_100px_rgba(16,185,129,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-900 to-emerald-400"></div>
-            <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">DAILY READINESS SYNC</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">PROTOCOLO DE BIOMETRIA</p></div>
-            <div className="space-y-4 mb-4">
-               <label className="text-[10px] text-slate-500 ml-2">Jogador</label>
-               <select value={wellnessForm.puuid} disabled={!isStaff} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-emerald-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer disabled:opacity-50">
-                 {roster.map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
-               </select>
-            </div>
-            <div className="space-y-8">
-               <WellnessInput icon="💤" title="Qualidade do Sono" desc="1 = Insônia/Péssimo | 5 = Recuperação Total" value={wellnessForm.sleep} onChange={(v: any) => setWellnessForm({...wellnessForm, sleep: v})} />
-               <WellnessInput icon="🧠" title="Estado Mental & Stress" desc="1 = Tiltado/Esgotado | 5 = Foco Total/Calmo" value={wellnessForm.mental} onChange={(v: any) => setWellnessForm({...wellnessForm, mental: v})} />
-               <WellnessInput icon="🦾" title="Dores & Fadiga Física" desc="1 = Dor forte (Punho/Costas) | 5 = Zero Dor/Pronto" value={wellnessForm.physical} onChange={(v: any) => setWellnessForm({...wellnessForm, physical: v})} />
-            </div>
-            <div className="flex gap-4 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setWellnessModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-500 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.3)]">SINCRONIZAR DADOS</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL 4: ADD MISSION */}
       {isMissionModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleSaveMission} className="w-full max-w-xl bg-[#121212] border border-blue-500/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(59,130,246,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-900 to-blue-400"></div>
-            <div className="text-center mb-8"><h2 className="text-3xl italic leading-none font-black text-white">{editMissionId ? "EDIT EVENT" : "NEW MISSION"}</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">AGENDAR COMPROMISSO TÁTICO</p></div>
+          <form onSubmit={handleSaveMission} className="w-full max-w-xl bg-[#121212] border border-blue-500/20 rounded-[40px] p-8 space-y-6 shadow-2xl">
+            <div className="text-center mb-8"><h2 className="text-3xl italic font-black text-white">{editMissionId ? "EDITAR EVENTO" : "NOVO EVENTO"}</h2></div>
             <div className="space-y-4">
               <div className="flex gap-4 items-center">
-                 {missionForm.opponent && <img src={getTeamLogo(missionForm.opponent)} className="w-14 h-14 rounded-2xl border border-blue-500/30 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />}
-                 <div className="flex-1">
-                    <label className="text-[10px] text-slate-500 ml-2">Adversário</label>
-                    <select required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer" value={missionForm.opponent} onChange={e => setMissionForm({...missionForm, opponent: e.target.value})}>
-                       <option value="" disabled>SELECIONE A EQUIPE...</option>
-                       {teamsList.map(t => <option key={t.acronym} value={t.acronym}>{t.name} ({t.acronym})</option>)}
-                    </select>
-                 </div>
+                 {missionForm.opponent && <img src={getTeamLogo(missionForm.opponent)} className="w-14 h-14 rounded-2xl border border-blue-500/30 object-contain" />}
+                 <div className="flex-1"><label className="text-[10px] text-slate-500 ml-2">Adversário</label><select required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic focus:border-blue-500 outline-none" value={missionForm.opponent} onChange={e => setMissionForm({...missionForm, opponent: e.target.value})}>{teamsList.map(t => <option key={t.acronym} value={t.acronym}>{t.name} ({t.acronym})</option>)}</select></div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] text-slate-500 ml-2">Data</label><input type="date" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase" value={missionForm.date} onChange={e => setMissionForm({...missionForm, date: e.target.value})} /></div>
-                <div><label className="text-[10px] text-slate-500 ml-2">Horário</label><input type="time" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase" value={missionForm.time} onChange={e => setMissionForm({...missionForm, time: e.target.value})} /></div>
+                <div><label className="text-[10px] text-slate-500 ml-2">Data</label><input type="date" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic" value={missionForm.date} onChange={e => setMissionForm({...missionForm, date: e.target.value})} /></div>
+                <div><label className="text-[10px] text-slate-500 ml-2">Hora</label><input type="time" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic" value={missionForm.time} onChange={e => setMissionForm({...missionForm, time: e.target.value})} /></div>
               </div>
-              <div>
-                <label className="text-[10px] text-slate-500 ml-2">Tipo de Missão</label>
-                <div className="flex gap-2 mt-1">
-                  <button type="button" onClick={() => setMissionForm({...missionForm, type: 'SCRIM'})} className={`flex-1 py-4 rounded-xl border-2 transition-all ${missionForm.type === 'SCRIM' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>SCRIM</button>
-                  <button type="button" onClick={() => setMissionForm({...missionForm, type: 'OFFICIAL'})} className={`flex-1 py-4 rounded-xl border-2 transition-all ${missionForm.type === 'OFFICIAL' ? 'bg-purple-600 border-purple-500 text-white' : 'bg-black/50 border-white/5 text-slate-500 hover:border-white/20'}`}>OFFICIAL MATCH</button>
-                </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setMissionForm({...missionForm, type: 'SCRIM'})} className={`flex-1 py-4 rounded-xl border-2 font-black ${missionForm.type === 'SCRIM' ? 'bg-amber-500 border-amber-400 text-black' : 'bg-black/50 border-white/5 text-slate-500'}`}>SCRIM</button>
+                <button type="button" onClick={() => setMissionForm({...missionForm, type: 'OFFICIAL'})} className={`flex-1 py-4 rounded-xl border-2 font-black ${missionForm.type === 'OFFICIAL' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-black/50 border-white/5 text-slate-500'}`}>OFICIAL</button>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <select className="bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic" value={missionForm.gamesCount} onChange={e => setMissionForm({...missionForm, gamesCount: e.target.value})}><option value="1 JOGO">1 JOGO</option><option value="2 JOGOS">2 JOGOS</option><option value="3 JOGOS">3 JOGOS</option><option value="4 JOGOS">4 JOGOS</option><option value="5 JOGOS">5 JOGOS</option></select>
+                <select className="bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic" value={missionForm.draftMode} onChange={e => setMissionForm({...missionForm, draftMode: e.target.value})}><option value="PADRÃO">PADRÃO</option><option value="FEARLESS">FEARLESS</option><option value="MISTO">MISTO</option></select>
               </div>
             </div>
             <div className="flex gap-4 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setMissionModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-blue-600 text-white rounded-2xl hover:bg-blue-500 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(59,130,246,0.3)]">
-                {editMissionId ? "SALVAR ALTERAÇÕES" : "ADICIONAR AO RADAR"}
-              </button>
+              {editMissionId && <button type="button" onClick={() => handleDeleteMission(editMissionId)} className="px-6 py-4 bg-red-600/10 text-red-500 rounded-2xl font-black text-xs hover:bg-red-600 hover:text-white transition-all">EXCLUIR</button>}
+              <button type="button" onClick={() => setMissionModalOpen(false)} className="px-6 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+              <button type="submit" className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs hover:bg-blue-500">SALVAR MISSÃO</button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL 5: LOG SCRIM REPORT */}
+      {isMetricsModalOpen && isStaff && (
+         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
+            <form onSubmit={handleSaveMetrics} className="w-full max-w-2xl bg-[#121212] border border-blue-500/20 rounded-[40px] p-8 space-y-6 shadow-2xl relative my-auto">
+               <h2 className="text-3xl font-black text-white italic text-center">STAFF TACTICAL SYNC</h2>
+               <div className="flex flex-col gap-6">
+                  <div>
+                     <label className="text-[10px] text-slate-500">Data do Log</label>
+                     <input type="date" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic outline-none mt-1" value={metricsForm.date} onChange={e => setMetricsForm({...metricsForm, date: e.target.value})} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 border-b border-white/5 pb-6">
+                     <div><label className="text-[10px] text-slate-500">Estresse do Time (0-100)</label><input type="number" min="0" max="100" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-pink-500 font-black italic outline-none mt-1" value={metricsForm.stress} onChange={e => setMetricsForm({...metricsForm, stress: Number(e.target.value)})} /></div>
+                     <div><label className="text-[10px] text-slate-500">Carga Cognitiva (0-100)</label><input type="number" min="0" max="100" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-[#8b5cf6] font-black italic outline-none mt-1" value={metricsForm.load} onChange={e => setMetricsForm({...metricsForm, load: Number(e.target.value)})} /></div>
+                  </div>
+                  <div>
+                     <label className="text-[10px] text-slate-500 block mb-2 uppercase tracking-widest text-center">Proporção de Eficiência (O ideal é somar 100 em cada linha)</label>
+                     <div className="grid grid-cols-4 gap-2 items-center text-center">
+                        <span className="text-[10px] text-slate-600 font-black">FASE</span>
+                        <span className="text-[10px] text-cyan-400 font-black">MICRO</span>
+                        <span className="text-[10px] text-blue-500 font-black">MACRO</span>
+                        <span className="text-[10px] text-[#8b5cf6] font-black">TEAMFIGHT</span>
+                     </div>
+                     <div className="grid grid-cols-4 gap-2 mt-2 items-center">
+                        <span className="text-[10px] text-slate-400 font-black text-center">EARLY</span>
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.early_micro} onChange={e => setMetricsForm({...metricsForm, early_micro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.early_macro} onChange={e => setMetricsForm({...metricsForm, early_macro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.early_tf} onChange={e => setMetricsForm({...metricsForm, early_tf: Number(e.target.value)})} />
+                     </div>
+                     <div className="grid grid-cols-4 gap-2 mt-2 items-center">
+                        <span className="text-[10px] text-slate-400 font-black text-center">MID</span>
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.mid_micro} onChange={e => setMetricsForm({...metricsForm, mid_micro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.mid_macro} onChange={e => setMetricsForm({...metricsForm, mid_macro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.mid_tf} onChange={e => setMetricsForm({...metricsForm, mid_tf: Number(e.target.value)})} />
+                     </div>
+                     <div className="grid grid-cols-4 gap-2 mt-2 items-center">
+                        <span className="text-[10px] text-slate-400 font-black text-center">LATE</span>
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.late_micro} onChange={e => setMetricsForm({...metricsForm, late_micro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.late_macro} onChange={e => setMetricsForm({...metricsForm, late_macro: Number(e.target.value)})} />
+                        <input type="number" min="0" max="100" className="bg-black border border-white/10 rounded-lg p-3 text-center text-white" value={metricsForm.late_tf} onChange={e => setMetricsForm({...metricsForm, late_tf: Number(e.target.value)})} />
+                     </div>
+                  </div>
+               </div>
+               <div className="flex gap-4 pt-4 border-t border-white/5">
+                 <button type="button" onClick={() => setMetricsModalOpen(false)} className="px-6 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+                 <button type="submit" className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs hover:bg-blue-500 tracking-widest uppercase">SALVAR MÉTRICAS DO DIA</button>
+               </div>
+            </form>
+         </div>
+      )}
+
       {isScrimModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
-          <form onSubmit={handleSaveScrim} className="w-full max-w-4xl bg-[#121212] border border-white/20 rounded-[40px] p-8 md:p-10 space-y-6 shadow-[0_0_100px_rgba(255,255,255,0.1)] relative overflow-hidden my-auto">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-slate-500 to-white"></div>
-            <div className="text-center mb-6"><h2 className="text-3xl italic leading-none font-black text-white">{editScrimId ? "EDIT SCRIM REPORT" : "LOG SCRIM REPORT"}</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-2">AUDITORIA COMPORTAMENTAL</p></div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-               
-               <div className="space-y-4">
-                 <div className="flex gap-4 items-center">
-                    {scrimForm.opponent && <img src={getTeamLogo(scrimForm.opponent)} className="w-14 h-14 rounded-2xl border border-white/20 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />}
-                    <div className="flex-1">
-                       <label className="text-[10px] text-slate-500 ml-2">Adversário (Tag)</label>
-                       <select required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer" value={scrimForm.opponent} onChange={e => setScrimForm({...scrimForm, opponent: e.target.value})}>
-                          <option value="" disabled>SELECIONE A EQUIPE...</option>
-                          {teamsList.map(t => <option key={t.acronym} value={t.acronym}>{t.name} ({t.acronym})</option>)}
-                       </select>
-                    </div>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4">
-                    <div><label className="text-[10px] text-slate-500 ml-2">Data (Padrão: Hoje)</label><input type="date" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase" value={scrimForm.date} onChange={e => setScrimForm({...scrimForm, date: e.target.value})} /></div>
-                    <div>
-                       <label className="text-[10px] text-slate-500 ml-2">Modo de Jogo</label>
-                       <select value={scrimForm.mode} onChange={e => setScrimForm({...scrimForm, mode: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                         <option value="MD1">MD1</option><option value="MD2">MD2</option><option value="MD3">MD3</option><option value="MD5">MD5</option><option value="FEARLESS">FEARLESS</option>
-                       </select>
-                    </div>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4">
-                    <div>
-                       <label className="text-[10px] text-slate-500 ml-2">Resultado da Série</label>
-                       <div className="flex gap-2 mt-1">
-                         <button type="button" onClick={() => setScrimForm({...scrimForm, result: 'W'})} className={`flex-1 py-4 rounded-xl border-2 transition-all ${scrimForm.result === 'W' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-black/50 border-white/5 text-slate-500'}`}>VITÓRIA</button>
-                         <button type="button" onClick={() => setScrimForm({...scrimForm, result: 'L'})} className={`flex-1 py-4 rounded-xl border-2 transition-all ${scrimForm.result === 'L' ? 'bg-red-600 border-red-500 text-white' : 'bg-black/50 border-white/5 text-slate-500'}`}>DERROTA</button>
-                       </div>
-                    </div>
-                    <div><label className="text-[10px] text-slate-500 ml-2">Placar (Opcional)</label><input type="text" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase mt-1" placeholder="Ex: 2-1" value={scrimForm.score} onChange={e => setScrimForm({...scrimForm, score: e.target.value})} /></div>
-                 </div>
+          <form onSubmit={handleSaveScrim} className="w-full max-w-xl bg-[#121212] border border-white/20 rounded-[40px] p-8 space-y-6 shadow-2xl my-auto relative">
+            <h2 className="text-3xl italic font-black text-white text-center mb-6">LOG SCRIM DETAILS</h2>
+            <div className="space-y-4">
+               <div><label className="text-[10px] text-slate-500 ml-2">Comp Testada (Foco Geral)</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic outline-none" value={scrimForm.comp} onChange={e => setScrimForm({...scrimForm, comp: e.target.value})} /></div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div><label className="text-[10px] text-slate-500 ml-2">Dificuldade</label><select value={scrimForm.difficulty} onChange={e => setScrimForm({...scrimForm, difficulty: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic outline-none"><option value="STOMPAMOS">Stompamos</option><option value="MUITO FÁCIL">Muito Fácil</option><option value="FÁCIL">Fácil</option><option value="CONTROLADO">Controlado</option><option value="DIFÍCIL">Difícil</option><option value="MT DIFÍCIL">Muito Difícil</option><option value="STOMPADOS">Stompados</option></select></div>
+                  <div><label className="text-[10px] text-slate-500 ml-2">Pontualidade</label><select value={scrimForm.punctuality} onChange={e => setScrimForm({...scrimForm, punctuality: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic outline-none"><option value="PONTUAIS">Pontuais (Ambos)</option><option value="NOSSO ATRASO">Nosso Atraso</option><option value="ATRASO DELES">Atraso Deles</option><option value="DESMARCARAM NA HORA">Desmarcaram</option></select></div>
                </div>
-
-               <div className="space-y-4">
-                 <div><label className="text-[10px] text-slate-500 ml-2">Comp Testada (Foco Geral)</label><input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase" placeholder="Ex: Hard Engage, Split Push 1-3-1" value={scrimForm.comp} onChange={e => setScrimForm({...scrimForm, comp: e.target.value})} /></div>
-                 
-                 <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[10px] text-slate-500 ml-2">Nível de Dificuldade</label>
-                      <select value={scrimForm.difficulty} onChange={e => setScrimForm({...scrimForm, difficulty: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                        <option value="STOMPAMOS">Stompamos</option><option value="FÁCIL">Fácil</option><option value="CONTROLADO">Controlado</option><option value="DIFÍCIL">Difícil</option><option value="MT DIFÍCIL">Muito Difícil</option><option value="STOMPADOS">Stompados</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-500 ml-2">Pontualidade</label>
-                      <select value={scrimForm.punctuality} onChange={e => setScrimForm({...scrimForm, punctuality: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-white/50 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer">
-                        <option value="PONTUAIS">Pontuais (Ambos)</option><option value="NOSSO ATRASO">Nosso Atraso</option><option value="ATRASO DELES">Atraso Deles</option><option value="DESMARCARAM NA HORA">Desmarcaram</option>
-                      </select>
-                    </div>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4 items-start">
-                    <div>
-                      <label className="text-[10px] text-slate-500 ml-2">Remakes</label>
-                      <div className="flex gap-2 mt-1">
-                         {[0, 1, 2, 3].map(num => (<button key={num} type="button" onClick={() => setScrimForm({...scrimForm, remakes: num})} className={`flex-1 py-4 rounded-xl border-2 transition-all ${scrimForm.remakes === num ? 'bg-white text-black border-white' : 'bg-black/50 border-white/5 text-slate-500'}`}>{num}</button>))}
-                      </div>
-                    </div>
-                    <div>
-                       <label className="text-[10px] text-slate-500 ml-2">Match IDs (Separe por vírgula)</label>
-                       <textarea className="w-full bg-black border border-white/10 rounded-2xl px-6 py-3 text-white focus:border-white/50 outline-none transition-all font-black italic text-xs resize-none mt-1 h-[60px]" placeholder="BR1_123456, BR1_654321" value={scrimForm.match_ids} onChange={e => setScrimForm({...scrimForm, match_ids: e.target.value})}></textarea>
-                    </div>
-                 </div>
+               <div>
+                  <label className="text-[10px] text-slate-500 ml-2">Remakes (Problemas Técnicos/Draft)</label>
+                  <div className="flex gap-2 mt-1">{[0, 1, 2, 3].map(num => (<button key={num} type="button" onClick={() => setScrimForm({...scrimForm, remakes: num})} className={`flex-1 py-4 rounded-xl border-2 font-black ${scrimForm.remakes === num ? 'bg-white text-black border-white' : 'bg-black/50 border-white/5 text-slate-500'}`}>{num}</button>))}</div>
                </div>
             </div>
             <div className="flex gap-4 pt-6 border-t border-white/5">
-              <button type="button" onClick={() => setScrimModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-xs">CANCELAR</button>
-              <button type="submit" className="flex-1 px-8 py-4 bg-white text-black rounded-2xl hover:bg-gray-200 transition-all font-black uppercase text-xs tracking-widest shadow-[0_0_20px_rgba(255,255,255,0.2)]">
-                 {editScrimId ? "SALVAR ALTERAÇÕES" : "LOG REPORT"}
-              </button>
+              <button type="button" onClick={() => setScrimModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+              <button type="submit" className="flex-1 px-8 py-4 bg-white text-black rounded-2xl font-black text-xs hover:bg-gray-200">SALVAR DETALHES</button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL 6: WELLNESS HISTORY (Exclusivo Staff) */}
+      {isVodModalOpen && isStaff && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
+          <form onSubmit={handleAddVodTask} className="w-full max-w-xl bg-[#121212] border border-amber-500/20 rounded-[40px] p-8 space-y-6 shadow-2xl">
+            <h2 className="text-3xl italic font-black text-white text-center mb-6">NOVA TAREFA VOD</h2>
+            <div className="space-y-4">
+              <select className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic" value={vodForm.tag} onChange={e => setVodForm({...vodForm, tag: e.target.value})}><option value="MACRO">MACRO</option><option value="MICRO">MICRO</option><option value="DRAFT">DRAFT</option><option value="URGENTE">URGENTE</option></select>
+              <textarea required rows={3} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic focus:border-amber-500 outline-none" placeholder="O que analisar..." value={vodForm.text} onChange={e => setVodForm({...vodForm, text: e.target.value})} />
+            </div>
+            <div className="flex gap-4 pt-4 border-t border-white/5">
+              <button type="button" onClick={() => setVodModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+              <button type="submit" className="flex-1 px-8 py-4 bg-amber-500 text-black rounded-2xl font-black text-xs hover:bg-amber-400">ADICIONAR TAREFA</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {isWellnessModalOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
+          <form onSubmit={handleWellnessSubmit} className="w-full max-w-2xl bg-[#121212] border border-emerald-500/20 rounded-[40px] p-8 space-y-8 shadow-2xl">
+            <h2 className="text-3xl italic font-black text-white text-center">DAILY READINESS SYNC</h2>
+            <div className="space-y-4 mb-4"><select value={wellnessForm.puuid} disabled={!isStaff} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white font-black italic outline-none disabled:opacity-50">{roster.map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}</select></div>
+            <div className="space-y-8">
+               <WellnessInput icon="💤" title="Qualidade do Sono" desc="1 = Insônia/Péssimo | 5 = Recuperação Total" value={wellnessForm.sleep} onChange={(v: any) => setWellnessForm({...wellnessForm, sleep: v})} />
+               <WellnessInput icon="🧠" title="Estado Mental & Stress" desc="1 = Tiltado/Esgotado | 5 = Foco Total/Calmo" value={wellnessForm.mental} onChange={(v: any) => setWellnessForm({...wellnessForm, mental: v})} />
+               <WellnessInput icon="🦾" title="Dores & Fadiga Física" desc="1 = Dor forte | 5 = Zero Dor/Pronto" value={wellnessForm.physical} onChange={(v: any) => setWellnessForm({...wellnessForm, physical: v})} />
+            </div>
+            <div className="flex gap-4 pt-4 border-t border-white/5">
+              <button type="button" onClick={() => setWellnessModalOpen(false)} className="px-8 py-4 bg-white/5 text-white rounded-2xl font-black text-xs hover:bg-white/10">CANCELAR</button>
+              <button type="submit" className="flex-1 px-8 py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs hover:bg-emerald-500">SINCRONIZAR DADOS</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {wellnessHistoryModal.isOpen && wellnessHistoryModal.player && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <div className="w-full max-w-3xl bg-[#121212] border border-white/10 rounded-[40px] p-8 md:p-10 shadow-2xl relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-transparent"></div>
-            
+          <div className="w-full max-w-3xl bg-[#121212] border border-white/10 rounded-[40px] p-8 shadow-2xl relative">
             <div className="flex items-center justify-between mb-8">
-               <div className="flex items-center gap-4">
-                  <img src={wellnessHistoryModal.player.photo} className="w-12 h-12 rounded-full border-2 border-emerald-500/30 object-cover" />
-                  <div>
-                     <h2 className="text-2xl italic leading-none font-black text-white">{wellnessHistoryModal.player.name}</h2>
-                     <p className="text-[10px] text-slate-500 tracking-[0.3em] mt-1 uppercase">HISTÓRICO BIOMÉTRICO</p>
-                  </div>
-               </div>
+               <div className="flex items-center gap-4"><img src={wellnessHistoryModal.player.photo} className="w-12 h-12 rounded-full border-2 border-emerald-500/30 object-cover" /><div><h2 className="text-2xl italic font-black text-white">{wellnessHistoryModal.player.name}</h2><p className="text-[10px] text-slate-500 tracking-[0.3em] mt-1 uppercase">HISTÓRICO BIOMÉTRICO</p></div></div>
                <button onClick={() => setWellnessHistoryModal({ isOpen: false, player: null, history: [] })} className="text-slate-500 hover:text-white text-2xl font-black">&times;</button>
             </div>
-
             <div className="overflow-y-auto max-h-[400px] custom-scrollbar pr-2">
                <table className="w-full text-left border-separate border-spacing-y-2">
-                  <thead className="sticky top-0 bg-[#121212] z-10">
-                    <tr className="text-[9px] text-slate-600 tracking-[0.2em] uppercase">
-                      <th className="px-4 pb-2">DATA</th>
-                      <th className="px-4 pb-2 text-center">READINESS</th>
-                      <th className="px-4 pb-2 text-center">SONO</th>
-                      <th className="px-4 pb-2 text-center">MENTAL</th>
-                      <th className="px-4 pb-2 text-center">FÍSICO</th>
-                    </tr>
-                  </thead>
+                  <thead className="sticky top-0 bg-[#121212] z-10"><tr className="text-[9px] text-slate-600 tracking-[0.2em] uppercase"><th className="px-4 pb-2">DATA</th><th className="px-4 pb-2 text-center">READINESS</th><th className="px-4 pb-2 text-center">SONO</th><th className="px-4 pb-2 text-center">MENTAL</th><th className="px-4 pb-2 text-center">FÍSICO</th></tr></thead>
                   <tbody>
                     {wellnessHistoryModal.history.map((record: any) => (
-                      <tr key={record.record_date} className="bg-white/[0.02] hover:bg-white/[0.05] transition-all">
+                      <tr key={record.record_date} className="bg-white/[0.02] hover:bg-white/[0.05]">
                         <td className="p-4 rounded-l-2xl text-[10px] font-black text-slate-300 tracking-widest">{formatDate(record.record_date)}</td>
                         <td className="p-4 text-center"><span className={`text-sm font-black italic ${record.readiness_percent < 65 ? 'text-red-400' : record.readiness_percent > 85 ? 'text-emerald-400' : 'text-yellow-400'}`}>{record.readiness_percent}%</span></td>
-                        <td className="p-4 text-center text-xs">{record.sleep_score}</td>
-                        <td className="p-4 text-center text-xs">{record.mental_score}</td>
-                        <td className="p-4 text-center text-xs rounded-r-2xl">{record.physical_score}</td>
+                        <td className="p-4 text-center text-xs text-white font-black">{record.sleep_score}</td>
+                        <td className="p-4 text-center text-xs text-white font-black">{record.mental_score}</td>
+                        <td className="p-4 text-center text-xs text-white font-black rounded-r-2xl">{record.physical_score}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -880,35 +1205,42 @@ export default function DashboardPage() {
   );
 }
 
-// --- SUB-COMPONENTES DE UI ---
-
+// --- SUB-COMPONENTES ---
 function StatCard({ label, value, color, sub, icon }: any) {
   return (
     <div className="bg-[#121212] border border-white/5 p-8 rounded-[40px] hover:border-white/20 transition-all shadow-xl relative overflow-hidden group h-full">
-      <div className="absolute -right-4 -bottom-4 text-8xl opacity-5 group-hover:scale-110 group-hover:opacity-10 transition-all pointer-events-none grayscale">{icon}</div>
+      <div className="absolute -right-4 -bottom-4 text-8xl opacity-5 group-hover:scale-110 grayscale transition-all">{icon}</div>
       <div className="relative z-10 flex flex-col justify-center h-full">
-        <p className="text-[10px] text-slate-500 tracking-[0.3em] mb-2 uppercase">{label}</p>
-        <p className={`text-5xl font-black italic leading-none mb-3 ${color} drop-shadow-lg`}>{value}</p>
-        <div className="h-px w-12 bg-white/10 mb-3"></div>
-        <p className="text-[9px] text-slate-600 tracking-widest uppercase">{sub}</p>
+        <p className="text-[10px] text-slate-500 tracking-[0.3em] mb-2 uppercase font-black">{label}</p>
+        <p className={`text-5xl font-black italic leading-none mb-3 ${color}`}>{value}</p>
+        <p className="text-[9px] text-slate-600 tracking-widest uppercase font-black">{sub}</p>
       </div>
     </div>
   );
 }
 
 function Badge({ text, color }: { text: string, color: string }) {
-  return (
-    <span className={`${color} text-white text-[9px] px-3 py-1 rounded-full border border-white/10 shadow-lg tracking-widest uppercase`}>{text}</span>
-  );
+  return <span className={`${color} text-white text-[9px] px-3 py-1 rounded-full border border-white/10 shadow-lg tracking-widest uppercase font-black`}>{text}</span>;
 }
 
 function WellnessBar({ label, value }: { label: string, value: number }) {
-  const isDanger = value <= 2; const isMid = value === 3;
-  const color = isDanger ? 'bg-red-500' : isMid ? 'bg-yellow-500' : 'bg-emerald-500';
+  const color = value <= 2 ? 'bg-red-500' : value === 3 ? 'bg-yellow-500' : 'bg-emerald-500';
   return (
     <div className="flex items-center gap-3">
-      <span className="text-[7px] text-slate-500 w-10 text-right">{label}</span>
+      <span className="text-[7px] text-slate-500 w-10 text-right font-black">{label}</span>
       <div className="flex gap-1 flex-1">{[1, 2, 3, 4, 5].map((level) => (<div key={level} className={`h-1.5 flex-1 rounded-sm ${level <= value ? color : 'bg-white/5'}`}></div>))}</div>
+    </div>
+  );
+}
+
+function MiniStatBar({ label, value, color }: { label: string, value: number, color: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[8px] text-slate-500 tracking-widest uppercase w-16 truncate font-black">{label}</span>
+      <div className="flex-1 h-1.5 bg-black rounded-full overflow-hidden border border-white/5 relative">
+         <div className={`absolute top-0 left-0 h-full ${color} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }}></div>
+      </div>
+      <span className="text-[9px] font-black text-white w-6 text-right">{value}</span>
     </div>
   );
 }
@@ -921,21 +1253,9 @@ function WellnessInput({ icon, title, desc, value, onChange }: any) {
           {[1, 2, 3, 4, 5].map((num) => {
             const isActive = value === num; const isDanger = num <= 2; const isMid = num === 3;
             const activeColor = isDanger ? 'bg-red-600 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : isMid ? 'bg-yellow-600 border-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.4)]' : 'bg-emerald-600 border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]';
-            return (<button key={num} type="button" onClick={() => onChange(num)} className={`flex-1 py-4 rounded-xl border-2 text-lg font-black transition-all ${isActive ? `${activeColor} text-white` : 'bg-black/50 border-white/5 text-slate-600 hover:border-white/20'}`}>{num}</button>);
+            return (<button key={num} type="button" onClick={() => onChange(num)} className={`flex-1 py-4 rounded-xl border-2 text-lg font-black transition-all ${isActive ? `${activeColor} text-white` : 'bg-black/50 border-white/5 text-slate-600'}`}>{num}</button>);
           })}
        </div>
-    </div>
-  );
-}
-
-function MiniStatBar({ label, value, color }: { label: string, value: number, color: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-[8px] text-slate-500 tracking-widest uppercase w-16 truncate">{label}</span>
-      <div className="flex-1 h-1.5 bg-black rounded-full overflow-hidden border border-white/5 relative">
-         <div className={`absolute top-0 left-0 h-full ${color} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }}></div>
-      </div>
-      <span className="text-[9px] font-black text-white w-6 text-right">{value}</span>
     </div>
   );
 }

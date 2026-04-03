@@ -10,10 +10,11 @@ import {
 
 // --- CONFIGURAÇÕES GERAIS ---
 const DDRAGON_VERSION = '16.1.1'; 
-const ROLES_ORDER = ['top', 'jungle', 'mid', 'adc', 'support'];
+const ROLES_ORDER = ['top', 'jng', 'mid', 'adc', 'support'];
 const MAP_OFFSET = 3.5; 
 const MAP_SCALE = 93;   
 const GAME_MAX = 15000; 
+const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
 const SEQUENCE_LABELS: { [key: number]: string } = {
   1: 'bb1', 2: 'rb1', 3: 'bb2', 4: 'rb2', 5: 'bb3', 6: 'rb3',
@@ -56,11 +57,19 @@ function normalizeRole(lane: string | null): string {
   if (!lane) return 'mid';
   const l = lane.toLowerCase().trim();
   if (l.includes('top')) return 'top';
-  if (l.includes('jungle') || l.includes('jng') || l === 'jg') return 'jungle';
+  if (l.includes('jungle') || l.includes('jng') || l === 'jg' || l.includes('jug')) return 'jng';
   if (l.includes('mid')) return 'mid';
   if (l.includes('bot') || l.includes('adc')) return 'adc';
   if (l.includes('sup') || l.includes('utility')) return 'support';
   return 'support'; 
+}
+
+function sortPlayersByRole(playersArray: any[]) {
+  return [...playersArray].sort((a, b) => {
+    const roleA = normalizeRole(a.primary_role);
+    const roleB = normalizeRole(b.primary_role);
+    return ROLES_ORDER.indexOf(roleA) - ROLES_ORDER.indexOf(roleB);
+  });
 }
 
 function getChampionImageUrl(championName: string | null) {
@@ -85,7 +94,7 @@ function getRoleIcon(role: string, size: string = "w-5 h-5") {
   const normalizedRole = normalizeRole(role); 
   switch (normalizedRole) {
     case 'top': iconName = "icon-position-top.png"; break;
-    case 'jungle': iconName = "icon-position-jungle.png"; break;
+    case 'jng': iconName = "icon-position-jungle.png"; break;
     case 'mid': iconName = "icon-position-middle.png"; break;
     case 'adc': iconName = "icon-position-bottom.png"; break; 
     case 'support': iconName = "icon-position-utility.png"; break;
@@ -105,10 +114,11 @@ export default function PlayersHubPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   
   // =====================================
-  // ESTADOS GLOBAIS DE FILTRO (Padrões base)
+  // ESTADOS GLOBAIS DE FILTRO E LEADERBOARD
   // =====================================
   const [globalTournament, setGlobalTournament] = useState("CIRCUITO_DESAFIANTE");
   const [globalSplit, setGlobalSplit] = useState("SPLIT 1");
+  const [leaderboardTab, setLeaderboardTab] = useState<string>("GLOBAL");
 
   const [teamChartData, setTeamChartData] = useState<any[]>([]);
   const [teamObjectiveWindows, setTeamObjectiveWindows] = useState<any[]>([]);
@@ -318,6 +328,15 @@ export default function PlayersHubPage() {
     return s ? { name: OBJECTIVE_LABELS[objKey], key: objKey, window: [s.min_minute, s.max_minute], avg: s.avg_minute, icon: assets?.icon, hoverImg: assets?.hover } : null;
   }).filter(Boolean), [teamObjectiveWindows, heatmapSide]);
 
+  // --- CÁLCULO DO MASTER LEADERBOARD ---
+  const leaderboardPlayers = useMemo(() => {
+    let targetPlayers = [...players];
+    if (leaderboardTab !== 'GLOBAL') {
+      targetPlayers = targetPlayers.filter(p => normalizeRole(p.primary_role) === leaderboardTab.toLowerCase());
+    }
+    return targetPlayers.sort((a, b) => (b.mvp_score || 0) - (a.mvp_score || 0));
+  }, [players, leaderboardTab]);
+
   const handleSaveChanges = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true);
     try {
@@ -341,7 +360,6 @@ export default function PlayersHubPage() {
   return (
     <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-black uppercase italic tracking-tighter pb-20 overflow-visible">
       
-      {/* HEADER PRINCIPAL & FILTROS GLOBAIS ESTILIZADOS */}
       <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-white/5 pb-8 relative z-[200]">
         <div className="border-l-4 border-blue-500 pl-4">
           <h1 className="text-4xl text-white leading-none">SCOUTING <span className="text-blue-500">HUB</span></h1>
@@ -354,13 +372,12 @@ export default function PlayersHubPage() {
         </div>
       </header>
 
-      {/* FILTROS DE TEAM E SIDE BIAS DOUGHNUT */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[100] overflow-visible">
-        <div className="flex flex-wrap gap-2 flex-1">
-          <button onClick={() => setFilterTeam("TODOS")} className={`px-5 py-2 rounded-xl text-[10px] transition-all ${filterTeam === "TODOS" ? 'bg-white text-black' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>TODOS</button>
+        <div className="flex flex-wrap justify-center gap-3 flex-1">
+          <button onClick={() => setFilterTeam("TODOS")} className={`px-6 py-2.5 rounded-xl text-[10px] transition-all ${filterTeam === "TODOS" ? 'bg-white text-black' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>TODOS</button>
           {teams.map(t => (
-            <button key={t.acronym} onClick={() => setFilterTeam(t.acronym)} className={`px-5 py-2 rounded-xl text-[10px] flex items-center gap-2 transition-all ${filterTeam === t.acronym ? 'bg-blue-600 text-white shadow-lg border-transparent' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>
-              {t.logo_url && <img src={t.logo_url} alt="" className="w-3.5 h-3.5 object-contain" />}{t.acronym}
+            <button key={t.acronym} onClick={() => setFilterTeam(t.acronym)} className={`px-6 py-2.5 rounded-xl text-[10px] flex items-center gap-2.5 transition-all ${filterTeam === t.acronym ? 'bg-blue-600 text-white shadow-lg border-transparent' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>
+              {t.logo_url && <img src={t.logo_url} alt="" className="w-5 h-5 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]" />}{t.acronym}
             </button>
           ))}
         </div>
@@ -394,26 +411,105 @@ export default function PlayersHubPage() {
       </div>
 
       {filterTeam === "TODOS" ? (
-        <div className="space-y-16 overflow-visible">
-          {ROLES_ORDER.map(role => {
-            const rolePlayers = players.filter(p => normalizeRole(p.primary_role) === role);
-            if (!rolePlayers.length) return null;
-            return (
-              <div key={role} className="w-full overflow-visible">
-                <h2 className="text-2xl text-white mb-8 flex items-center gap-4">
-                  <span className="bg-[#121212] p-2 rounded-lg border border-white/5">{getRoleIcon(role, "w-6 h-6")}</span>
-                  {role}
-                </h2>
-                <div className="flex overflow-x-auto gap-6 pb-8 pt-6 -mt-6 snap-x custom-scrollbar overflow-y-visible">
-                  {rolePlayers.map(p => (
-                    <div key={p.puuid} className="min-w-[280px] snap-start py-2">
-                      <PlayerCard player={p} teams={teams} isAdmin={isAdmin} onEdit={() => { setEditForm(p); setIsEditModalOpen(true); }} />
+        <div className="bg-[#121212] border border-white/5 rounded-[40px] p-6 md:p-10 shadow-2xl relative overflow-hidden">
+          {/* Fundo Decorativo Fuchsia para o MVP global */}
+          <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-fuchsia-500/5 blur-[120px] rounded-full pointer-events-none" />
+
+          <div className="flex flex-col md:flex-row justify-between items-center mb-10 relative z-10 gap-6">
+            <div>
+              <h2 className="text-3xl text-white flex items-center gap-3">
+                <span className="text-fuchsia-500">🏆</span> POWER RANKINGS
+              </h2>
+              <p className="text-[9px] text-slate-500 tracking-[0.3em] mt-2">ALGORITMO DE EFICIÊNCIA TIER 2</p>
+            </div>
+
+            {/* TAB SELETOR DO LEADERBOARD */}
+            <div className="flex gap-2 bg-black/40 p-1.5 rounded-2xl border border-white/5 overflow-x-auto max-w-full custom-scrollbar">
+              <button 
+                onClick={() => setLeaderboardTab('GLOBAL')} 
+                className={`px-6 py-3 rounded-xl text-[10px] transition-all flex items-center gap-2 whitespace-nowrap ${leaderboardTab === 'GLOBAL' ? 'bg-gradient-to-r from-fuchsia-600 to-pink-600 text-white shadow-[0_0_15px_rgba(232,121,249,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+              >
+                ★ GLOBAL
+              </button>
+              {ROLES_ORDER.map(role => (
+                <button 
+                  key={role} 
+                  onClick={() => setLeaderboardTab(role.toUpperCase())} 
+                  className={`px-5 py-3 rounded-xl text-[10px] transition-all flex items-center gap-2 whitespace-nowrap ${leaderboardTab === role.toUpperCase() ? 'bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                >
+                  <span className="opacity-70">{getRoleIcon(role, "w-4 h-4")}</span> {role.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* LISTA DO LEADERBOARD */}
+          <div className="space-y-3 relative z-10">
+            {/* Cabeçalho da Lista */}
+            <div className="hidden md:flex items-center px-6 py-2 text-[8px] text-slate-600 tracking-widest border-b border-white/5 mb-4">
+               <div className="w-12 text-center">RANK</div>
+               <div className="w-[250px] ml-4">OPERATIVO</div>
+               <div className="flex-1 text-center opacity-70">ATRIBUTOS TÁTICOS</div>
+               <div className="w-24 text-right">RATING GERAL</div>
+            </div>
+
+            {leaderboardPlayers.length === 0 ? (
+              <div className="text-center py-20 text-slate-600 text-xs tracking-widest">NENHUM OPERATIVO ENCONTRADO.</div>
+            ) : (
+              leaderboardPlayers.map((p, index) => {
+                const isTop1 = index === 0;
+                const team = teams.find((t: any) => t.acronym === p.team_acronym);
+                const roleIcon = getRoleIcon(p.primary_role, "w-3 h-3");
+                
+                return (
+                  <Link 
+                    key={p.puuid} 
+                    href={`/dashboard/players/${p.puuid}`} 
+                    className={`flex flex-col md:flex-row items-center p-4 md:p-5 rounded-3xl border transition-all group relative overflow-hidden ${isTop1 ? 'bg-gradient-to-r from-fuchsia-500/10 via-black to-black border-fuchsia-500/30 hover:border-fuchsia-400 shadow-[0_0_20px_rgba(232,121,249,0.05)]' : 'bg-black/40 border-white/5 hover:border-blue-500/40 hover:bg-[#1a1c23]'}`}
+                  >
+                    {isTop1 && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-fuchsia-400 to-pink-600 shadow-[0_0_10px_rgba(232,121,249,0.5)]" />}
+                    
+                    {/* INFO RANK E FOTO */}
+                    <div className="flex w-full md:w-auto items-center justify-between md:justify-start mb-4 md:mb-0">
+                      <span className={`text-3xl font-black w-12 text-center ${isTop1 ? 'text-fuchsia-400 drop-shadow-[0_0_10px_rgba(232,121,249,0.5)]' : 'text-slate-700 group-hover:text-slate-500 transition-colors'}`}>
+                        #{index + 1}
+                      </span>
+                      
+                      <div className="flex items-center gap-4 flex-1 md:w-[250px] ml-4">
+                        <img src={p.photo_url || DEFAULT_AVATAR} className={`w-14 h-14 object-cover rounded-[18px] border-2 ${isTop1 ? 'border-fuchsia-500/50 shadow-[0_0_15px_rgba(232,121,249,0.2)]' : 'border-white/5 shadow-lg'}`} alt="" />
+                        <div className="flex flex-col">
+                          <span className={`text-lg tracking-tighter leading-none ${isTop1 ? 'text-white' : 'text-slate-300 group-hover:text-white transition-colors'}`}>{p.nickname}</span>
+                          <div className="flex items-center gap-2 mt-2 bg-black/40 px-2 py-1 rounded-md border border-white/5 w-fit">
+                            {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]" />}
+                            <span className="text-[8px] text-slate-400 tracking-widest">{p.team_acronym}</span>
+                            <span className="text-slate-600">|</span>
+                            {leaderboardTab === 'GLOBAL' && <span className="opacity-70">{roleIcon}</span>}
+                            <span className="text-[8px] text-slate-500">{p.games_played}G</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+
+                    {/* PROGRESS BARS HORIZONTAIS */}
+                    <div className="flex-1 w-full max-w-[600px] ml-auto mr-8 hidden md:grid grid-cols-4 gap-6 items-center">
+                      <ProgressBar label="LANE" value={p.median_lane} />
+                      <ProgressBar label="IMPACTO" value={p.median_impact} />
+                      <ProgressBar label="CONV." value={p.median_conversion} />
+                      <ProgressBar label="VISÃO" value={p.median_vision} />
+                    </div>
+
+                    {/* RATING GERAL */}
+                    <div className="flex flex-col items-end justify-center w-full md:w-24 mt-4 md:mt-0 pt-4 md:pt-0 border-t md:border-t-0 border-white/5">
+                      <span className={`text-[7px] mb-1 tracking-widest ${isTop1 ? 'text-fuchsia-500/70' : 'text-slate-600'}`}>RATING</span>
+                      <span className={`text-3xl font-black leading-none ${isTop1 ? 'text-fuchsia-400' : getScoreColor(p.mvp_score).split(' ')[0]}`}>
+                        {Math.round(p.mvp_score || 0)}
+                      </span>
+                    </div>
+                  </Link>
+                );
+              })
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-12">
@@ -444,7 +540,21 @@ export default function PlayersHubPage() {
               Tactical Operations Unit (Active Roster)
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 overflow-visible">
-              {players.filter(p => p.team_acronym === filterTeam).map(p => <PlayerCard key={p.puuid} player={p} teams={teams} isAdmin={isAdmin} onEdit={() => { setEditForm(p); setIsEditModalOpen(true); }} />)}
+              {(() => {
+                const teamPlayers = sortPlayersByRole(players.filter(p => p.team_acronym === filterTeam));
+                const maxTeamScore = Math.max(...teamPlayers.map(p => p.mvp_score || 0));
+                
+                return teamPlayers.map(p => (
+                  <PlayerCard 
+                    key={p.puuid} 
+                    player={p} 
+                    teams={teams} 
+                    isAdmin={isAdmin} 
+                    isTeamMVP={p.mvp_score === maxTeamScore && maxTeamScore > 0}
+                    onEdit={() => { setEditForm(p); setIsEditModalOpen(true); }} 
+                  />
+                ));
+              })()}
             </div>
           </section>
 
@@ -462,7 +572,6 @@ export default function PlayersHubPage() {
                 <div className="absolute inset-0 z-21 opacity-[0.05] pointer-events-none" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                 <div className="absolute inset-0 z-25 pointer-events-none">
                   {activeWards.map(w => {
-                    // MUDANÇA OFICIAL: Lendo direto das colunas puras ward_x e ward_y
                     const posX = MAP_OFFSET + ((w.ward_x || 0) / GAME_MAX) * MAP_SCALE;
                     const posY = MAP_OFFSET + ((w.ward_y || 0) / GAME_MAX) * MAP_SCALE;
                     const isControl = w.type?.toLowerCase().includes('control');
@@ -577,26 +686,70 @@ export default function PlayersHubPage() {
 
 // --- SUB-COMPONENTES DE ESTILO ---
 
-function PlayerCard({ player, teams, isAdmin, onEdit }: any) {
-  const team = teams.find((t: any) => t.acronym === player.team_acronym);
-  const isMVP = player.is_mvp;
+function ProgressBar({ label, value }: { label: string, value: number }) {
+  const numValue = Math.round(value || 0);
+  let colorClass = "bg-slate-600 shadow-none";
   
+  if (numValue >= 90) colorClass = "bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.5)]";
+  else if (numValue >= 80) colorClass = "bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]";
+  else if (numValue >= 70) colorClass = "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]";
+  else if (numValue >= 60) colorClass = "bg-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.5)]";
+  else if (numValue > 0) colorClass = "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]";
+
+  return (
+    <div className="flex flex-col w-full group/bar">
+      <div className="flex justify-between items-end mb-1.5 px-1">
+        <span className="text-[9px] text-slate-500 tracking-widest font-black uppercase group-hover/bar:text-slate-300 transition-colors">{label}</span>
+        <span className="text-[12px] font-mono text-white font-black">{numValue}</span>
+      </div>
+      <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
+        <div className={`h-full rounded-full ${colorClass} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, numValue))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
+  const team = teams.find((t: any) => t.acronym === player.team_acronym);
+  const isGlobalMVP = player.is_mvp;
+  
+  let cardBorder = 'border-white/5 hover:border-blue-500/50';
+  let cardShadow = 'shadow-xl';
+  let cardBg = 'bg-[#121212]';
+  let nameColor = 'text-white';
+  
+  if (isGlobalMVP) {
+    cardBorder = 'border-fuchsia-500/50';
+    cardShadow = 'shadow-[0_0_30px_rgba(232,121,249,0.1)]';
+    nameColor = 'text-fuchsia-400 drop-shadow-[0_0_10px_rgba(232,121,249,0.3)]';
+  } else if (isTeamMVP) {
+    cardBorder = 'border-amber-500/50';
+    cardShadow = 'shadow-[0_0_30px_rgba(251,191,36,0.1)]';
+    nameColor = 'text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.3)]';
+  }
+
   return (
     <div className="relative group h-full overflow-visible">
       {isAdmin && <button onClick={(e) => { e.preventDefault(); onEdit(); }} className="absolute -top-2 -right-2 z-50 bg-blue-600 hover:bg-blue-500 p-2 rounded-xl opacity-0 group-hover:opacity-100 transition-all text-white shadow-xl">✏️</button>}
       
-      {isMVP && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-40 bg-gradient-to-r from-amber-400 to-yellow-600 text-black text-[9px] font-black px-4 py-1 rounded-full shadow-[0_0_20px_rgba(251,191,36,0.5)] italic tracking-[0.2em] border border-black/50">
+      {isGlobalMVP && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-40 bg-gradient-to-r from-fuchsia-400 to-pink-600 text-white text-[9px] font-black px-4 py-1 rounded-full shadow-[0_0_20px_rgba(232,121,249,0.5)] italic tracking-[0.2em] border border-white/20">
           SEASON_MVP
         </div>
       )}
+      {!isGlobalMVP && isTeamMVP && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-40 bg-gradient-to-r from-amber-400 to-yellow-600 text-black text-[9px] font-black px-4 py-1 rounded-full shadow-[0_0_20px_rgba(251,191,36,0.5)] italic tracking-[0.2em] border border-black/50">
+          TEAM_STAR
+        </div>
+      )}
 
-      <Link href={`/dashboard/players/${player.puuid}`} className={`bg-[#121212] border transition-all flex flex-col items-center block h-full p-6 rounded-[32px] relative overflow-hidden shadow-xl ${isMVP ? 'border-amber-500/50 shadow-[0_0_30px_rgba(251,191,36,0.1)]' : 'border-white/5 hover:border-blue-500/50'}`}>
+      <Link href={`/dashboard/players/${player.puuid}`} className={`${cardBg} border transition-all flex flex-col items-center block h-full p-6 rounded-[32px] relative overflow-hidden ${cardShadow} ${cardBorder}`}>
         
-        {isMVP && <div className="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent pointer-events-none" />}
+        {isGlobalMVP && <div className="absolute inset-0 bg-gradient-to-b from-fuchsia-500/10 to-transparent pointer-events-none" />}
+        {!isGlobalMVP && isTeamMVP && <div className="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent pointer-events-none" />}
         
         <div className="relative mb-6">
-          <div className={`p-1 rounded-[28px] transition-all duration-500 group-hover:scale-105 ${isMVP ? 'bg-gradient-to-tr from-amber-400 to-yellow-600 shadow-[0_0_20px_rgba(251,191,36,0.3)]' : 'bg-white/5'}`}>
+          <div className={`p-1 rounded-[28px] transition-all duration-500 group-hover:scale-105 ${isGlobalMVP ? 'bg-gradient-to-tr from-fuchsia-400 to-pink-600 shadow-[0_0_20px_rgba(232,121,249,0.3)]' : isTeamMVP ? 'bg-gradient-to-tr from-amber-400 to-yellow-600 shadow-[0_0_20px_rgba(251,191,36,0.3)]' : 'bg-white/5'}`}>
             <div className="relative w-20 h-20 bg-[#1a1a1a] rounded-[24px] overflow-hidden flex items-center justify-center">
               <div className="absolute inset-0 bg-white/5 blur-xl opacity-20" />
               {player.photo_url ? (
@@ -611,13 +764,13 @@ function PlayerCard({ player, teams, isAdmin, onEdit }: any) {
           </div>
         </div>
 
-        <h3 className={`text-xl font-black italic text-center truncate w-full mb-2 tracking-tighter ${isMVP ? 'text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.3)]' : 'text-white'}`}>
+        <h3 className={`text-xl font-black italic text-center truncate w-full mb-2 tracking-tighter ${nameColor}`}>
           {player.nickname}
         </h3>
         
-        <div className="flex items-center gap-2 mb-8 px-3 py-1 rounded-full bg-black/40 border border-white/5">
-          {team?.logo_url && <img src={team.logo_url} alt="" className="w-3.5 h-3.5 object-contain" />}
-          <p className="text-slate-500 font-bold text-[9px] tracking-widest">{player.team_acronym} • {player.games_played}G</p>
+        <div className="flex items-center gap-2.5 mb-8 px-4 py-1.5 rounded-full bg-black/40 border border-white/5">
+          {team?.logo_url && <img src={team.logo_url} alt="" className="w-6 h-6 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />}
+          <p className="text-slate-400 font-bold text-[10px] tracking-widest">{player.team_acronym} • {player.games_played}G</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2 w-full mt-auto relative z-10">
@@ -707,7 +860,7 @@ function RatingLine({ label, value }: { label: string, value: number }) {
   );
 }
 
-// --- NOVOS DROPDOWNS CUSTOMIZADOS DE CAMPEONATO E SPLIT ---
+// --- DROPDOWNS CUSTOMIZADOS ---
 
 function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -811,8 +964,6 @@ function SplitSelector({ value, onChange }: { value: string, onChange: (val: str
     </div>
   );
 }
-
-// --- DROPDOWNS E TOOLTIPS ANTIGOS ---
 
 function ObjectiveSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
   const [isOpen, setIsOpen] = useState(false);
