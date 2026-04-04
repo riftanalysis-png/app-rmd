@@ -97,21 +97,25 @@ export default function DashboardPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const upcomingMissions = useMemo(() => {
-     const today = new Date();
-     const tomorrow = new Date();
-     tomorrow.setDate(today.getDate() + 1);
+    const today = new Date();
+    // Pega o YYYY-MM-DD local sem converter para UTC
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
 
-     const todayStr = today.toISOString().split('T')[0];
-     const tomorrowStr = tomorrow.toISOString().split('T')[0];
-     
-     return missionsRaw
-        .filter(m => m.mission_date === todayStr || m.mission_date === tomorrowStr)
-        .sort((a, b) => {
-           const dateTimeA = `${a.mission_date}T${a.mission_time || '00:00:00'}`;
-           const dateTimeB = `${b.mission_date}T${b.mission_time || '00:00:00'}`;
-           return dateTimeA.localeCompare(dateTimeB);
-        });
-  }, [missionsRaw]);
+    return missionsRaw
+       .filter(m => m.mission_date === todayStr || m.mission_date === tomorrowStr)
+       .sort((a, b) => {
+          const dateTimeA = `${a.mission_date}T${a.mission_time || '00:00:00'}`;
+          const dateTimeB = `${b.mission_date}T${b.mission_time || '00:00:00'}`;
+          return dateTimeA.localeCompare(dateTimeB);
+       });
+}, [missionsRaw]);
 
   useEffect(() => {
     async function fetchDashboardData() {
@@ -199,7 +203,9 @@ export default function DashboardPage() {
          }
       }
 
-      const todayStr = new Date().toISOString().split('T')[0];
+      // Dentro do useEffect principal, troque o todayStr:
+const now = new Date();
+const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       if (wellnessRes.data) {
         setTeamWellness(activeRoster.map(p => {
            const pRecs = wellnessRes.data.filter((w: any) => w.puuid === p.puuid);
@@ -254,36 +260,62 @@ export default function DashboardPage() {
 
   const groupedSeries = useMemo(() => {
     const groups: { [key: string]: any } = {};
+    
     filteredMatches.forEach(m => {
-      const blueTag = m.blue_team_tag || m.blue_tag || 'BLU';
-      const redTag = m.red_team_tag || m.red_tag || 'RED';
       const isScrim = String(m.game_type).toUpperCase().includes('SCRIM');
+      
+      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? (m.red_team_tag || m.red_tag) : (m.blue_team_tag || m.blue_tag);
       
       let dateRaw = 'unknown-date';
       let timeRaw = '00:00';
+      
       if (m.game_start_time) {
           const d = new Date(String(m.game_start_time).replace(' ', 'T'));
+          
           if (!isNaN(d.getTime())) {
-             const originalHour = d.getHours();
-             const originalMin = String(d.getMinutes()).padStart(2, '0');
-             timeRaw = `${String(originalHour).padStart(2, '0')}:${originalMin}`;
+             // 1. CORREÇÃO DO FUSO (BRT):
+             // Subtraímos 3 horas do horário bruto. 
+             // Assim, o jogo de 00:00 UTC (Quinta) volta a ser 21:00 (Quarta).
+             d.setHours(d.getHours() - 3);
+
+             // 2. REGRA DA MADRUGADA (Só para Scrims):
+             // Se for scrim e estiver rolando antes das 6 da manhã (já com o fuso corrigido),
+             // subtrai mais 6 horas pra cair no calendário do dia anterior.
+             if (isScrim && d.getHours() < 6) {
+                 d.setHours(d.getHours() - 6);
+             }
+
+             // Salva a hora exata corrigida
+             timeRaw = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
              
-             if (isScrim && originalHour < 6) d.setHours(d.getHours() - 6);
-             const year = d.getFullYear(); const month = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
+             const year = d.getFullYear(); 
+             const month = String(d.getMonth() + 1).padStart(2, '0'); 
+             const day = String(d.getDate()).padStart(2, '0');
              dateRaw = `${year}-${month}-${day}`;
           }
       }
       
-      let sId = isScrim ? `SCRIM_${dateRaw}_${[blueTag, redTag].sort().join('-')}` : (m.series_id || `solo_${m.id || m.match_id}`);
+      // 3. NOVO AGRUPAMENTO PARA OFICIAIS:
+      // Agora, em vez de usar o 'series_id' (que pode juntar a semana toda), 
+      // nós quebramos os jogos oficiais estritamente por DATA e ADVERSÁRIO.
+      let sId = isScrim ? `SCRIM_${dateRaw}_${opp}` : `OFICIAL_${dateRaw}_${opp}`;
+      
       if (!groups[sId]) {
-        groups[sId] = { id: sId, isScrim: isScrim, calendarDate: dateRaw, time: timeRaw, teamA: { tag: blueTag, logo: m.blue_logo }, teamB: { tag: redTag, logo: m.red_logo }, scoreA: 0, scoreB: 0, games: [] };
+        groups[sId] = { id: sId, isScrim: isScrim, calendarDate: dateRaw, time: timeRaw, opp: opp || 'UNKNOWN', ourWins: 0, theirWins: 0, games: [] };
       }
       groups[sId].games.push(m);
-      if (m.winner_side === 'blue') groups[sId].scoreA++;
-      else if (m.winner_side === 'red') groups[sId].scoreB++;
+      
+      const isOurWin = (weAreBlue && m.winner_side === 'blue') || (!weAreBlue && m.winner_side === 'red');
+      if (isOurWin) {
+          groups[sId].ourWins++;
+      } else {
+          groups[sId].theirWins++;
+      }
     });
+    
     return Object.values(groups);
-  }, [filteredMatches]);
+  }, [filteredMatches, myTeamTag]);
 
   const calendarGrid = useMemo(() => {
     const year = currentDate.getFullYear();
@@ -297,26 +329,26 @@ export default function DashboardPage() {
     for(let i = 1; i <= daysInMonth; i++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
         
-        // 1. Pega os eventos reais (jogos que já aconteceram e foram upados)
+        // 1. Jogos Reais (Puxa do novo groupedSeries)
         const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
-            const weAreBlue = String(g.teamA.tag).toUpperCase().includes(myTeamTag);
-            const opp = weAreBlue ? g.teamB.tag : g.teamA.tag;
-            const ourScore = weAreBlue ? g.scoreA : g.scoreB;
-            const theirScore = weAreBlue ? g.scoreB : g.scoreA;
-            return { id: g.id, time: g.time, opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${ourScore} - ${theirScore} ${ourScore > theirScore ? 'W' : theirScore > ourScore ? 'L' : 'D'}`, isWin: ourScore > theirScore, isPast: true };
+            const ourScore = g.ourWins;
+            const theirScore = g.theirWins;
+            return { id: g.id, time: g.time, opp: g.opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${ourScore} - ${theirScore} ${ourScore > theirScore ? 'W' : theirScore > ourScore ? 'L' : 'D'}`, isWin: ourScore > theirScore, isPast: true };
         });
 
-        // NOME DA MÁGICA: Extrai uma lista com as tags dos oponentes que já jogamos nesse dia
-        const opponentsPlayedToday = pastEvents.map(ev => ev.opp);
+        // Extrai quem já jogamos pra poder limpar a agenda
+        const opponentsPlayedToday = pastEvents.map(ev => String(ev.opp).toUpperCase().trim());
 
-        // 2. Pega os eventos agendados, MAS FILTRA se já tivermos jogos reais contra eles
+        // 2. Missões Agendadas
         const futureEvents = missionsRaw.filter(m => m.mission_date === dateStr).map(m => {
             const info = m.status ? m.status.split('|') : [];
             const gamesCount = info[1] ? info[1].trim() : 'TBD';
             return { id: m.id, time: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', opp: m.opponent_acronym, type: m.mission_type, mode: gamesCount, isPast: false, rawMission: m };
         }).filter(mission => {
-            // Se o oponente da missão já está na lista de jogos reais do dia, não renderiza a missão
-            return !opponentsPlayedToday.includes(mission.opp);
+            // Regra do espião: Se já tiver um resultado real no banco contra essa mesma tag (ou tag parecida), esconde do calendário
+            const missionOpp = String(mission.opp).toUpperCase().trim();
+            const isDuplicate = opponentsPlayedToday.some(playedOpp => playedOpp.includes(missionOpp) || missionOpp.includes(playedOpp));
+            return !isDuplicate;
         });
 
         grid.push({ day: i, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0], events: [...pastEvents, ...futureEvents].sort((a,b) => a.time.localeCompare(b.time)) });
@@ -324,7 +356,7 @@ export default function DashboardPage() {
     
     while(grid.length % 7 !== 0) grid.push(null);
     return grid;
-  }, [currentDate, groupedSeries, missionsRaw, myTeamTag]);
+  }, [currentDate, groupedSeries, missionsRaw]);
 
   const stats = useMemo(() => {
     const total = filteredMatches.length;
@@ -548,20 +580,36 @@ export default function DashboardPage() {
   }
 
   const handleSaveMission = async (e: React.FormEvent) => { 
-      e.preventDefault(); 
-      let d = missionForm.date; 
-      if (d.includes('/')) { const p = d.split('/'); d = `${p.length === 3 ? p[2] : new Date().getFullYear()}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`; } 
-      const t = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time; 
-      const statusEncoded = `SCHEDULED | ${missionForm.gamesCount} | ${missionForm.draftMode}`;
-      const payload = { team_acronym: myTeamTag, mission_date: d, mission_time: t, opponent_acronym: missionForm.opponent, mission_type: missionForm.type, status: statusEncoded }; 
-      if (editMissionId) { 
-          const { data, error } = await supabase.from('missions').update(payload).eq('id', editMissionId).select(); 
-          if (data) { setMissionsRaw(prev => prev.map(m => m.id === editMissionId ? data[0] : m)); setMissionModalOpen(false); } 
-      } else { 
-          const { data, error } = await supabase.from('missions').insert([payload]).select(); 
-          if (data) { setMissionsRaw(prev => [...prev, data[0]]); setMissionModalOpen(false); } 
-      } 
-  };
+    e.preventDefault(); 
+    
+    // Garante que a data seja salva exatamente como o input mandou (YYYY-MM-DD)
+    const d = missionForm.date; 
+    const t = missionForm.time.length === 5 ? `${missionForm.time}:00` : missionForm.time; 
+    
+    const statusEncoded = `SCHEDULED | ${missionForm.gamesCount} | ${missionForm.draftMode}`;
+    const payload = { 
+        team_acronym: myTeamTag, 
+        mission_date: d, 
+        mission_time: t, 
+        opponent_acronym: missionForm.opponent, 
+        mission_type: missionForm.type, 
+        status: statusEncoded 
+    }; 
+
+    if (editMissionId) { 
+        const { data, error } = await supabase.from('missions').update(payload).eq('id', editMissionId).select(); 
+        if (data) { 
+            setMissionsRaw(prev => prev.map(m => m.id === editMissionId ? data[0] : m)); 
+            setMissionModalOpen(false); 
+        } 
+    } else { 
+        const { data, error } = await supabase.from('missions').insert([payload]).select(); 
+        if (data) { 
+            setMissionsRaw(prev => [...prev, data[0]]); 
+            setMissionModalOpen(false); 
+        } 
+    } 
+};
 
   const handleDeleteMission = async (id: string) => { if (!window.confirm("Deseja excluir?")) return; await supabase.from('missions').delete().eq('id', id); setMissionsRaw(prev => prev.filter(m => m.id !== id)); setMissionModalOpen(false); };
   
