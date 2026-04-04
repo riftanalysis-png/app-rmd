@@ -90,7 +90,14 @@ export default function DashboardLayout({
             <li>
               <Link href="/dashboard/meta" className={`flex items-center gap-4 px-2 py-3 rounded-lg transition-colors group ${pathname.includes('/dashboard/meta') ? 'text-white' : 'text-slate-400 hover:text-white'}`}>
                 <TargetIcon className={`w-6 h-6 group-hover:scale-105 transition-transform ${pathname.includes('/dashboard/meta') ? 'text-purple-500' : ''}`} />
-                <span className="hidden xl:block font-bold text-sm tracking-wide uppercase italic">Intel / Meta Game</span>
+                <span className="hidden xl:block font-bold text-sm tracking-wide uppercase italic">Intel / Meta</span>
+              </Link>
+            </li>
+            {/* NOVO LINK: COMPARAÇÃO */}
+            <li>
+              <Link href="/dashboard/comparison" className={`flex items-center gap-4 px-2 py-3 rounded-lg transition-colors group ${pathname.includes('/dashboard/comparison') ? 'text-white' : 'text-slate-400 hover:text-white'}`}>
+                <CompareIcon className={`w-6 h-6 group-hover:scale-105 transition-transform ${pathname.includes('/dashboard/comparison') ? 'text-purple-500' : ''}`} />
+                <span className="hidden xl:block font-bold text-sm tracking-wide uppercase italic">Comparação</span>
               </Link>
             </li>
           </ul>
@@ -124,7 +131,7 @@ export default function DashboardLayout({
                     href="/dashboard/admin/upload" 
                     isActive={pathname.includes('/dashboard/admin/upload')} 
                   />
-                  {/* NOVO BOTÃO DE CONFIGURAÇÃO - APENAS ANALISTA */}
+                  {/* BOTÃO DE CONFIGURAÇÃO - APENAS ANALISTA */}
                   {userRole.toLowerCase() === 'analista' && (
                     <SidebarItem 
                       title="Configurações" 
@@ -139,7 +146,7 @@ export default function DashboardLayout({
              )}
           </div>
           
-          {/* Assinatura / User Info no rodapé - DINÂMICO E PUXANDO DO BANCO */}
+          {/* Assinatura / User Info no rodapé */}
           <div className="mt-auto border-t border-slate-800 pt-4 hidden xl:block">
              <p className="text-[9px] text-slate-500 uppercase tracking-widest font-black italic truncate">{userName}</p>
              <p className="text-[10px] text-purple-400 font-mono mt-1">{userRole.toUpperCase()}</p>
@@ -233,6 +240,18 @@ function SettingsIcon({ className }: { className?: string }) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <circle cx="12" cy="12" r="3"></circle>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  );
+}
+
+// Ícone novo para a aba de Comparação
+function CompareIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="18" cy="18" r="3"></circle>
+      <circle cx="6" cy="6" r="3"></circle>
+      <path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+      <path d="M11 18H8a2 2 0 0 1-2-2V9"></path>
     </svg>
   );
 }

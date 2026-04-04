@@ -897,7 +897,7 @@ const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, 
          </div>
 
          {expandedPlayer && expandedPlayer.history.length > 0 && (
-            <div className="w-full bg-gradient-to-br from-black/40 to-emerald-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group min-h-[250px] mt-6 animate-in slide-in-from-top-4">
+            <div className="w-full bg-gradient-to-br from-black/40 to-emerald-900/10 border border-white/5 rounded-[24px] p-6 flex flex-col justify-center relative overflow-hidden group mt-6 animate-in slide-in-from-top-4">
                <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-all"></div>
                <div className="flex items-center justify-between mb-4">
                   <div>
@@ -906,14 +906,17 @@ const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, 
                   </div>
                   <button onClick={() => setExpandedWellnessId(null)} className="text-slate-500 hover:text-white font-black text-xl">&times;</button>
                </div>
-               <div className="flex-1 w-full mt-2 min-h-[150px]">
+               
+               {/* AQUI ESTÁ O SEGREDO: Altura cravada em 200px para o Recharts não colapsar */}
+               <div className="w-full mt-2 h-[200px]">
                   <ResponsiveContainer width="100%" height="100%">
-                     <LineChart data={[...expandedPlayer.history].reverse()}>
+                     <LineChart data={[...expandedPlayer.history].reverse()} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
                         <XAxis dataKey="record_date" tickFormatter={formatDate} tick={{ fill: '#64748b', fontSize: 10, fontWeight: '900', fontStyle: 'italic' }} axisLine={false} tickLine={false} />
                         <YAxis hide domain={[0, 100]} />
-                        <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 6}} />
-                        <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px' }} />
+                        {/* isAnimationActive={false} ajuda a não bugar a renderização inicial, e o dot forçado garante que 1 único dia apareça */}
+                        <Line type="monotone" dataKey="readiness_percent" stroke="#10b981" strokeWidth={3} isAnimationActive={false} dot={{r: 5, fill: '#121212', strokeWidth: 2, stroke: '#10b981'}} activeDot={{r: 7}} />
+                        <Tooltip cursor={false} contentStyle={{ backgroundColor: '#121212', borderColor: '#10b981', fontSize: '10px', borderRadius: '12px', color: '#fff' }} />
                      </LineChart>
                   </ResponsiveContainer>
                </div>
