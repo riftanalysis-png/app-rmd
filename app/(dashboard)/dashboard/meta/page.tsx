@@ -4,15 +4,25 @@ import { supabase } from '@/lib/supabase/client';
 
 const DDRAGON_VERSION = '16.5.1';
 
+// Triturador de strings para cruzar dados de views diferentes
+function normalizeChampName(name: string | null): string {
+  if (!name) return 'unknown';
+  let n = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (n === 'wukong') return 'monkeyking';
+  if (n === 'renataglasc') return 'renata';
+  if (n.includes('nunu')) return 'nunu';
+  return n;
+}
+
 function normalizeRole(lane: string | null): string {
-  if (!lane) return 'mid';
+  if (!lane) return 'unknown';
   const l = lane.toLowerCase().trim();
   if (l.includes('top')) return 'top';
-  if (l.includes('jungle') || l.includes('jng') || l === 'jg') return 'jungle';
+  if (l.includes('jungle') || l.includes('jng') || l.includes('jug') || l === 'jg') return 'jungle';
   if (l.includes('mid')) return 'mid';
   if (l.includes('bot') || l.includes('adc') || l.includes('bottom')) return 'adc';
-  if (l.includes('sup') || l.includes('utility')) return 'support';
-  return 'support'; 
+  if (l.includes('sup') || l.includes('utility') || l.includes('spt')) return 'support';
+  return 'unknown'; 
 }
 
 const getRoleIcon = (role: string) => {
@@ -60,6 +70,7 @@ export default function MetaWarRoom() {
   const [globalSplit, setGlobalSplit] = useState("ALL");
 
   const [viewMode, setViewMode] = useState<'CHAMPIONS' | 'OBJECTIVES'>('CHAMPIONS');
+  const [championView, setChampionView] = useState<'TIER_LIST' | 'TRUST_INDEX' | 'META_MATRIX'>('TIER_LIST');
   const [selectedChamp, setSelectedChamp] = useState<SelectedChampProps | null>(null);
   const [activeTab, setActiveTab] = useState<'DRAFT' | 'MATCHUPS' | 'SYNERGIES'>('DRAFT');
   const [loading, setLoading] = useState(true);
@@ -71,7 +82,9 @@ export default function MetaWarRoom() {
       setLoading(true);
       
       const buildQuery = (viewName: string) => {
-         let q = supabase.from(viewName).select('*');
+         // A MÁGICA ESTÁ AQUI: .limit(50000) para forçar o download do banco inteiro
+         let q = supabase.from(viewName).select('*').limit(50000); 
+         
          if (globalTournament !== 'ALL') q = q.eq('game_type', globalTournament);
          if (globalSplit !== 'ALL') q = q.eq('split', globalSplit);
          return q;
@@ -89,7 +102,7 @@ export default function MetaWarRoom() {
 
       const aggTiers = Array.from((t.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
-          const key = `${curr.champion}_${lane}`;
+          const key = `${normalizeChampName(curr.champion)}_${lane}`;
           const pScore = MathSafe(curr.power_score);
           const tPicks = MathSafe(curr.total_picks);
 
@@ -104,8 +117,10 @@ export default function MetaWarRoom() {
 
       const aggMatchups = Array.from((m.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
-          const key = `${curr.champion}_${lane}_${curr.opponent}`;
-          if (!acc.has(key)) acc.set(key, { ...curr, lane, total_matchups: MathSafe(curr.total_matchups) });
+          const opponent = curr.opponent || 'Unknown';
+          const key = `${normalizeChampName(curr.champion)}_${lane}_${normalizeChampName(opponent)}`;
+          
+          if (!acc.has(key)) acc.set(key, { ...curr, opponent, lane, total_matchups: MathSafe(curr.total_matchups) });
           else {
               const ex = acc.get(key);
               ex.win_rate = weightedAvg(ex.win_rate, ex.total_matchups, curr.win_rate, curr.total_matchups);
@@ -121,7 +136,8 @@ export default function MetaWarRoom() {
 
       const aggDrafts = Array.from((d.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
-          const key = `${curr.champion}_${lane}_${curr.side}_${curr.sequence}`;
+          const dbSide = String(curr.side || '').toLowerCase();
+          const key = `${normalizeChampName(curr.champion)}_${lane}_${dbSide}_${curr.sequence}`;
           if (!acc.has(key)) acc.set(key, { ...curr, lane, total_picks: MathSafe(curr.total_picks) });
           else {
               const ex = acc.get(key);
@@ -132,7 +148,7 @@ export default function MetaWarRoom() {
       }, new Map()).values());
 
       const aggBans = Array.from((b.data || []).reduce((acc, curr) => {
-          const key = curr.champion;
+          const key = normalizeChampName(curr.champion);
           if (!acc.has(key)) acc.set(key, { ...curr, total_bans: MathSafe(curr.total_bans), blue_bans: MathSafe(curr.blue_bans), red_bans: MathSafe(curr.red_bans) });
           else {
               const ex = acc.get(key);
@@ -146,8 +162,10 @@ export default function MetaWarRoom() {
       const aggSynergies = Array.from((s.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
           const aLane = normalizeRole(curr.ally_lane);
-          const key = `${curr.champion}_${lane}_${curr.ally}_${aLane}`;
-          if (!acc.has(key)) acc.set(key, { ...curr, lane, ally_lane: aLane, total_games: MathSafe(curr.total_games) });
+          const ally = curr.ally || 'Unknown';
+          const key = `${normalizeChampName(curr.champion)}_${lane}_${normalizeChampName(ally)}_${aLane}`;
+          
+          if (!acc.has(key)) acc.set(key, { ...curr, ally, lane, ally_lane: aLane, total_games: MathSafe(curr.total_games) });
           else {
               const ex = acc.get(key);
               ex.win_rate = weightedAvg(ex.win_rate, ex.total_games, curr.win_rate, curr.total_games);
@@ -189,62 +207,139 @@ export default function MetaWarRoom() {
     const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= minGames);
     list.sort((a: any, b: any) => b.power_score - a.power_score);
 
-    // RÉGUA DE CORTE IMPLACÁVEL (Focada no competitivo)
+    const total = list.length;
+    if (total === 0) return { S: [], A: [], B: [], C: [] };
+
+    const sCount = Math.max(1, Math.ceil(total * 0.05));
+    const aCount = Math.max(1, Math.ceil(total * 0.15));
+    const bCount = Math.max(1, Math.ceil(total * 0.30));
+
     return {
-      S: list.filter((c: any) => c.power_score >= 78), // Apenas anomalias e quebras de meta
-      A: list.filter((c: any) => c.power_score >= 72 && c.power_score < 78), // Muito fortes
-      B: list.filter((c: any) => c.power_score >= 65 && c.power_score < 72), // Bons / Situacionais
-      C: list.filter((c: any) => c.power_score < 65), // A grande massa "Média" cai toda aqui
+      S: list.slice(0, sCount),
+      A: list.slice(sCount, sCount + aCount),
+      B: list.slice(sCount + aCount, sCount + aCount + bCount),
+      C: list.slice(sCount + aCount + bCount)
     };
   }, [data.tiers, activeLane, minGames]);
 
-  const champDraft = useMemo(() => {
-    if (!selectedChamp) return { blue: [], red: [] };
-    const rawDraft = data.draft.filter((x: any) => x.champion === selectedChamp.name && normalizeRole(x.lane) === normalizeRole(selectedChamp.lane));
-    
-    const seqMap: Record<number, { label: string, side: string }> = {
-      7: { label: 'B1', side: 'blue' }, 8: { label: 'R1', side: 'red' }, 9: { label: 'R2', side: 'red' },
-      10: { label: 'B2', side: 'blue' }, 11: { label: 'B3', side: 'blue' }, 12: { label: 'R3', side: 'red' },
-      17: { label: 'R4', side: 'red' }, 18: { label: 'B4', side: 'blue' }, 19: { label: 'B5', side: 'blue' },
-      20: { label: 'R5', side: 'red' }
-    };
+  const trustIndexList = useMemo(() => {
+    const target = normalizeRole(activeLane);
+    const baseMin = Math.max(10, minGames);
+    const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= baseMin);
 
-    const cleanDraft = rawDraft.map((d: any) => {
-      const strictInfo = seqMap[d.sequence];
-      return { ...d, safeLabel: strictInfo?.label || 'PICK', safeSide: strictInfo?.side || 'unknown' };
-    });
+    return list.map((c: any) => {
+      const trust_score = c.power_score * Math.log10(c.total_picks + 1);
+      return { ...c, trust_score };
+    }).sort((a: any, b: any) => b.trust_score - a.trust_score).slice(0, 20); 
+  }, [data.tiers, activeLane, minGames]);
+
+  const metaMatrix = useMemo(() => {
+    const target = normalizeRole(activeLane);
+    const list = data.tiers.filter((c: any) => (activeLane === 'ALL' || normalizeRole(c.lane) === target) && c.total_picks >= minGames);
+
+    if (list.length === 0) return { op: [], sleeper: [], trap: [], weak: [] };
+
+    const sortedPicks = [...list].sort((a, b) => a.total_picks - b.total_picks);
+    const sortedScores = [...list].sort((a, b) => a.power_score - b.power_score);
+
+    const midPick = sortedPicks[Math.floor(list.length / 2)]?.total_picks || 0;
+    const midScore = sortedScores[Math.floor(list.length / 2)]?.power_score || 0;
 
     return {
-      blue: cleanDraft.filter(d => d.safeSide === 'blue').sort((a, b) => a.sequence - b.sequence),
-      red: cleanDraft.filter(d => d.safeSide === 'red').sort((a, b) => a.sequence - b.sequence)
+       op: list.filter(c => c.total_picks >= midPick && c.power_score >= midScore).sort((a, b) => b.power_score - a.power_score),
+       sleeper: list.filter(c => c.total_picks < midPick && c.power_score >= midScore).sort((a, b) => b.power_score - a.power_score),
+       trap: list.filter(c => c.total_picks >= midPick && c.power_score < midScore).sort((a, b) => a.total_picks - b.total_picks), 
+       weak: list.filter(c => c.total_picks < midPick && c.power_score < midScore).sort((a, b) => a.power_score - b.power_score)
+    };
+  }, [data.tiers, activeLane, minGames]);
+
+  // CORREÇÃO: Limpando a sujeira e voltando ao clássico Blue/Red com B1-B5 cravado
+  const champDraft = useMemo(() => {
+    if (!selectedChamp) return { blue: [], red: [] };
+    const cName = normalizeChampName(selectedChamp.name);
+    
+    const rawDraft = data.draft.filter((x: any) => normalizeChampName(x.champion) === cName);
+    const laneDraft = rawDraft.filter((x: any) => normalizeRole(x.lane) === normalizeRole(selectedChamp.lane));
+    const draftToUse = laneDraft.length > 0 ? laneDraft : rawDraft;
+
+    // Filtro IMPLACÁVEL: Se não for de 7 a 20, joga no lixo para não aparecer "P0"
+    const validDrafts = draftToUse.filter((d: any) => [7, 8, 9, 10, 11, 12, 17, 18, 19, 20].includes(Number(d.sequence)));
+
+    const seqMap: Record<number, { label: string, isBlue: boolean }> = {
+      7: { label: 'B1', isBlue: true }, 10: { label: 'B2', isBlue: true }, 11: { label: 'B3', isBlue: true }, 18: { label: 'B4', isBlue: true }, 19: { label: 'B5', isBlue: true },
+      8: { label: 'R1', isBlue: false }, 9: { label: 'R2', isBlue: false }, 12: { label: 'R3', isBlue: false }, 17: { label: 'R4', isBlue: false }, 20: { label: 'R5', isBlue: false }
+    };
+
+    const aggregated = validDrafts.reduce((acc: any, d: any) => {
+      const seq = Number(d.sequence);
+      const mapped = seqMap[seq];
+      
+      if (!acc[mapped.label]) {
+        acc[mapped.label] = { ...d, safeLabel: mapped.label, isBlue: mapped.isBlue, sequence: seq, total_picks: MathSafe(d.total_picks), win_rate: MathSafe(d.win_rate) };
+      } else {
+        acc[mapped.label].win_rate = weightedAvg(acc[mapped.label].win_rate, acc[mapped.label].total_picks, d.win_rate, d.total_picks);
+        acc[mapped.label].total_picks += MathSafe(d.total_picks);
+      }
+      return acc;
+    }, {});
+
+    const cleanDraft = Object.values(aggregated);
+
+    return {
+      blue: cleanDraft.filter((d: any) => d.isBlue).sort((a: any, b: any) => a.sequence - b.sequence),
+      red: cleanDraft.filter((d: any) => !d.isBlue).sort((a: any, b: any) => a.sequence - b.sequence)
     };
   }, [selectedChamp, data.draft]);
 
   const champMatchups = useMemo(() => {
     if (!selectedChamp) return [];
-    return data.matchups.filter((m: any) => m.champion === selectedChamp.name && normalizeRole(m.lane) === normalizeRole(selectedChamp.lane))
-      .sort((a: any, b: any) => b.total_matchups - a.total_matchups);
+    const cName = normalizeChampName(selectedChamp.name);
+    const cLane = normalizeRole(selectedChamp.lane);
+
+    let matches = data.matchups.filter((m: any) =>
+       normalizeChampName(m.champion) === cName && normalizeRole(m.lane) === cLane
+    );
+
+    if (matches.length === 0) {
+       matches = data.matchups.filter((m: any) => normalizeChampName(m.champion) === cName);
+    }
+
+    return matches.sort((a: any, b: any) => b.total_matchups - a.total_matchups);
   }, [selectedChamp, data.matchups]);
 
   const champSynergies = useMemo(() => {
     if (!selectedChamp) return [];
-    return data.synergies.filter((s: any) => s.champion === selectedChamp.name && normalizeRole(s.lane) === normalizeRole(selectedChamp.lane) && s.total_games > 1)
-      .sort((a: any, b: any) => b.win_rate !== a.win_rate ? b.win_rate - a.win_rate : b.total_games - a.total_games).slice(0, 10);
+    const cName = normalizeChampName(selectedChamp.name);
+    const cLane = normalizeRole(selectedChamp.lane);
+
+    let syns = data.synergies.filter((s: any) =>
+       normalizeChampName(s.champion) === cName && normalizeRole(s.lane) === cLane
+    );
+
+    if (syns.length === 0) {
+       syns = data.synergies.filter((s: any) => normalizeChampName(s.champion) === cName);
+    }
+
+    return syns.sort((a: any, b: any) => b.win_rate !== a.win_rate ? b.win_rate - a.win_rate : b.total_games - a.total_games).slice(0, 15);
   }, [selectedChamp, data.synergies]);
 
   const champBans = useMemo(() => {
     if (!selectedChamp) return null;
-    return data.bans.find((b: any) => b.champion === selectedChamp.name);
+    const cName = normalizeChampName(selectedChamp.name);
+    return data.bans.find((b: any) => normalizeChampName(b.champion) === cName);
   }, [selectedChamp, data.bans]);
 
   const pickProfile = useMemo(() => {
     if (!selectedChamp) return null;
     const allDrafts = [...champDraft.blue, ...champDraft.red];
     let blindPicks = 0; let counterPicks = 0; 
+    
     allDrafts.forEach((d: any) => {
-      if ([7, 8, 9, 10, 11].includes(d.sequence)) blindPicks += d.total_picks;
-      if ([12, 17, 18, 19, 20].includes(d.sequence)) counterPicks += d.total_picks;
+      const seq = d.sequence;
+      if ([7, 8, 9, 10, 11].includes(seq)) blindPicks += d.total_picks;
+      else if ([12, 17, 18, 19, 20].includes(seq)) counterPicks += d.total_picks;
     });
+
     const totalPicks = blindPicks + counterPicks;
     let pickIdentity = "FLEX PICK"; let pickColor = "text-slate-400 border-slate-600 bg-slate-800/50";
     if (totalPicks > 0) {
@@ -289,16 +384,13 @@ export default function MetaWarRoom() {
     });
   };
 
-  // === EXTRATORES DE DADOS (SCANNER BLINDADO) ===
   const getObjSafe = (keywords: string[], excludeKeyword?: string) => {
     const obj = data.globalObjectives.find((row: any) => {
        const t = String(row.objective_type || row.objective_name || '').toLowerCase();
        const s = String(row.subtype || row.icon_key || '').toLowerCase();
        const combined = `${t} ${s}`;
        
-       // Ignora a linha se contiver a palavra excluída (ex: evitar pegar BARON_COUNTS)
        if (excludeKeyword && combined.includes(excludeKeyword.toLowerCase())) return false;
-
        return keywords.some(kw => combined.includes(kw));
     });
 
@@ -311,8 +403,6 @@ export default function MetaWarRoom() {
   };
   
   const heraldData = getObjSafe(['herald', 'arauto', 'riftharold', 'harold', 'riftherald']);
-  
-  // === BARÃO (COMPLETO COM QUANTIDADE POR JOGO) ===
   const bBase = getObjSafe(['baron', 'nashor', 'barão'], 'counts');
   const baronData = bBase ? {
      ...bBase,
@@ -332,7 +422,6 @@ export default function MetaWarRoom() {
      }).filter(Boolean)
   } : null;
   
-  // === PRIMEIRO DRAGÃO (COMPLETO COM SUB-ELEMENTOS) ===
   const fDrakeBase = getObjSafe(['dragon1']);
   const firstDragonData = fDrakeBase ? {
      ...fDrakeBase,
@@ -471,7 +560,7 @@ export default function MetaWarRoom() {
           {viewMode === 'CHAMPIONS' && !selectedChamp && (
             <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-right-4 shrink-0">
               <div className="flex bg-black/40 p-1 rounded-2xl border border-white/5 items-center shadow-inner">
-                 {[1, 5, 10].map(n => <button key={n} onClick={() => setMinGames(n)} className={`w-8 h-8 rounded-xl text-[10px] transition-all ${minGames === n ? 'bg-white text-black shadow-lg scale-105' : 'text-slate-500 hover:text-slate-300'}`}>{n}</button>)}
+                 {[1, 5, 10, 20].map(n => <button key={n} onClick={() => setMinGames(n)} className={`w-8 h-8 rounded-xl text-[10px] transition-all ${minGames === n ? 'bg-white text-black shadow-lg scale-105' : 'text-slate-500 hover:text-slate-300'}`}>{n}</button>)}
               </div>
               <div className="flex bg-black/30 p-1 rounded-3xl border border-white/5 shadow-inner items-center">
                 {['ALL', 'TOP', 'JUNGLE', 'MID', 'ADC', 'SUP'].map(l => (
@@ -496,6 +585,7 @@ export default function MetaWarRoom() {
         </div>
       </header>
 
+      {/* VIEW: MACRO OBJECTIVES (MANTIDA INTACTA) */}
       {viewMode === 'OBJECTIVES' && (
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 max-w-[1300px] mx-auto space-y-12">
           
@@ -664,39 +754,160 @@ export default function MetaWarRoom() {
         </div>
       )}
 
+      {/* VIEW: CHAMPION META */}
       {viewMode === 'CHAMPIONS' && (
         <div className="animate-in fade-in duration-500">
           
           {!selectedChamp && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-              {Object.entries(filteredTiers).map(([tier, list]) => (
-                <div key={tier} className="flex gap-4 items-stretch group/tier">
-                  <div className={`w-20 flex items-center justify-center rounded-[24px] text-3xl font-black italic shadow-xl bg-slate-900 border border-slate-800 ${tier === 'S' ? 'text-red-600' : tier === 'A' ? 'text-orange-500' : tier === 'B' ? 'text-yellow-500' : 'text-emerald-500'}`}>{tier}</div>
-                  <div className="flex-1 bg-slate-900/10 border border-slate-800/40 rounded-[28px] p-5 flex flex-wrap gap-5 font-black italic">
-                    {list.length > 0 ? list.map((c: any) => (
-                      <button 
-                        key={`${c.champion}-${c.lane}`} 
-                        onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} 
-                        className="relative transition-all hover:scale-110 active:scale-95"
-                      >
-                        <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-16 h-16 rounded-2xl border-2 border-slate-800 hover:border-purple-500 transition-all shadow-xl" alt="" />
-                        <div className="absolute -top-2 -right-2 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-lg flex items-center gap-1 shadow-2xl">
-                          {activeLane === 'ALL' && <img src={getRoleIcon(c.lane)} className="w-2.5 h-2.5 brightness-200 opacity-70" alt="" />}
-                          <span className="text-[8px] text-purple-400 font-black">{c.total_picks}</span>
-                        </div>
-                      </button>
-                    )) : <p className="text-[9px] text-slate-800 flex items-center font-black">AMOSTRAGEM INSUFICIENTE</p>}
-                  </div>
+            <>
+              {/* LENS SELECTOR SUB-MENU */}
+              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 mb-8">
+                <button onClick={() => setChampionView('TIER_LIST')} className={`px-5 py-2.5 rounded-xl text-[9px] tracking-[0.2em] transition-all border ${championView === 'TIER_LIST' ? 'bg-purple-600/20 text-purple-400 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.2)]' : 'bg-slate-900/50 text-slate-500 border-slate-800 hover:border-slate-600'}`}>
+                  PERCENTILE TIER LIST
+                </button>
+                <button onClick={() => setChampionView('TRUST_INDEX')} className={`px-5 py-2.5 rounded-xl text-[9px] tracking-[0.2em] transition-all border ${championView === 'TRUST_INDEX' ? 'bg-blue-600/20 text-blue-400 border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.2)]' : 'bg-slate-900/50 text-slate-500 border-slate-800 hover:border-slate-600'}`}>
+                  TRUST INDEX (BLINDS)
+                </button>
+                <button onClick={() => setChampionView('META_MATRIX')} className={`px-5 py-2.5 rounded-xl text-[9px] tracking-[0.2em] transition-all border ${championView === 'META_MATRIX' ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'bg-slate-900/50 text-slate-500 border-slate-800 hover:border-slate-600'}`}>
+                  META MATRIX
+                </button>
+              </div>
+
+              {/* LENS 1: TIER LIST */}
+              {championView === 'TIER_LIST' && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                  {Object.entries(filteredTiers).map(([tier, list]) => (
+                    <div key={tier} className="flex gap-4 items-stretch group/tier">
+                      <div className={`w-20 flex items-center justify-center rounded-[24px] text-3xl font-black italic shadow-xl bg-slate-900 border border-slate-800 ${tier === 'S' ? 'text-red-600' : tier === 'A' ? 'text-orange-500' : tier === 'B' ? 'text-yellow-500' : 'text-emerald-500'}`}>{tier}</div>
+                      <div className="flex-1 bg-slate-900/10 border border-slate-800/40 rounded-[28px] p-5 flex flex-wrap gap-5 font-black italic">
+                        {list.length > 0 ? list.map((c: any) => (
+                          <button 
+                            key={`${c.champion}-${c.lane}`} 
+                            onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} 
+                            className="relative transition-all hover:scale-110 active:scale-95"
+                          >
+                            <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-16 h-16 rounded-2xl border-2 border-slate-800 hover:border-purple-500 transition-all shadow-xl" alt="" />
+                            <div className="absolute -top-2 -right-2 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-lg flex items-center gap-1 shadow-2xl">
+                              {activeLane === 'ALL' && <img src={getRoleIcon(c.lane)} className="w-2.5 h-2.5 brightness-200 opacity-70" alt="" />}
+                              <span className="text-[8px] text-purple-400 font-black">{c.total_picks}</span>
+                            </div>
+                          </button>
+                        )) : <p className="text-[9px] text-slate-800 flex items-center font-black">AMOSTRAGEM INSUFICIENTE PARA O CORTE</p>}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+
+              {/* LENS 2: TRUST INDEX */}
+              {championView === 'TRUST_INDEX' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                  {trustIndexList.length > 0 ? trustIndexList.map((c: any, idx: number) => (
+                    <button 
+                      key={`${c.champion}-${c.lane}`} 
+                      onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }}
+                      className="bg-slate-950/50 border border-slate-800 p-5 rounded-[24px] hover:border-blue-500/50 hover:bg-slate-900 transition-all text-left flex items-center gap-5 group"
+                    >
+                      <div className="relative shrink-0">
+                        <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-14 h-14 rounded-2xl border border-slate-700 group-hover:border-blue-500 transition-all" alt="" />
+                        <div className="absolute -bottom-2 -right-2 w-6 h-6 bg-slate-900 border border-slate-700 rounded-lg flex items-center justify-center text-[10px] text-blue-400">
+                          #{idx + 1}
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-end mb-1">
+                          <p className="text-xl text-white italic leading-none">{c.champion}</p>
+                          <img src={getRoleIcon(c.lane)} className="w-3.5 h-3.5 brightness-200 opacity-50" alt="" />
+                        </div>
+                        <div className="flex justify-between items-center mt-2">
+                           <p className="text-[9px] text-slate-500 tracking-widest">{c.total_picks} JOGOS</p>
+                           <p className="text-[12px] text-blue-400 font-mono">{Math.round(c.power_score)} SC</p>
+                        </div>
+                      </div>
+                    </button>
+                  )) : (
+                    <div className="col-span-full py-20 text-center border border-dashed border-slate-800 rounded-3xl text-slate-600 text-[10px] tracking-widest">
+                      AMOSTRAGEM DE JOGOS INSUFICIENTE PARA ESTABELECER CONFIANÇA MATEMÁTICA.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* LENS 3: META MATRIX */}
+              {championView === 'META_MATRIX' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                  
+                  {/* OP (Top-Right) */}
+                  <div className="bg-emerald-950/10 border border-emerald-900/30 p-6 rounded-[32px]">
+                    <div className="flex justify-between items-center mb-6 border-b border-emerald-900/30 pb-4">
+                       <h3 className="text-2xl text-emerald-500 italic">PILARES OP</h3>
+                       <p className="text-[8px] text-emerald-600/50 tracking-widest">ALTA PRESENÇA • ALTO SCORE</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {metaMatrix.op.length > 0 ? metaMatrix.op.map((c: any) => (
+                        <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative hover:scale-105 transition-transform">
+                          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-12 h-12 rounded-xl border border-emerald-700/50" alt="" />
+                        </button>
+                      )) : <p className="text-[9px] text-emerald-800">VAZIO</p>}
+                    </div>
+                  </div>
+
+                  {/* SLEEPER (Top-Left) */}
+                  <div className="bg-purple-950/10 border border-purple-900/30 p-6 rounded-[32px]">
+                    <div className="flex justify-between items-center mb-6 border-b border-purple-900/30 pb-4">
+                       <h3 className="text-2xl text-purple-400 italic">SLEEPERS / POCKETS</h3>
+                       <p className="text-[8px] text-purple-600/50 tracking-widest">BAIXA PRESENÇA • ALTO SCORE</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {metaMatrix.sleeper.length > 0 ? metaMatrix.sleeper.map((c: any) => (
+                        <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative hover:scale-105 transition-transform">
+                          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-12 h-12 rounded-xl border border-purple-700/50" alt="" />
+                        </button>
+                      )) : <p className="text-[9px] text-purple-800">VAZIO</p>}
+                    </div>
+                  </div>
+
+                  {/* WEAK (Bottom-Left) */}
+                  <div className="bg-slate-900/20 border border-slate-800/50 p-6 rounded-[32px]">
+                    <div className="flex justify-between items-center mb-6 border-b border-slate-800/50 pb-4">
+                       <h3 className="text-2xl text-slate-500 italic">WEAK / OUT OF META</h3>
+                       <p className="text-[8px] text-slate-600/50 tracking-widest">BAIXA PRESENÇA • BAIXO SCORE</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {metaMatrix.weak.length > 0 ? metaMatrix.weak.map((c: any) => (
+                        <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative hover:scale-105 transition-transform opacity-50 hover:opacity-100">
+                          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-10 h-10 rounded-xl border border-slate-700/50 grayscale hover:grayscale-0" alt="" />
+                        </button>
+                      )) : <p className="text-[9px] text-slate-800">VAZIO</p>}
+                    </div>
+                  </div>
+
+                  {/* TRAPS (Bottom-Right) */}
+                  <div className="bg-orange-950/10 border border-orange-900/30 p-6 rounded-[32px]">
+                    <div className="flex justify-between items-center mb-6 border-b border-orange-900/30 pb-4">
+                       <h3 className="text-2xl text-orange-500 italic">TRAPS / OVERRATED</h3>
+                       <p className="text-[8px] text-orange-600/50 tracking-widest">ALTA PRESENÇA • BAIXO SCORE</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {metaMatrix.trap.length > 0 ? metaMatrix.trap.map((c: any) => (
+                        <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative hover:scale-105 transition-transform">
+                          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.champion}.png`} className="w-12 h-12 rounded-xl border border-orange-700/50" alt="" />
+                        </button>
+                      )) : <p className="text-[9px] text-orange-800">VAZIO</p>}
+                    </div>
+                  </div>
+
+                </div>
+              )}
+            </>
           )}
 
+          {/* PERFIL DO CAMPEÃO */}
           {selectedChamp && pickProfile && (
             <div className="bg-slate-900/40 border border-purple-500/20 rounded-[48px] p-8 shadow-2xl backdrop-blur-xl animate-in zoom-in-95 duration-300">
               
               <button onClick={() => setSelectedChamp(null)} className="mb-8 flex items-center gap-2 text-[10px] text-slate-400 hover:text-white uppercase tracking-widest transition-colors bg-slate-800/50 px-4 py-2 rounded-full border border-slate-700 hover:border-slate-500 w-max">
-                <span className="text-lg leading-none mb-0.5">←</span> VOLTAR PARA TIER LIST
+                <span className="text-lg leading-none mb-0.5">←</span> VOLTAR PARA LENTES
               </button>
 
               <div className="flex flex-col xl:flex-row gap-12">
@@ -758,11 +969,15 @@ export default function MetaWarRoom() {
 
                   {activeTab === 'MATCHUPS' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6 animate-in fade-in duration-300">
-                      {champMatchups.map((m: any) => (
-                        <div key={m.opponent} className="bg-slate-950/60 border border-slate-800 p-6 rounded-[32px] hover:border-purple-500/30 transition-all shadow-xl">
+                      {champMatchups.map((m: any, idx: number) => (
+                        <div key={`${m.opponent}-${idx}`} className="bg-slate-950/60 border border-slate-800 p-6 rounded-[32px] hover:border-purple-500/30 transition-all shadow-xl">
                           <div className="flex items-center justify-between mb-5">
                             <div className="flex items-center gap-4 text-white">
-                              <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${m.opponent}.png`} className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700" alt="" />
+                              {m.opponent !== 'Unknown' ? (
+                                <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${m.opponent}.png`} className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700" alt="" />
+                              ) : (
+                                <div className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700 bg-slate-900 flex items-center justify-center text-[10px] text-slate-500">?</div>
+                              )}
                               <div><p className="text-lg font-black italic leading-none">{m.opponent}</p><p className={`text-[10px] font-black mt-1 ${m.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{Math.round(m.win_rate)}% WR</p></div>
                             </div>
                             <div className="text-right text-purple-400 font-black italic"><p className="text-[7px] text-slate-600 uppercase">KDA @12</p><p className="text-xl">{Number(m.avg_kda_12 || 0).toFixed(1)}</p></div>
@@ -782,11 +997,15 @@ export default function MetaWarRoom() {
 
                   {activeTab === 'SYNERGIES' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6 animate-in fade-in duration-300">
-                      {champSynergies.map((s: any) => (
-                        <div key={`${s.ally}-${s.ally_lane}`} className="bg-slate-950/60 border border-slate-800 p-6 rounded-[32px] hover:border-blue-500/30 transition-all shadow-xl flex items-center justify-between">
+                      {champSynergies.map((s: any, idx: number) => (
+                        <div key={`${s.ally}-${s.ally_lane}-${idx}`} className="bg-slate-950/60 border border-slate-800 p-6 rounded-[32px] hover:border-blue-500/30 transition-all shadow-xl flex items-center justify-between">
                           <div className="flex items-center gap-4 text-white">
                             <div className="relative">
-                              <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${s.ally}.png`} className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700" alt="" />
+                              {s.ally !== 'Unknown' ? (
+                                <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${s.ally}.png`} className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700" alt="" />
+                              ) : (
+                                <div className="w-12 h-12 rounded-2xl shadow-xl border border-slate-700 bg-slate-900 flex items-center justify-center text-[10px] text-slate-500">?</div>
+                              )}
                               <div className="absolute -bottom-1 -right-1 bg-slate-950 p-1 rounded-md border border-slate-800">
                                  <img src={getRoleIcon(s.ally_lane)} className="w-3.5 h-3.5 brightness-200" alt="" />
                               </div>
@@ -816,7 +1035,7 @@ export default function MetaWarRoom() {
 }
 
 // -----------------------------------------------------
-// COMPONENTES AUXILIARES
+// COMPONENTES AUXILIARES (MANTIDOS INTACTOS)
 // -----------------------------------------------------
 
 function GoldBadge({ gold }: { gold: number | string }) {
@@ -951,7 +1170,7 @@ function DraftSide({ title, data, side }: any) {
             </div>
             <p className={`text-2xl ${d.win_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{Math.round(d.win_rate)}%</p>
           </div>
-        )) : <p className={`text-[9px] text-slate-700 italic py-2 ${isBlue ? '' : 'text-right'}`}>SEM DADOS NO LADO {isBlue ? 'AZUL' : 'VERMELHO'}</p>}
+        )) : <p className={`text-[9px] text-slate-700 italic py-2 ${isBlue ? '' : 'text-right'}`}>SEM DADOS NO DRAFT</p>}
       </div>
     </div>
   );
