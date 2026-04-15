@@ -6,8 +6,18 @@ import Link from 'next/link';
 
 const DDRAGON_VERSION = '16.5.1';
 
-// Função utilitária para pegar a imagem do campeão
-function getChampionImageUrl(championName: string | null) {
+// --- TRITURADOR DE STRINGS ---
+function normalizeChampName(name: string | null): string {
+  if (!name) return 'unknown';
+  let n = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (n === 'wukong') return 'monkeyking';
+  if (n === 'renataglasc') return 'renata';
+  if (n.includes('nunu')) return 'nunu';
+  return n;
+}
+
+// --- IMAGENS ---
+function getChampionIconUrl(championName: string | null) {
   if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
     return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png';
   }
@@ -15,14 +25,24 @@ function getChampionImageUrl(championName: string | null) {
   if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
   if (sanitized.toLowerCase() === 'drmundo') sanitized = 'DrMundo';
   if (sanitized.toLowerCase() === 'renataglasc') sanitized = 'Renata';
-  
   return `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${sanitized}.png`;
 }
 
-// --- FUNÇÃO BLINDADA DE TIMESTAMP PARA ORDENAÇÃO ---
+function getChampionSplashUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  if (sanitized.toLowerCase() === 'drmundo') sanitized = 'DrMundo';
+  if (sanitized.toLowerCase() === 'renataglasc') sanitized = 'Renata';
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${sanitized}_0.jpg`;
+}
+
 function getSafeTimestamp(dateString: any) {
   if (!dateString) return 0;
-  const time = new Date(String(dateString).replace(' ', 'T')).getTime();
+  const safeDate = String(dateString).trim().replace(' ', 'T');
+  const time = new Date(safeDate.includes('T') && !safeDate.includes('Z') && !safeDate.includes('-') && !safeDate.includes('+') ? `${safeDate}Z` : safeDate).getTime();
   return isNaN(time) ? 0 : time;
 }
 
@@ -32,30 +52,27 @@ export default function MatchesPage() {
   const [expandedSeries, setExpandedSeries] = useState<string | null>(null);
   
   const [drafts, setDrafts] = useState<Record<string, any[]>>({});
+  const [playerStats, setPlayerStats] = useState<Record<string, any[]>>({}); 
+  const [globalBans, setGlobalBans] = useState<Record<string, number>>({}); 
   const [loadingDrafts, setLoadingDrafts] = useState<string | null>(null);
 
   const [processingId, setProcessingId] = useState<string | null>(null);
-  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
-  // --- ESTADOS DOS FILTROS ---
   const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
   const [globalTournament, setGlobalTournament] = useState("ALL");
   const [globalSplit, setGlobalSplit] = useState("ALL");
 
   useEffect(() => { fetchMatches(); }, []);
 
-  // --- FETCH DUPLO: Cruza a View com a Tabela Original ---
   async function fetchMatches() {
     try {
       setLoading(true);
       
-      const [viewRes, matchesRes] = await Promise.all([
-        supabase.from('view_matches_with_teams').select('*'),
-        supabase.from('matches').select('id, game_start_time, game_type, split, series_id')
+      const [viewRes, matchesRes, bansRes] = await Promise.all([
+        supabase.from('view_matches_with_teams').select('*').limit(50000),
+        supabase.from('matches').select('id, game_start_time, game_type, split, series_id').limit(50000),
+        supabase.from('view_champion_ban_stats').select('*').limit(200) 
       ]);
-      
-      if (viewRes.error) console.error("ERRO View:", viewRes.error);
-      if (matchesRes.error) console.error("ERRO Matches:", matchesRes.error);
       
       if (viewRes.data && matchesRes.data) {
         const matchMeta: Record<string, any> = {};
@@ -73,42 +90,62 @@ export default function MatchesPage() {
            };
         });
 
-        // Ordenação Global inicial (só por segurança)
         const sortedData = enrichedData.sort((a, b) => 
           getSafeTimestamp(b.game_start_time) - getSafeTimestamp(a.game_start_time)
         );
         
         setMatches(sortedData);
+
+        if (bansRes.data) {
+           const totalMatches = matchesRes.data.length || 1;
+           const banMap: Record<string, number> = {};
+           bansRes.data.forEach(b => {
+              const rate = (Number(b.total_bans) / totalMatches) * 100;
+              banMap[normalizeChampName(b.champion)] = Number(rate.toFixed(1));
+           });
+           setGlobalBans(banMap);
+        }
       }
     } catch (err) {
-      console.error("Falha Crítica ao carregar partidas:", err);
+      console.error("Falha ao carregar partidas:", err);
     } finally {
       setLoading(false);
     }
   }
 
-  async function fetchDraftsForMatches(matchIds: string[]) {
+  async function fetchDraftsAndStatsForMatches(matchIds: string[]) {
     try {
       const missingIds = matchIds.filter(id => !drafts[id]);
       if (missingIds.length === 0) return;
 
       setLoadingDrafts(missingIds[0]); 
 
-      const { data, error } = await supabase.from('match_drafts').select('*').in('match_id', missingIds);
+      const [draftsResponse, statsResponse] = await Promise.all([
+         supabase.from('match_drafts').select('*').in('match_id', missingIds).limit(10000),
+         supabase.from('player_stats_detailed').select('match_id, champion, summoner_name, lane_rating, impact_rating, conversion_rating, vision_rating').in('match_id', missingIds).limit(10000)
+      ]);
       
-      if (error) console.error("ERRO SUPABASE (Drafts):", error);
-      
-      if (data) {
+      if (draftsResponse.data) {
         setDrafts(prev => {
           const next = { ...prev };
           missingIds.forEach(id => {
-            next[id] = data.filter(d => d.match_id === id).sort((a, b) => a.sequence - b.sequence);
+            next[id] = draftsResponse.data.filter(d => d.match_id === id).sort((a, b) => Number(a.sequence) - Number(b.sequence));
           });
           return next;
         });
       }
+
+      if (statsResponse.data) {
+         setPlayerStats(prev => {
+            const next = { ...prev };
+            missingIds.forEach(id => {
+               next[id] = statsResponse.data.filter(s => s.match_id === id);
+            });
+            return next;
+         });
+      }
     } catch (err) {
-      console.error("Falha ao carregar drafts:", err);
+      console.error("Falha ao carregar drafts/stats:", err);
     } finally {
       setLoadingDrafts(null);
     }
@@ -119,31 +156,24 @@ export default function MatchesPage() {
       setExpandedSeries(null);
     } else {
       setExpandedSeries(series.id);
-      fetchDraftsForMatches(series.games.map((g: any) => g.id || g.match_id));
+      fetchDraftsAndStatsForMatches(series.games.map((g: any) => g.id || g.match_id));
     }
   };
 
-  // --- APLICAÇÃO DOS FILTROS LOCAIS ---
   const filteredMatches = useMemo(() => {
     return matches.filter(m => {
       const gameType = String(m.game_type || '').toUpperCase().trim();
       const isScrim = gameType === 'SCRIM';
       
-      // 1. Filtro Oficial vs Scrim
       if (matchType === 'SCRIM' && !isScrim) return false;
       if (matchType === 'OFICIAL' && isScrim) return false;
-
-      // 2. Filtro de Campeonato (Só importa se NÃO for scrim)
       if (!isScrim && globalTournament !== 'ALL' && gameType !== globalTournament.toUpperCase()) return false;
-
-      // 3. Filtro de Split
       if (globalSplit !== 'ALL' && String(m.split || '').toUpperCase() !== globalSplit.toUpperCase()) return false;
 
       return true;
     });
   }, [matches, matchType, globalTournament, globalSplit]);
 
-  // --- AGRUPAMENTO DINÂMICO DOS JOGOS FILTRADOS ---
   const groupedSeries = useMemo(() => {
     const groups: { [key: string]: any } = {};
     
@@ -163,7 +193,7 @@ export default function MatchesPage() {
         if (m.game_start_time) {
             const d = new Date(String(m.game_start_time).replace(' ', 'T'));
             if (!isNaN(d.getTime())) {
-               d.setHours(d.getHours() - 6);
+               d.setHours(d.getHours() - 3); 
                const year = d.getFullYear();
                const month = String(d.getMonth() + 1).padStart(2, '0');
                const day = String(d.getDate()).padStart(2, '0');
@@ -184,6 +214,7 @@ export default function MatchesPage() {
           id: sId,
           description: desc,
           isScrim: isScrim,
+          tournament: gameType, // Adicionando o nome do campeonato para o header
           logicalDate: m.game_start_time, 
           games: [],
           teamA: { tag: blueTag, logo: m.blue_logo },
@@ -194,8 +225,12 @@ export default function MatchesPage() {
       
       groups[sId].games.push(m);
       
-      if (m.winner_side === 'blue') groups[sId].scoreA++;
-      else if (m.winner_side === 'red') groups[sId].scoreB++;
+      const rawWinner = String(m.winner_side || '').toLowerCase().trim();
+      const isBlueWin = rawWinner === 'blue' || rawWinner === '100';
+      const isRedWin = rawWinner === 'red' || rawWinner === '200';
+
+      if (isBlueWin) groups[sId].scoreA++;
+      else if (isRedWin) groups[sId].scoreB++;
     });
 
     return Object.values(groups).sort((a: any, b: any) => {
@@ -205,8 +240,16 @@ export default function MatchesPage() {
 
   const stats = useMemo(() => {
     const total = filteredMatches.length;
-    const blueWins = filteredMatches.filter(m => m.winner_side === 'blue').length;
-    const redWins = filteredMatches.filter(m => m.winner_side === 'red').length;
+    const blueWins = filteredMatches.filter(m => {
+        const w = String(m.winner_side || '').toLowerCase().trim();
+        return w === 'blue' || w === '100';
+    }).length;
+    
+    const redWins = filteredMatches.filter(m => {
+        const w = String(m.winner_side || '').toLowerCase().trim();
+        return w === 'red' || w === '200';
+    }).length;
+
     return {
       totalSeries: groupedSeries.length,
       totalGames: total,
@@ -225,269 +268,309 @@ export default function MatchesPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center h-[80vh]">
-      <p className="text-blue-500 font-black italic animate-pulse tracking-widest text-xs uppercase">// DECRYPTING_MATCH_HISTORY_...</p>
+      <p className="text-zinc-500 font-mono text-sm tracking-widest uppercase animate-pulse">Consultando Banco de Dados...</p>
     </div>
   );
 
   return (
-    <div className="max-w-[1500px] mx-auto p-4 md:p-8 font-black uppercase italic tracking-tighter pb-20">
+    <div className="max-w-[1200px] mx-auto p-4 md:p-8 font-sans pb-20">
       
-      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-12">
-        <div className="flex flex-col gap-4">
-          <div className="border-l-2 border-blue-500 pl-4">
-            <h1 className="text-3xl text-white leading-none">AUDITORIA DE SÉRIES</h1>
-            <p className="text-[9px] text-slate-500 tracking-[0.3em] mt-1">SISTEMA DE MONITORAMENTO E DRAFT</p>
+      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-10 pb-8 border-b border-zinc-800/80">
+        <div className="flex flex-col gap-5">
+          <div>
+            <h1 className="text-3xl font-black text-white tracking-tight uppercase">MATCH HISTORY</h1>
+            <p className="text-xs text-zinc-400 font-mono uppercase tracking-widest mt-1">Séries, Scrims e Draft Analytics</p>
           </div>
           
-          {/* COCKPIT DE FILTROS GLOBAIS */}
-          <div className="flex gap-4 items-center mt-2 z-50">
-            <div className="flex bg-slate-950/80 p-1.5 rounded-[16px] border border-slate-800 shadow-inner h-[50px] items-center">
-              <button onClick={() => {setMatchType('ALL'); setGlobalTournament('ALL')}} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'ALL' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>AMBOS</button>
-              <button onClick={() => setMatchType('OFICIAL')} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'OFICIAL' ? 'bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'text-blue-900 hover:text-blue-400'}`}>OFICIAL</button>
-              <button onClick={() => {setMatchType('SCRIM'); setGlobalTournament('ALL')}} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'SCRIM' ? 'bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]' : 'text-amber-900 hover:text-amber-500'}`}>SCRIMS</button>
+          <div className="flex gap-3 items-center z-50">
+            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800 items-center">
+              <button onClick={() => {setMatchType('ALL'); setGlobalTournament('ALL')}} className={`px-4 py-1.5 rounded-md text-[10px] font-bold transition-colors ${matchType === 'ALL' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>TODOS</button>
+              <button onClick={() => setMatchType('OFICIAL')} className={`px-4 py-1.5 rounded-md text-[10px] font-bold transition-colors ${matchType === 'OFICIAL' ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>OFICIAL</button>
+              <button onClick={() => {setMatchType('SCRIM'); setGlobalTournament('ALL')}} className={`px-4 py-1.5 rounded-md text-[10px] font-bold transition-colors ${matchType === 'SCRIM' ? 'bg-amber-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>SCRIMS</button>
             </div>
 
-            {matchType !== 'SCRIM' && (
-              <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />
-            )}
+            {matchType !== 'SCRIM' && <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />}
             <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
           </div>
         </div>
 
-        <div className="flex gap-4 md:gap-6 flex-wrap items-center">
-          <StatBox label="Séries / Blocos" value={stats.totalSeries} />
-          <StatBox label="Jogos Totais" value={stats.totalGames} />
+        <div className="flex gap-4 md:gap-8 flex-wrap items-center">
+          <div className="text-right">
+             <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest mb-0.5">SÉRIES REGISTRADAS</p>
+             <p className="text-3xl font-black text-white leading-none">{stats.totalSeries}</p>
+          </div>
+          <div className="text-right">
+             <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest mb-0.5">TOTAL DE JOGOS</p>
+             <p className="text-3xl font-black text-white leading-none">{stats.totalGames}</p>
+          </div>
           
-          <div className="flex items-center bg-white/[0.02] border border-white/5 px-6 py-3 rounded-2xl gap-5 shadow-inner">
-            <div className="relative w-12 h-12">
-              <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                <circle cx="18" cy="18" r="15.9" fill="none" className="stroke-red-500/20" strokeWidth="3.5" />
-                <circle cx="18" cy="18" r="15.9" fill="none" className="stroke-red-500" strokeWidth="3.5" strokeDasharray={`${stats.redWR}, 100`} />
-                <circle cx="18" cy="18" r="15.9" fill="none" className="stroke-blue-500" strokeWidth="3.5" strokeDasharray={`${stats.blueWR}, 100`} strokeDashoffset="0" />
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center"><div className="w-6 h-6 bg-[#121212] rounded-full"></div></div>
-            </div>
-            <div className="flex flex-col justify-center">
-              <span className="text-[8px] text-slate-600 tracking-widest uppercase mb-1">Side Bias WR%</span>
-              <div className="flex gap-3 items-center">
-                <span className="text-blue-500 text-sm font-black tracking-tighter">{stats.blueWR}% B</span>
-                <span className="text-slate-800 text-[10px]">/</span>
-                <span className="text-red-500 text-sm font-black tracking-tighter">{stats.redWR}% R</span>
-              </div>
-            </div>
+          <div className="flex flex-col border-l border-zinc-800 pl-6 ml-2">
+             <span className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase mb-2">WR POR LADO (MAPA)</span>
+             <div className="flex items-center gap-3">
+                <div className="flex flex-col items-end">
+                   <span className="text-blue-500 font-bold text-xs">BLUE</span>
+                   <span className="text-white font-black text-sm">{stats.blueWR}%</span>
+                </div>
+                <div className="w-24 h-2 bg-zinc-800 rounded-full overflow-hidden flex">
+                   <div className="h-full bg-blue-500" style={{ width: `${stats.blueWR}%` }}></div>
+                   <div className="h-full bg-red-500" style={{ width: `${stats.redWR}%` }}></div>
+                </div>
+                <div className="flex flex-col items-start">
+                   <span className="text-red-500 font-bold text-xs">RED</span>
+                   <span className="text-white font-black text-sm">{stats.redWR}%</span>
+                </div>
+             </div>
           </div>
         </div>
       </header>
 
-      {/* RESULTADO VAZIO */}
       {groupedSeries.length === 0 && (
-         <div className="bg-slate-900/40 border border-slate-800 rounded-[40px] p-20 flex flex-col items-center justify-center text-center shadow-inner h-full min-h-[400px]">
-           <span className="text-6xl mb-6 grayscale opacity-20">🗄️</span>
-           <h3 className="text-3xl text-slate-500 font-black italic">NENHUMA SÉRIE ENCONTRADA</h3>
-           <p className="text-[10px] text-slate-600 mt-3 uppercase tracking-widest max-w-md">Os filtros selecionados não retornaram nenhuma partida. Tente remover o filtro de Split ou Campeonato.</p>
+         <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-2xl p-20 flex flex-col items-center justify-center text-center">
+           <h3 className="text-xl text-zinc-400 font-bold">Nenhum dado encontrado</h3>
+           <p className="text-xs text-zinc-600 mt-2 max-w-md">Não há séries registradas para os filtros atuais. Verifique o Split ou Campeonato selecionado.</p>
          </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4">
+      <div className="flex flex-col gap-3">
         {groupedSeries.map((series: any) => {
-          const barColor = series.scoreA > series.scoreB ? 'bg-blue-500 shadow-[0_0_10px_rgba(37,99,235,0.5)]' 
-                       : series.scoreB > series.scoreA ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' 
-                       : 'bg-slate-600';
+          const isBlueWin = series.scoreA > series.scoreB;
+          const isRedWin = series.scoreB > series.scoreA;
+          const barColor = isBlueWin ? 'bg-blue-500' : isRedWin ? 'bg-red-500' : 'bg-zinc-600';
 
           return (
-            <div key={series.id} className={`bg-[#121212] border transition-all rounded-2xl shadow-lg relative ${expandedSeries === series.id ? 'border-white/20' : 'border-white/5 hover:border-white/10'}`}>
+            <div key={series.id} className="bg-[#18181b] border border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-600 transition-colors">
               
-              <div onClick={() => toggleSeries(series)} className="p-5 md:p-6 flex items-center gap-6 cursor-pointer relative z-10">
-                <div className={`w-1.5 h-12 rounded-full ${barColor}`}></div>
+              <div onClick={() => toggleSeries(series)} className="flex items-stretch cursor-pointer">
+                
+                <div className={`w-1.5 flex-shrink-0 ${barColor}`}></div>
 
-                {/* Lado A */}
-                <div className="flex items-center gap-4 w-32 justify-end ml-2">
-                  <span className={`text-xs ${series.scoreA > series.scoreB ? 'text-white' : 'text-slate-500'}`}>{series.teamA.tag}</span>
-                  <div className="relative w-10 h-10 rounded-lg flex items-center justify-center p-1 overflow-hidden bg-black/40 border border-white/5">
-                    {series.teamA.logo ? <img src={series.teamA.logo} className="w-full h-full object-contain relative z-10" alt="" /> : <span className="text-[10px] text-slate-700">TBD</span>}
-                  </div>
-                </div>
+                <div className="flex-1 flex flex-col md:flex-row items-center justify-between p-4 px-6 gap-6">
+                   
+                   <div className="flex flex-col w-full md:w-1/3">
+                      <span className="text-[10px] text-zinc-500 font-mono font-bold tracking-widest uppercase">
+                         {series.isScrim ? 'TREINO / SCRIM' : (series.tournament ? series.tournament.replace(/_/g, ' ') : 'OFICIAL')}
+                      </span>
+                      <span className="text-sm font-bold text-zinc-200 mt-0.5 truncate">{series.description}</span>
+                   </div>
 
-                {/* Placar Central */}
-                <div className="flex flex-col items-center min-w-[140px]">
-                  <div className="flex items-center gap-4 text-2xl font-black">
-                    <span className={series.scoreA > series.scoreB ? 'text-blue-500' : 'text-slate-600'}>{series.scoreA}</span>
-                    <span className="text-slate-800 text-xs">X</span>
-                    <span className={series.scoreB > series.scoreA ? 'text-red-500' : 'text-slate-600'}>{series.scoreB}</span>
-                  </div>
-                  <span className={`text-[8px] tracking-widest mt-1 px-2 py-0.5 rounded-sm ${series.isScrim ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'text-slate-600'}`}>{series.description}</span>
-                </div>
-
-                {/* Lado B */}
-                <div className="flex items-center gap-4 w-32 mr-2">
-                  <div className="relative w-10 h-10 rounded-lg flex items-center justify-center p-1 overflow-hidden bg-black/40 border border-white/5">
-                    {series.teamB.logo ? <img src={series.teamB.logo} className="w-full h-full object-contain relative z-10" alt="" /> : <span className="text-[10px] text-slate-700">TBD</span>}
-                  </div>
-                  <span className={`text-xs ${series.scoreB > series.scoreA ? 'text-white' : 'text-slate-500'}`}>{series.teamB.tag}</span>
-                </div>
-
-                {/* TIMELINE DE BARRINHAS */}
-                <div className="hidden xl:flex items-center gap-2 flex-1 px-10">
-                  {[...series.games].sort((a, b) => getSafeTimestamp(a.game_start_time) - getSafeTimestamp(b.game_start_time)).map((g: any, i: number) => {
-                    const isBlueWinner = g.winner_side === 'blue';
-                    const winner = isBlueWinner ? series.teamA : series.teamB;
-                    
-                    return (
-                      <div key={i} className="group/bar relative flex-1 h-1.5 cursor-help">
-                        <div className={`w-full h-full rounded-full transition-all duration-300 ${isBlueWinner ? 'bg-blue-500/40 group-hover/bar:bg-blue-500' : 'bg-red-500/40 group-hover/bar:bg-red-500'}`}></div>
-                        
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 px-4 py-3 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,1)] opacity-0 group-hover/bar:opacity-100 pointer-events-none transition-all duration-300 z-[9999] min-w-[180px] backdrop-blur-xl scale-90 group-hover/bar:scale-100">
-                           <div className="flex flex-col items-center">
-                              <p className="text-[7px] text-slate-500 tracking-[0.4em] mb-3 font-mono border-b border-white/5 w-full pb-2">DATA_STREAM_G0{i + 1}</p>
-                              <div className="flex items-center gap-3 mb-2">
-                                 <div className="relative w-8 h-8 flex items-center justify-center">
-                                    <div className="absolute inset-0 bg-white/10 blur-md rounded-full"></div>
-                                    <img src={winner.logo} className="w-6 h-6 object-contain relative z-10" alt="" />
-                                 </div>
-                                 <div className="text-left">
-                                    <p className={`text-[12px] leading-none font-black italic ${isBlueWinner ? 'text-blue-400' : 'text-red-400'}`}>{winner.tag}</p>
-                                    <p className="text-[8px] text-slate-400 mt-1 uppercase tracking-tighter">Side: {g.winner_side}</p>
-                                 </div>
-                              </div>
-                              <div className="w-full bg-white/5 h-[1px] my-2"></div>
-                              <p className="text-[9px] text-emerald-400 font-black">VICTORY_CONFIRMED</p>
-                           </div>
-                           <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[8px] border-x-transparent border-t-[8px] border-t-white/10"></div>
-                        </div>
+                   <div className="flex items-center gap-6 justify-center flex-1">
+                      <div className="flex items-center gap-3 justify-end w-24">
+                        <span className={`text-base font-black ${isBlueWin ? 'text-white' : 'text-zinc-500'}`}>{series.teamA.tag}</span>
+                        {series.teamA.logo ? <img src={series.teamA.logo} className="w-8 h-8 object-contain" alt="" /> : <div className="w-8 h-8 bg-zinc-800 rounded-md"></div>}
                       </div>
-                    );
-                  })}
-                </div>
 
-                <div className="flex-none pr-2">
-                   <div className="w-8 h-8 rounded-full border border-white/5 flex items-center justify-center hover:bg-white/10 transition-colors">
-                     <span className="text-[10px] text-slate-600">{expandedSeries === series.id ? '▲' : '▼'}</span>
+                      <div className="flex items-center gap-3 px-4 py-1.5 bg-zinc-900 rounded-md border border-zinc-800">
+                        <span className={`text-xl font-black ${isBlueWin ? 'text-blue-500' : 'text-zinc-400'}`}>{series.scoreA}</span>
+                        <span className="text-zinc-600 text-xs font-bold">-</span>
+                        <span className={`text-xl font-black ${isRedWin ? 'text-red-500' : 'text-zinc-400'}`}>{series.scoreB}</span>
+                      </div>
+
+                      <div className="flex items-center gap-3 justify-start w-24">
+                        {series.teamB.logo ? <img src={series.teamB.logo} className="w-8 h-8 object-contain" alt="" /> : <div className="w-8 h-8 bg-zinc-800 rounded-md"></div>}
+                        <span className={`text-base font-black ${isRedWin ? 'text-white' : 'text-zinc-500'}`}>{series.teamB.tag}</span>
+                      </div>
+                   </div>
+
+                   <div className="flex items-center justify-end w-full md:w-1/3 gap-4">
+                      <div className="flex gap-1">
+                         {[...series.games].sort((a, b) => getSafeTimestamp(a.game_start_time) - getSafeTimestamp(b.game_start_time)).map((g: any, i: number) => {
+                            const rWin = String(g.winner_side || '').toLowerCase().trim();
+                            const isBLU = rWin === 'blue' || rWin === '100';
+                            return (
+                               <div key={i} className={`w-3 h-3 rounded-sm ${isBLU ? 'bg-blue-500' : 'bg-red-500'}`} title={`Game ${i+1}: ${isBLU ? 'Blue' : 'Red'} win`}></div>
+                            );
+                         })}
+                      </div>
+                      <div className="text-zinc-600 ml-2">
+                         {expandedSeries === series.id ? '▲' : '▼'}
+                      </div>
                    </div>
                 </div>
               </div>
 
               {expandedSeries === series.id && (
-                <div className="bg-black/40 border-t border-white/5 p-4 md:p-6 animate-in slide-in-from-top-2 duration-300 rounded-b-2xl">
-                  
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                    
-                    {/* ORDENAÇÃO DOS JOGOS EXPANDIDOS: Mais recentes primeiro (b - a) */}
-                    {[...series.games]
-                      .sort((a:any, b:any) => getSafeTimestamp(b.game_start_time) - getSafeTimestamp(a.game_start_time))
-                      .map((game: any, idx: number, arr: any[]) => {
-                        
-                        const matchId = game.id || game.match_id;
-                        const gameDrafts = drafts[matchId] || [];
-                        const realGameNumber = arr.length - idx; 
-                        
-                        const firstPickSide = gameDrafts.length > 0 
-                          ? [...gameDrafts].sort((a,b) => a.sequence - b.sequence)[0].side?.toLowerCase() 
-                          : null;
-                        
-                        const bluePicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
-                        const blueBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
-                        const redPicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
-                        const redBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
+                <div className="bg-zinc-950 border-t border-zinc-800 p-4 md:p-6 flex flex-col gap-4">
+                  {[...series.games]
+                    .sort((a:any, b:any) => getSafeTimestamp(a.game_start_time) - getSafeTimestamp(b.game_start_time))
+                    .map((game: any, idx: number) => {
+                      
+                      const matchId = game.id || game.match_id;
+                      const gameDrafts = drafts[matchId] || [];
+                      const gameStats = playerStats[matchId] || []; 
+                      const gameNum = idx + 1;
+                      
+                      const picksOnly = [...gameDrafts].filter(d => String(d.tipo).toUpperCase() === 'PICK').sort((a, b) => Number(a.sequence) - Number(b.sequence));
+                      const firstPickSide = picksOnly.length > 0 ? picksOnly[0].side?.toLowerCase() : null;
+                      const lastPickSide = firstPickSide === 'blue' ? 'red' : firstPickSide === 'red' ? 'blue' : null;
 
-                        return (
-                          <div key={matchId} className="flex flex-col bg-slate-900/40 border border-white/5 rounded-2xl relative overflow-hidden shadow-2xl">
-                            
-                            {/* BARRINHA DE VITÓRIA DO JOGO */}
-                            <div className={`absolute left-0 top-0 bottom-0 w-1.5 z-10 ${game.winner_side === 'blue' ? 'bg-blue-500 shadow-[0_0_15px_rgba(37,99,235,0.5)]' : 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)]'}`}></div>
+                      const bluePicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
+                      const blueBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
+                      const redPicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
+                      const redBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
 
-                            <div className="flex flex-wrap items-center justify-between p-4 border-b border-white/5 bg-black/20 pl-6">
-                              <div className="flex items-center gap-4">
-                                <span className="text-sm text-slate-300 font-black italic border-r border-slate-700 pr-4">GAME {realGameNumber}</span>
-                                <div className="flex flex-col">
-                                  <span className="text-[8px] text-slate-600 font-mono">PROTOCOL_ID</span>
-                                  <span className="text-[9px] text-blue-400 font-mono">{matchId}</span>
-                                </div>
-                              </div>
-                              
-                              <div className="flex items-center gap-3">
-                                <span className={`px-3 py-1 rounded-md text-[8px] font-black tracking-widest uppercase border ${game.winner_side === 'blue' ? 'border-blue-500/30 text-blue-400 bg-blue-500/10' : 'border-red-500/30 text-red-400 bg-red-500/10'}`}>
-                                  {game.winner_side === 'blue' ? (game.blue_team_tag || game.blue_tag || 'BLUE') : (game.red_team_tag || game.red_tag || 'RED')} WIN
-                                </span>
-                                <button onClick={(e) => handleProcessAnalytics(matchId, e)} className="px-3 py-1 border border-slate-700 bg-slate-900 rounded-md text-[8px] text-slate-400 hover:text-white hover:border-blue-500 transition-colors uppercase font-bold">
-                                  {processingId === matchId ? 'SYNCING...' : 'SYNC'}
-                                </button>
-                                <Link href={`/dashboard/matches/${matchId}`} className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded-md text-[8px] text-white transition-colors shadow-lg">
-                                  REPORT →
-                                </Link>
-                              </div>
-                            </div>
+                      const rWin = String(game.winner_side || '').toLowerCase().trim();
+                      const gameIsBlueWin = rWin === 'blue' || rWin === '100';
 
-                            <div className="p-4 pl-6 relative">
-                              {gameDrafts.length === 0 ? (
-                                <div className="text-center py-6 text-[9px] text-slate-600 tracking-widest bg-black/20 rounded-xl border border-white/5 border-dashed">
-                                  {loadingDrafts === matchId ? 'CARREGANDO DRAFTS...' : 'DADOS DE DRAFT NÃO ENCONTRADOS.'}
-                                </div>
-                              ) : (
-                                <div className="flex justify-between items-stretch gap-4 relative">
-                                  
-                                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900 border border-slate-700 w-6 h-6 rounded-full flex items-center justify-center z-10 shadow-xl hidden sm:flex">
-                                    <span className="text-[7px] text-slate-400">VS</span>
-                                  </div>
-
-                                  {/* COLUNA BLUE */}
-                                  <div className="flex flex-col w-1/2 bg-blue-900/10 border border-blue-500/20 rounded-xl p-3">
-                                    <div className="flex justify-between items-center border-b border-blue-500/30 pb-2 mb-3">
-                                      <span className="text-[10px] text-blue-400 font-black tracking-widest">{game.blue_team_tag || game.blue_tag || 'BLUE'}</span>
-                                      {firstPickSide === 'blue' && <span className="text-[7px] bg-blue-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(59,130,246,0.8)]">1ST PICK</span>}
-                                    </div>
-                                    
-                                    <div className="flex flex-col gap-2 mb-3 flex-1">
-                                      {bluePicks.map((p, i) => (
-                                        <div key={`bp-${i}`} className="flex items-center gap-3 bg-blue-950/30 border border-blue-500/10 p-1.5 rounded-lg group hover:border-blue-400/40 transition-colors">
-                                          <img src={getChampionImageUrl(p.champion)} className="w-8 h-8 rounded-md object-cover shadow-sm group-hover:scale-105 transition-transform" alt={p.champion} />
-                                          <span className="text-[10px] text-white tracking-tighter truncate">{p.champion}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                    
-                                    <div className="flex flex-wrap gap-1 justify-start pt-2 border-t border-slate-800/50">
-                                      {blueBans.map((b, i) => (
-                                        <div key={`bb-${i}`} className="relative group/ban">
-                                          <img src={getChampionImageUrl(b.champion)} className="w-6 h-6 rounded border border-slate-700 grayscale opacity-80 hover:grayscale-0 hover:opacity-100 transition-all object-cover cursor-help" alt={b.champion} />
-                                          <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-black border border-white/10 text-white text-[8px] px-2 py-1 rounded opacity-0 group-hover/ban:opacity-100 pointer-events-none z-50 whitespace-nowrap shadow-xl">{b.champion}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-
-                                  {/* COLUNA RED */}
-                                  <div className="flex flex-col w-1/2 bg-red-900/10 border border-red-500/20 rounded-xl p-3">
-                                    <div className="flex justify-between items-center border-b border-red-500/30 pb-2 mb-3">
-                                      {firstPickSide === 'red' && <span className="text-[7px] bg-red-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(239,68,68,0.8)]">1ST PICK</span>}
-                                      <span className="text-[10px] text-red-400 font-black tracking-widest w-full text-right">{game.red_team_tag || game.red_tag || 'RED'}</span>
-                                    </div>
-                                    
-                                    <div className="flex flex-col gap-2 mb-3 flex-1">
-                                      {redPicks.map((p, i) => (
-                                        <div key={`rp-${i}`} className="flex items-center justify-end gap-3 bg-red-950/30 border border-red-500/10 p-1.5 rounded-lg group hover:border-red-400/40 transition-colors">
-                                          <span className="text-[10px] text-white tracking-tighter truncate text-right">{p.champion}</span>
-                                          <img src={getChampionImageUrl(p.champion)} className="w-8 h-8 rounded-md object-cover shadow-sm group-hover:scale-105 transition-transform" alt={p.champion} />
-                                        </div>
-                                      ))}
-                                    </div>
-                                    
-                                    <div className="flex flex-wrap gap-1 justify-end pt-2 border-t border-slate-800/50">
-                                      {redBans.map((b, i) => (
-                                        <div key={`rb-${i}`} className="relative group/ban">
-                                          <img src={getChampionImageUrl(b.champion)} className="w-6 h-6 rounded border border-slate-700 grayscale opacity-80 hover:grayscale-0 hover:opacity-100 transition-all object-cover cursor-help" alt={b.champion} />
-                                          <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-black border border-white/10 text-white text-[8px] px-2 py-1 rounded opacity-0 group-hover/ban:opacity-100 pointer-events-none z-50 whitespace-nowrap shadow-xl">{b.champion}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-
-                                </div>
-                              )}
-                            </div>
+                      return (
+                        <div key={matchId} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 relative">
+                          
+                          <div className="flex justify-between items-center mb-4">
+                             <div className="flex items-center gap-3">
+                               <span className="bg-zinc-800 text-zinc-300 text-[10px] font-bold px-2 py-1 rounded">GAME {gameNum}</span>
+                               <span className="text-xs text-zinc-500 font-mono hidden md:block">ID: {matchId}</span>
+                             </div>
+                             <div className="flex items-center gap-2">
+                               {gameIsBlueWin ? (
+                                 <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-2 py-1 rounded border border-blue-500/20">BLUE WIN</span>
+                               ) : (
+                                 <span className="text-[10px] font-bold text-red-400 bg-red-500/10 px-2 py-1 rounded border border-red-500/20">RED WIN</span>
+                               )}
+                               <button onClick={(e) => handleProcessAnalytics(matchId, e)} className="text-[10px] font-bold text-zinc-400 bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded transition-colors uppercase">
+                                 {processingId === matchId ? 'SYNCING...' : 'SYNC DATA'}
+                               </button>
+                               <Link href={`/dashboard/matches/${matchId}`} className="text-[10px] font-bold text-white bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded transition-colors uppercase">
+                                 REPORT COMPLETO →
+                               </Link>
+                             </div>
                           </div>
-                        );
-                      })}
-                  </div>
+
+                          {gameDrafts.length === 0 ? (
+                            <div className="text-center py-6 text-xs text-zinc-500 bg-zinc-950/50 rounded-md border border-zinc-800 border-dashed">
+                               {loadingDrafts === matchId ? 'Carregando draft...' : 'Nenhum draft registrado nesta partida.'}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-zinc-950 p-4 rounded-md border border-zinc-800/80">
+                               
+                               {/* === LADO AZUL === */}
+                               <div className="flex flex-col gap-3 flex-1 w-full md:w-auto">
+                                  <div className="flex items-center justify-between px-1">
+                                     <div className="flex items-center gap-2">
+                                        <span className="text-xs font-black text-blue-500 uppercase">{game.blue_team_tag || game.blue_tag || 'BLUE TEAM'}</span>
+                                        {firstPickSide === 'blue' && <span className="text-[7px] font-black bg-blue-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(59,130,246,0.8)]">1ST PICK</span>}
+                                        {lastPickSide === 'blue' && <span className="text-[7px] font-black bg-purple-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(168,85,247,0.8)]">COUNTER</span>}
+                                     </div>
+                                     <div className="flex gap-1.5">
+                                        {blueBans.map((b, i) => {
+                                          const normChamp = normalizeChampName(b.champion);
+                                          const banR = globalBans[normChamp] || 0;
+                                          return (
+                                            <div key={i} className="relative group/ban">
+                                              <img src={getChampionIconUrl(b.champion)} className="w-8 h-8 rounded-[4px] object-cover grayscale opacity-60 hover:grayscale-0 hover:opacity-100 transition-all border border-zinc-700 cursor-help" alt={b.champion} />
+                                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-zinc-900 border border-zinc-700 text-white text-[9px] p-2 rounded opacity-0 group-hover/ban:opacity-100 pointer-events-none z-50 whitespace-nowrap shadow-2xl flex flex-col items-center gap-1 transition-all duration-200">
+                                                 <span className="font-black uppercase tracking-widest text-zinc-300">{b.champion}</span>
+                                                 <span className="font-mono text-amber-500">{banR}% BAN RATE</span>
+                                                 <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-zinc-700"></div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                     </div>
+                                  </div>
+                                  <div className="flex gap-1.5 justify-start">
+                                     {bluePicks.map((p, i) => {
+                                        const pStat = gameStats.find(s => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
+                                        const pName = pStat.summoner_name || 'UNKNOWN';
+                                        const ratLane = Number(pStat.lane_rating || 0).toFixed(1);
+                                        const ratImp = Number(pStat.impact_rating || 0).toFixed(1);
+                                        const ratConv = Number(pStat.conversion_rating || 0).toFixed(1);
+                                        const ratVis = Number(pStat.vision_rating || 0).toFixed(1);
+
+                                        return (
+                                          <div key={i} className="flex-1 relative h-28 md:h-36 rounded-lg overflow-hidden group/card border border-zinc-800 hover:border-blue-500 transition-all">
+                                             <img src={getChampionSplashUrl(p.champion)} className="absolute inset-0 w-full h-full object-cover object-[center_20%] transition-transform duration-500 group-hover/card:scale-110 group-hover/card:blur-[2px]" alt={p.champion} />
+                                             
+                                             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-2 pt-6 z-10 transition-opacity duration-300 group-hover/card:opacity-0">
+                                               <p className="text-[10px] text-white font-black truncate drop-shadow-md text-center uppercase tracking-wider">{pName}</p>
+                                             </div>
+
+                                             <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/card:opacity-100 transition-opacity duration-300 flex flex-col justify-center items-center p-1.5 gap-2 z-20">
+                                                <span className="text-[8px] text-blue-400 font-black uppercase tracking-widest text-center truncate w-full">{pName}</span>
+                                                <div className="grid grid-cols-1 gap-y-1 text-[9px] w-full px-1">
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">LAN</span><span className="text-white font-mono font-bold">{ratLane}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">IMP</span><span className="text-white font-mono font-bold">{ratImp}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">CON</span><span className="text-white font-mono font-bold">{ratConv}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">VIS</span><span className="text-white font-mono font-bold">{ratVis}</span></div>
+                                                </div>
+                                             </div>
+                                          </div>
+                                        );
+                                     })}
+                                     {Array.from({length: Math.max(0, 5 - bluePicks.length)}).map((_, i) => (
+                                        <div key={`empty-b-${i}`} className="flex-1 relative h-28 md:h-36 bg-zinc-800 rounded-md border border-zinc-700"></div>
+                                     ))}
+                                  </div>
+                               </div>
+
+                               <div className="hidden md:flex flex-col items-center justify-center px-2">
+                                  <span className="text-[10px] font-black text-zinc-600">VS</span>
+                               </div>
+
+                               {/* === LADO VERMELHO === */}
+                               <div className="flex flex-col gap-3 flex-1 w-full md:w-auto">
+                                  <div className="flex items-center justify-between px-1">
+                                     <div className="flex gap-1.5">
+                                        {redBans.map((b, i) => {
+                                          const normChamp = normalizeChampName(b.champion);
+                                          const banR = globalBans[normChamp] || 0;
+                                          return (
+                                            <div key={i} className="relative group/ban">
+                                              <img src={getChampionIconUrl(b.champion)} className="w-8 h-8 rounded-[4px] object-cover grayscale opacity-60 hover:grayscale-0 hover:opacity-100 transition-all border border-zinc-700 cursor-help" alt={b.champion} />
+                                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-zinc-900 border border-zinc-700 text-white text-[9px] p-2 rounded opacity-0 group-hover/ban:opacity-100 pointer-events-none z-50 whitespace-nowrap shadow-2xl flex flex-col items-center gap-1 transition-all duration-200">
+                                                 <span className="font-black uppercase tracking-widest text-zinc-300">{b.champion}</span>
+                                                 <span className="font-mono text-amber-500">{banR}% BAN RATE</span>
+                                                 <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-zinc-700"></div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                     </div>
+                                     <div className="flex items-center gap-2">
+                                        {firstPickSide === 'red' && <span className="text-[7px] font-black bg-red-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(239,68,68,0.8)]">1ST PICK</span>}
+                                        {lastPickSide === 'red' && <span className="text-[7px] font-black bg-purple-600 text-white px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(168,85,247,0.8)]">COUNTER</span>}
+                                        <span className="text-xs font-black text-red-500 uppercase text-right">{game.red_team_tag || game.red_tag || 'RED TEAM'}</span>
+                                     </div>
+                                  </div>
+                                  <div className="flex gap-1.5 justify-end">
+                                     {redPicks.map((p, i) => {
+                                        const pStat = gameStats.find(s => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
+                                        const pName = pStat.summoner_name || 'UNKNOWN';
+                                        const ratLane = Number(pStat.lane_rating || 0).toFixed(1);
+                                        const ratImp = Number(pStat.impact_rating || 0).toFixed(1);
+                                        const ratConv = Number(pStat.conversion_rating || 0).toFixed(1);
+                                        const ratVis = Number(pStat.vision_rating || 0).toFixed(1);
+
+                                        return (
+                                          <div key={i} className="flex-1 relative h-28 md:h-36 rounded-lg overflow-hidden group/card border border-zinc-800 hover:border-red-500 transition-all">
+                                             <img src={getChampionSplashUrl(p.champion)} className="absolute inset-0 w-full h-full object-cover object-[center_20%] transition-transform duration-500 group-hover/card:scale-110 group-hover/card:blur-[2px]" alt={p.champion} />
+                                             
+                                             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-2 pt-6 z-10 transition-opacity duration-300 group-hover/card:opacity-0">
+                                               <p className="text-[10px] text-white font-black truncate drop-shadow-md text-center uppercase tracking-wider">{pName}</p>
+                                             </div>
+
+                                             <div className="absolute inset-0 bg-black/80 opacity-0 group-hover/card:opacity-100 transition-opacity duration-300 flex flex-col justify-center items-center p-1.5 gap-2 z-20">
+                                                <span className="text-[8px] text-red-400 font-black uppercase tracking-widest text-center truncate w-full">{pName}</span>
+                                                <div className="grid grid-cols-1 gap-y-1 text-[9px] w-full px-1">
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">LAN</span><span className="text-white font-mono font-bold">{ratLane}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">IMP</span><span className="text-white font-mono font-bold">{ratImp}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">CON</span><span className="text-white font-mono font-bold">{ratConv}</span></div>
+                                                   <div className="flex justify-between items-center"><span className="text-zinc-500 tracking-widest">VIS</span><span className="text-white font-mono font-bold">{ratVis}</span></div>
+                                                </div>
+                                             </div>
+                                          </div>
+                                        );
+                                     })}
+                                     {Array.from({length: Math.max(0, 5 - redPicks.length)}).map((_, i) => (
+                                        <div key={`empty-r-${i}`} className="flex-1 relative h-28 md:h-36 bg-zinc-800 rounded-md border border-zinc-700"></div>
+                                     ))}
+                                  </div>
+                               </div>
+
+                            </div>
+                          )}
+
+                        </div>
+                      );
+                    })}
                 </div>
               )}
             </div>
@@ -498,17 +581,7 @@ export default function MatchesPage() {
   );
 }
 
-function StatBox({ label, value, color = "text-white" }: { label: string, value: string | number, color?: string }) {
-  return (
-    <div className="flex flex-col bg-white/[0.02] border border-white/5 px-5 py-3 rounded-2xl min-w-[100px]">
-      <span className="text-[8px] text-slate-600 tracking-widest mb-1 uppercase">{label}</span>
-      <span className={`text-xl font-black italic ${color}`}>{value}</span>
-    </div>
-  );
-}
-
-// --- COMPONENTES AUXILIARES DOS FILTROS ---
-function CockpitDropdown({ label, value, onChange, options, color }: any) {
+function CockpitDropdown({ label, value, onChange, options }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   
@@ -519,35 +592,27 @@ function CockpitDropdown({ label, value, onChange, options, color }: any) {
   }, []);
 
   const currentLabel = options.find((o:any) => o.id === value)?.label || value;
-  
-  const colorClasses: Record<string, {text: string, bg: string, shadow: string}> = {
-    blue: { text: 'text-blue-400', bg: 'bg-blue-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(59,130,246,0.5)]' },
-    emerald: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]' },
-    purple: { text: 'text-purple-400', bg: 'bg-purple-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(168,85,247,0.5)]' }
-  };
-  
-  const c = colorClasses[color] || colorClasses.blue;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      {label && <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">{label}</label>}
+      {label && <label className="text-[9px] text-zinc-500 font-bold mb-1 ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl flex items-center justify-between gap-4 min-w-[140px] hover:border-slate-600 transition-all shadow-inner text-[9px] text-white font-black italic uppercase group"
+        className="bg-zinc-900 border border-zinc-800 px-4 py-1.5 rounded-md flex items-center justify-between gap-4 min-w-[140px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase"
       >
-        <span className={`flex-1 text-left ${c.text} ${c.shadow} transition-all`}>{currentLabel}</span>
-        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left">{currentLabel}</span>
+        <span className={`text-[8px] text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 min-w-[160px] bg-[#0a0f18] border border-slate-700 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[9999] max-h-[320px] overflow-y-auto custom-scrollbar">
+        <div className="absolute top-full mt-1 right-0 min-w-[160px] bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
           {options.map((opt:any) => (
             <button 
               key={opt.id} 
               onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-4 py-3 hover:bg-slate-800 transition-colors border-b border-slate-800/50 last:border-0 ${value === opt.id ? c.bg : ''}`}
+              className={`w-full flex items-center px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
             >
-              <span className={`text-[9px] font-black italic uppercase ${value === opt.id ? c.text : 'text-slate-400'}`}>{opt.label}</span>
+              <span className="text-[10px] font-bold uppercase">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -557,7 +622,7 @@ function CockpitDropdown({ label, value, onChange, options, color }: any) {
 }
 
 function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  return <CockpitDropdown label="CAMPEONATO" value={value} onChange={onChange} color="blue" options={[
+  return <CockpitDropdown label="CAMPEONATO" value={value} onChange={onChange} options={[
     { id: 'ALL', label: 'TODOS OS CAMPEONATOS' }, { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
     { id: 'CBLOL', label: 'CBLOL' }, { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
     { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' }, { id: 'FIRST_STAND', label: 'FIRST STAND' },
@@ -567,7 +632,7 @@ function TournamentSelector({ value, onChange }: { value: string, onChange: (val
 }
 
 function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} color="emerald" options={[
+  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
     { id: 'ALL', label: 'ANO INTEIRO' }, { id: 'SPLIT 1', label: 'SPLIT 1' }, 
     { id: 'SPLIT 2', label: 'SPLIT 2' }, { id: 'SPLIT 3', label: 'SPLIT 3' }
   ]} />

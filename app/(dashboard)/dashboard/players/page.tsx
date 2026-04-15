@@ -24,6 +24,7 @@ const SEQUENCE_LABELS: { [key: number]: string } = {
 };
 
 const OBJECTIVE_LABELS: { [key: string]: string } = {
+  'lvl1': '🔥 LEVEL 1 (0-1:59)',
   'dragon1': 'Dragão 1', 'horde': 'Vastilarvas', 'dragon2': 'Dragão 2', 'riftherald': 'Arauto',
   'dragon3': 'Dragão 3', 'dragon4': 'Dragão 4', 'BARON_NASHOR': 'Barão Nashor', 'dragon5': 'Ancião/D5'
 };
@@ -32,6 +33,7 @@ const BASE_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/min
 const BASE_ANNOUNCE_URL = "https://raw.communitydragon.org/latest/game/assets/ux/announcements";
 
 const OBJECTIVE_ASSETS: { [key: string]: { icon: string, hover: string } } = {
+  'lvl1': { icon: `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/item/3340.png`, hover: '' },
   'dragon1': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
   'dragon2': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
   'dragon3': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
@@ -42,7 +44,7 @@ const OBJECTIVE_ASSETS: { [key: string]: { icon: string, hover: string } } = {
   'BARON_NASHOR': { icon: `${BASE_ICON_URL}/baron.png`, hover: `${BASE_ANNOUNCE_URL}/baron_circle.png` },
 };
 
-const ORDERED_OBJECTIVES = ['dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
+const ORDERED_OBJECTIVES = ['lvl1', 'dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
 
 // --- UTILITÁRIOS ---
 
@@ -54,14 +56,23 @@ function formatTime(decimal: number) {
 }
 
 function normalizeRole(lane: string | null): string {
-  if (!lane) return 'mid';
-  const l = lane.toLowerCase().trim();
+  if (!lane) return 'unknown'; 
+  const l = String(lane).toLowerCase().trim();
   if (l.includes('top')) return 'top';
   if (l.includes('jungle') || l.includes('jng') || l === 'jg' || l.includes('jug')) return 'jng';
   if (l.includes('mid')) return 'mid';
   if (l.includes('bot') || l.includes('adc')) return 'adc';
   if (l.includes('sup') || l.includes('utility')) return 'support';
-  return 'support'; 
+  return 'unknown'; 
+}
+
+function normalizeChampName(name: string | null): string {
+  if (!name) return 'unknown';
+  let n = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (n === 'wukong') return 'monkeyking';
+  if (n === 'renataglasc') return 'renata';
+  if (n.includes('nunu')) return 'nunu';
+  return n;
 }
 
 function sortPlayersByRole(playersArray: any[]) {
@@ -79,13 +90,22 @@ function getChampionImageUrl(championName: string | null) {
   return `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${sanitized}.png`;
 }
 
+function getChampionSplashUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${sanitized}_0.jpg`;
+}
+
 function getScoreColor(score: number | null) {
-  if (!score) return "text-slate-600";
-  if (score >= 90) return "text-purple-400"; 
-  if (score >= 80) return "text-blue-400";     
-  if (score >= 70) return "text-emerald-400"; 
-  if (score >= 60) return "text-yellow-400";  
-  return "text-red-400";                               
+  if (!score) return "text-zinc-600";
+  if (score >= 90) return "text-purple-500"; 
+  if (score >= 80) return "text-blue-500";     
+  if (score >= 70) return "text-emerald-500"; 
+  if (score >= 60) return "text-amber-500";  
+  return "text-red-500";                                 
 }
 
 function getRoleIcon(role: string, size: string = "w-5 h-5") {
@@ -98,9 +118,27 @@ function getRoleIcon(role: string, size: string = "w-5 h-5") {
     case 'mid': iconName = "icon-position-middle.png"; break;
     case 'adc': iconName = "icon-position-bottom.png"; break; 
     case 'support': iconName = "icon-position-utility.png"; break;
-    default: return <span className="text-[10px]">👤</span>;
+    default: return <span className="text-[12px] font-black text-zinc-600">?</span>;
   }
-  return <img src={`${basePath}/${iconName}`} alt={normalizedRole} className={`${size} object-contain brightness-200`} />;
+  return <img src={`${basePath}/${iconName}`} alt={normalizedRole} className={`${size} object-contain brightness-200 opacity-80`} />;
+}
+
+const formatDate = (dateString: string) => { 
+  if (!dateString) return ''; 
+  const p = dateString.split('-'); 
+  return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; 
+};
+
+const formatTimeStr = (timeString: string) => { 
+  if (!timeString) return ''; 
+  return timeString.substring(0, 5); 
+};
+
+function getSafeTimestamp(dateString: any) {
+  if (!dateString) return 0;
+  const safeDate = String(dateString).trim().replace(' ', 'T');
+  const time = new Date(safeDate.includes('T') && !safeDate.includes('Z') && !safeDate.includes('-') && !safeDate.includes('+') ? `${safeDate}Z` : safeDate).getTime();
+  return isNaN(time) ? 0 : time;
 }
 
 // --- COMPONENTE PRINCIPAL ---
@@ -113,10 +151,8 @@ export default function PlayersHubPage() {
   const [filterTeam, setFilterTeam] = useState<string>("TODOS");
   const [isAdmin, setIsAdmin] = useState(false);
   
-  // =====================================
-  // ESTADOS GLOBAIS DE FILTRO E LEADERBOARD
-  // =====================================
-  const [globalTournament, setGlobalTournament] = useState("CIRCUITO_DESAFIANTE");
+  // ESTADOS GLOBAIS DE FILTRO E LEADERBOARD (AGORA ARRAY PARA MULTI-SELEÇÃO)
+  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO_DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("SPLIT 1");
   const [leaderboardTab, setLeaderboardTab] = useState<string>("GLOBAL");
 
@@ -124,23 +160,30 @@ export default function PlayersHubPage() {
   const [teamObjectiveWindows, setTeamObjectiveWindows] = useState<any[]>([]);
   const [teamWards, setTeamWards] = useState<any[]>([]);
   const [draftStats, setDraftStats] = useState<any[]>([]);
+  const [globalBans, setGlobalBans] = useState<Record<string, number>>({});
   const [draftViewMode, setDraftViewMode] = useState<'champion' | 'role'>('champion');
 
+  // INICIA EM LVL 1
   const [heatmapSide, setHeatmapSide] = useState<string>("Blue");
-  const [heatmapObjective, setHeatmapObjective] = useState<string>("dragon1");
+  const [heatmapObjective, setHeatmapObjective] = useState<string>("lvl1");
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState({ puuid: '', nickname: '', team_acronym: '', photo_url: '', primary_role: '' });
+  
+  const [missionsRaw, setMissionsRaw] = useState<any[]>([]);
+  const [teamsList, setTeamsList] = useState<any[]>([]); 
+  const [statsDetailed, setStatsDetailed] = useState<any[]>([]);
+  const [myTeamTag, setMyTeamTag] = useState('RMD');
 
   useEffect(() => { checkUserRole(); }, []);
-  useEffect(() => { fetchInitialData(); }, [globalTournament, globalSplit]);
+  useEffect(() => { fetchInitialData(); }, [globalTournaments, globalSplit]);
   
   useEffect(() => { 
     if (filterTeam !== "TODOS") { 
       fetchPerformanceData(filterTeam); 
       fetchAnalysisData(filterTeam); 
     } 
-  }, [filterTeam, globalTournament, globalSplit]);
+  }, [filterTeam, globalTournaments, globalSplit]);
 
   async function checkUserRole() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -149,14 +192,27 @@ export default function PlayersHubPage() {
 
   async function fetchInitialData() {
     setLoading(true);
+    
+    const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
+    if (configData && configData.my_team_tag) setMyTeamTag(configData.my_team_tag.toUpperCase());
+
     const { data: t } = await supabase.from('teams').select('*').order('acronym');
     
     let query = supabase.from('hub_players_roster').select('*');
-    if (globalTournament !== 'ALL') query = query.eq('game_type', globalTournament);
+    if (!globalTournaments.includes('ALL')) query = query.in('game_type', globalTournaments);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
     const { data: p } = await query;
     
+    let banQuery = supabase.from('view_champion_ban_stats').select('*').limit(200);
+    if (!globalTournaments.includes('ALL')) banQuery = banQuery.in('game_type', globalTournaments);
+    if (globalSplit !== 'ALL') banQuery = banQuery.eq('split', globalSplit);
+    
+    const [bansRes, matchCountRes] = await Promise.all([
+      banQuery,
+      supabase.from('matches').select('id', { count: 'exact', head: true })
+    ]);
+
     if (t && p) {
       const groupedPlayersMap = new Map();
       p.forEach((curr: any) => {
@@ -194,18 +250,36 @@ export default function PlayersHubPage() {
       const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
       const filteredTeams = t.filter(team => activeTeamTags.has(team.acronym));
       setTeams(filteredTeams);
+      setTeamsList(t);
 
       setFilterTeam(prev => {
         if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS";
         return prev;
       });
     }
+
+    if (bansRes.data) {
+       const totalMatches = matchCountRes.count || 1;
+       const banMap: Record<string, number> = {};
+       bansRes.data.forEach(b => {
+          const rate = (Number(b.total_bans) / totalMatches) * 100;
+          banMap[normalizeChampName(b.champion)] = Number(rate.toFixed(1));
+       });
+       setGlobalBans(banMap);
+    }
+
+    const { data: missionsData } = await supabase.from('missions').select('*');
+    if (missionsData) setMissionsRaw(missionsData);
+
+    const { data: sDetailed } = await supabase.from('player_stats_detailed').select('*').limit(20000);
+    if (sDetailed) setStatsDetailed(sDetailed);
+
     setLoading(false);
   }
 
   async function fetchPerformanceData(team: string) {
-    let query = supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true });
-    if (globalTournament !== 'ALL') query = query.eq('game_type', globalTournament);
+    let query = supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
+    if (!globalTournaments.includes('ALL')) query = query.in('game_type', globalTournaments);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
     const { data } = await query;
@@ -213,34 +287,33 @@ export default function PlayersHubPage() {
   }
 
   async function fetchAnalysisData(team: string) {
-    let objQuery = supabase.from('hub_players_objectives').select('*').eq('team_acronym', team);
-    let draftQuery = supabase.from('hub_players_draft').select('*').eq('team_acronym', team);
-    let wardsQuery = supabase.from('hub_players_vision').select('*').eq('team_acronym', team);
+    let objQuery = supabase.from('hub_players_objectives').select('*').eq('team_acronym', team).limit(10000);
+    let draftQuery = supabase.from('hub_players_draft').select('*').eq('team_acronym', team).limit(10000);
 
-    if (globalTournament !== 'ALL') {
-      objQuery = objQuery.eq('game_type', globalTournament);
-      draftQuery = draftQuery.eq('game_type', globalTournament);
-      wardsQuery = wardsQuery.eq('game_type', globalTournament);
+    if (!globalTournaments.includes('ALL')) {
+      objQuery = objQuery.in('game_type', globalTournaments);
+      draftQuery = draftQuery.in('game_type', globalTournaments);
     }
     if (globalSplit !== 'ALL') {
       objQuery = objQuery.eq('split', globalSplit);
       draftQuery = draftQuery.eq('split', globalSplit);
-      wardsQuery = wardsQuery.eq('split', globalSplit);
     }
 
-    const [obj, draft, wards] = await Promise.all([objQuery, draftQuery, wardsQuery]);
+    const [obj, draft] = await Promise.all([objQuery, draftQuery]);
     
     if (obj.data) {
       const groupedObjMap = new Map();
       obj.data.forEach((curr: any) => {
-        const key = `${curr.objective_type}_${curr.side}`;
+        const normSide = String(curr.side || '').toLowerCase() === '100' ? 'blue' : String(curr.side || '').toLowerCase() === '200' ? 'red' : String(curr.side || '').toLowerCase();
+        const key = `${String(curr.objective_type).toLowerCase()}_${normSide}`;
+        
         if (!groupedObjMap.has(key)) {
-          groupedObjMap.set(key, { ...curr, count: 1 });
+          groupedObjMap.set(key, { ...curr, count: 1, side: normSide });
         } else {
           const acc = groupedObjMap.get(key);
-          acc.min_minute = Math.min(acc.min_minute, curr.min_minute);
-          acc.max_minute = Math.max(acc.max_minute, curr.max_minute);
-          acc.avg_minute = ((acc.avg_minute * acc.count) + curr.avg_minute) / (acc.count + 1);
+          acc.min_minute = Math.min(acc.min_minute, Number(curr.min_minute) || Infinity);
+          acc.max_minute = Math.max(acc.max_minute, Number(curr.max_minute) || 0);
+          acc.avg_minute = ((acc.avg_minute * acc.count) + (Number(curr.avg_minute) || 0)) / (acc.count + 1);
           acc.count += 1;
         }
       });
@@ -269,14 +342,46 @@ export default function PlayersHubPage() {
       setDraftStats(Array.from(groupedDraftMap.values()));
     }
     
-    if (wards.data) setTeamWards(wards.data);
+    // --- NOVO SISTEMA DE PAGINAÇÃO PARA AS WARDS ---
+    let allWards: any[] = [];
+    let fetchMore = true;
+    let from = 0;
+    const step = 1000;
+
+    while (fetchMore) {
+      let wardsQuery = supabase
+        .from('hub_players_vision')
+        .select('*')
+        .eq('team_acronym', team)
+        .range(from, from + step - 1);
+
+      if (!globalTournaments.includes('ALL')) wardsQuery = wardsQuery.in('game_type', globalTournaments);
+      if (globalSplit !== 'ALL') wardsQuery = wardsQuery.eq('split', globalSplit);
+
+      const { data: wardsChunk, error } = await wardsQuery;
+
+      if (error || !wardsChunk || wardsChunk.length === 0) {
+        fetchMore = false;
+      } else {
+        allWards = [...allWards, ...wardsChunk];
+        from += step;
+        
+        if (wardsChunk.length < step) {
+          fetchMore = false;
+        }
+      }
+    }
+
+    setTeamWards(allWards);
   }
+
+  // --- USEMEMOS BLINDADOS ---
 
   const sideStatsData = useMemo(() => {
     if (filterTeam === "TODOS" || teamChartData.length === 0) return null;
     const stats = { blue: { g: 0, w: 0, l: 0, i: 0, c: 0, v: 0 }, red: { g: 0, w: 0, l: 0, i: 0, c: 0, v: 0 } };
     teamChartData.forEach(m => {
-      const target = (m.side || '').toUpperCase() === 'BLUE' ? stats.blue : stats.red;
+      const target = String(m.side || '').toUpperCase() === 'BLUE' ? stats.blue : stats.red;
       target.g++; if (m.win_status === 'W') target.w++;
       target.l += (m.avg_lane || 0); target.i += (m.avg_impact || 0); target.c += (m.avg_conversion || 0); target.v += (m.avg_vision || 0);
     });
@@ -286,10 +391,41 @@ export default function PlayersHubPage() {
     ].filter(s => s.value > 0);
   }, [teamChartData, filterTeam]);
 
+  // MOTOR BLINDADO: TACTICAL VISION RADAR COM EARLY GAME E COORDENADAS SEGURAS
   const activeWards = useMemo(() => {
-    const window = teamObjectiveWindows.find(o => o.side === heatmapSide && o.objective_type.toLowerCase() === heatmapObjective.toLowerCase());
-    if (!window) return [];
-    return teamWards.filter(w => w.side === heatmapSide && w.minute >= window.min_minute && w.minute <= window.max_minute);
+    const targetSide = String(heatmapSide).toLowerCase(); 
+    const targetObj = String(heatmapObjective).toLowerCase();
+    
+    // Filtramos primeiro o Lado. Aceitando '100', '200', 'blue', 'red'.
+    let wardsToDisplay = teamWards.filter(w => {
+       const wSide = String(w.side || '').toLowerCase() === '100' ? 'blue' : String(w.side || '').toLowerCase() === '200' ? 'red' : String(w.side || '').toLowerCase();
+       return wSide === targetSide;
+    });
+
+    // TRATAMENTO ATUALIZADO PARA O LEVEL 1 (Abaixo de 2 minutos para pegar 0:00 até 1:59)
+    if (targetObj === 'lvl1') {
+       return wardsToDisplay.filter(w => Number(w.minute) <= 1);
+    }
+
+    const window = teamObjectiveWindows.find(o => String(o.side).toLowerCase() === targetSide && String(o.objective_type).toLowerCase() === targetObj);
+
+    if (window) {
+       const wMin = Number(window.min_minute) || 0;
+       const wMax = Number(window.max_minute) || 0;
+       wardsToDisplay = wardsToDisplay.filter(w => Number(w.minute) >= (wMin - 2) && Number(w.minute) <= (wMax + 1));
+    } else {
+       // Se o time nunca fez esse obj, mapeia os wards com base no tempo do servidor Meta
+       let min = 0, max = 15;
+       if (targetObj === 'dragon1' || targetObj === 'horde') { min = 4; max = 9; }
+       else if (targetObj === 'dragon2' || targetObj === 'riftherald') { min = 9; max = 16; }
+       else if (targetObj === 'dragon3') { min = 15; max = 22; }
+       else if (targetObj === 'dragon4') { min = 21; max = 28; }
+       else if (targetObj === 'baron_nashor') { min = 20; max = 35; }
+       else if (targetObj === 'dragon5') { min = 28; max = 45; }
+       
+       wardsToDisplay = wardsToDisplay.filter(w => Number(w.minute) >= min && Number(w.minute) <= max);
+    }
+    return wardsToDisplay;
   }, [teamWards, heatmapSide, heatmapObjective, teamObjectiveWindows]);
 
   const mostPickedOverall = useMemo(() => {
@@ -310,25 +446,88 @@ export default function PlayersHubPage() {
     for (let seq = 1; seq <= 20; seq++) {
       const isBan = [1,2,3,4,5,6,13,14,15,16].includes(seq);
       const records = draftStats.filter(d => d.sequence === seq && d.type === (isBan ? 'BAN' : 'PICK'));
+      
       if (records.length) {
-        const top = [...records].sort((a,b) => (b.total_count || 0) - (a.total_count || 0))[0];
-        assignments[seq] = { 
-          name: top.champion, wr: top.win_rate, count: top.total_count, 
-          image: getChampionImageUrl(top.champion), 
-          ratings: top.avg_lane ? { lane: top.avg_lane, impact: top.avg_impact, conv: top.avg_conv, vision: top.avg_vision } : null 
-        };
+        if (draftViewMode === 'role' && !isBan) {
+          const roleMap: any = {};
+          records.forEach(r => {
+             let rawRole = r.role || r.lane;
+             if (!rawRole) {
+                const champStats = statsDetailed.find(s => 
+                   normalizeChampName(s.champion) === normalizeChampName(r.champion) && 
+                   String(s.team_acronym).toUpperCase() === myTeamTag
+                );
+                if (champStats) rawRole = champStats.lane || champStats.role || champStats.primary_role;
+             }
+             
+             const rKey = normalizeRole(rawRole); 
+             if (rKey === 'unknown') return; 
+
+             if(!roleMap[rKey]) roleMap[rKey] = { name: rKey, count: 0, wrSum: 0, laneSum:0, impSum:0, convSum:0, visSum:0 };
+             roleMap[rKey].count += r.total_count;
+             roleMap[rKey].wrSum += ((r.win_rate || 0) * r.total_count);
+             roleMap[rKey].laneSum += ((r.avg_lane || 0) * r.total_count);
+             roleMap[rKey].impSum += ((r.avg_impact || 0) * r.total_count);
+             roleMap[rKey].convSum += ((r.avg_conv || 0) * r.total_count);
+             roleMap[rKey].visSum += ((r.avg_vision || 0) * r.total_count);
+          });
+          
+          const sorted = Object.values(roleMap).sort((a: any, b: any) => b.count - a.count);
+          if (sorted.length > 0) {
+             const top = sorted[0] as any;
+             assignments[seq] = { 
+               name: top.name, 
+               wr: top.count > 0 ? top.wrSum / top.count : 0, 
+               count: top.count, 
+               image: null, 
+               splash: null,
+               ratings: top.count > 0 ? { lane: top.laneSum/top.count, impact: top.impSum/top.count, conv: top.convSum/top.count, vision: top.visSum/top.count } : null 
+             };
+          }
+        } else {
+          const champMap: any = {};
+          records.forEach(r => {
+             const cKey = r.champion;
+             if(!champMap[cKey]) champMap[cKey] = { name: cKey, count: 0, wrSum: 0, laneSum:0, impSum:0, convSum:0, visSum:0 };
+             champMap[cKey].count += r.total_count;
+             champMap[cKey].wrSum += ((r.win_rate || 0) * r.total_count);
+             champMap[cKey].laneSum += ((r.avg_lane || 0) * r.total_count);
+             champMap[cKey].impSum += ((r.avg_impact || 0) * r.total_count);
+             champMap[cKey].convSum += ((r.avg_conv || 0) * r.total_count);
+             champMap[cKey].visSum += ((r.avg_vision || 0) * r.total_count);
+          });
+          const top = Object.values(champMap).sort((a: any, b: any) => b.count - a.count)[0] as any;
+          assignments[seq] = { 
+            name: top.name, 
+            wr: top.count > 0 ? top.wrSum / top.count : 0, 
+            count: top.count, 
+            image: getChampionImageUrl(top.name), 
+            splash: getChampionSplashUrl(top.name),
+            ratings: top.count > 0 ? { lane: top.laneSum/top.count, impact: top.impSum/top.count, conv: top.convSum/top.count, vision: top.visSum/top.count } : null 
+          };
+        }
       }
     }
     return assignments;
-  }, [draftStats]);
+  }, [draftStats, draftViewMode, statsDetailed, myTeamTag]);
 
-  const boxPlotData = useMemo(() => ORDERED_OBJECTIVES.map(objKey => {
-    const s = teamObjectiveWindows.find(o => o.objective_type.toLowerCase() === objKey.toLowerCase() && o.side === heatmapSide);
+  const boxPlotData = useMemo(() => ORDERED_OBJECTIVES.filter(k => k !== 'lvl1').map(objKey => {
+    const targetSide = String(heatmapSide).toLowerCase();
+    const s = teamObjectiveWindows.find(o => 
+       String(o.objective_type || '').toLowerCase() === String(objKey).toLowerCase() && 
+       String(o.side || '').toLowerCase() === targetSide
+    );
     const assets = OBJECTIVE_ASSETS[objKey];
-    return s ? { name: OBJECTIVE_LABELS[objKey], key: objKey, window: [s.min_minute, s.max_minute], avg: s.avg_minute, icon: assets?.icon, hoverImg: assets?.hover } : null;
+    
+    return { 
+        name: OBJECTIVE_LABELS[objKey], 
+        key: objKey, 
+        ...(s ? { window: [Number(s.min_minute), Number(s.max_minute)], avg: Number(s.avg_minute) } : {}),
+        icon: assets?.icon, 
+        hoverImg: assets?.hover 
+    };
   }).filter(Boolean), [teamObjectiveWindows, heatmapSide]);
 
-  // --- CÁLCULO DO MASTER LEADERBOARD ---
   const leaderboardPlayers = useMemo(() => {
     let targetPlayers = [...players];
     if (leaderboardTab !== 'GLOBAL') {
@@ -340,7 +539,7 @@ export default function PlayersHubPage() {
   const handleSaveChanges = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true);
     try {
-      await supabase.from('players').update({ nickname: editForm.nickname, team_acronym: editForm.team_acronym.toUpperCase(), photo_url: editForm.photo_url, primary_role: editForm.primary_role }).eq('puuid', editForm.puuid);
+      await supabase.from('players').update({ nickname: editForm.nickname, team_acronym: String(editForm.team_acronym || '').toUpperCase(), photo_url: editForm.photo_url, primary_role: editForm.primary_role }).eq('puuid', editForm.puuid);
       setIsEditModalOpen(false); fetchInitialData();
     } finally { setSaving(false); }
   };
@@ -352,56 +551,56 @@ export default function PlayersHubPage() {
   };
 
   if (loading && players.length === 0) return (
-    <div className="flex items-center justify-center h-[80vh]">
-      <p className="text-blue-500 font-black italic animate-pulse tracking-widest text-xs uppercase">// INITIALIZING_SCOUTING_PROTOCOL_...</p>
+    <div className="flex items-center justify-center h-screen bg-[#0a0a0a]">
+      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Sincronizando Banco de Dados...</p>
     </div>
   );
 
   return (
-    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-black uppercase italic tracking-tighter pb-20 overflow-visible">
+    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible">
       
-      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-white/5 pb-8 relative z-[200]">
-        <div className="border-l-4 border-blue-500 pl-4">
-          <h1 className="text-4xl text-white leading-none">SCOUTING <span className="text-blue-500">HUB</span></h1>
-          <p className="text-[9px] text-slate-500 tracking-[0.4em] mt-2 font-black">DATABASE: {players.length} ACTIVE OPERATIVES</p>
+      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-8 relative z-[200]">
+        <div>
+          <h1 className="text-4xl font-black text-white uppercase tracking-tight">SCOUTING <span className="text-blue-500">HUB</span></h1>
+          <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DATABASE: {players.length} ACTIVE OPERATIVES</p>
         </div>
 
-        <div className="flex gap-6 items-end bg-transparent">
-           <TournamentSelector value={globalTournament} onChange={setGlobalTournament} />
+        <div className="flex gap-4 items-end bg-transparent">
+           <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
            <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
         </div>
       </header>
 
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[100] overflow-visible">
-        <div className="flex flex-wrap justify-center gap-3 flex-1">
-          <button onClick={() => setFilterTeam("TODOS")} className={`px-6 py-2.5 rounded-xl text-[10px] transition-all ${filterTeam === "TODOS" ? 'bg-white text-black' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>TODOS</button>
+        <div className="flex flex-wrap justify-start gap-2 bg-zinc-900 p-1.5 rounded-lg border border-zinc-800 max-w-full overflow-x-auto custom-scrollbar flex-1">
+          <button onClick={() => setFilterTeam("TODOS")} className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors whitespace-nowrap ${filterTeam === "TODOS" ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>TODOS</button>
           {teams.map(t => (
-            <button key={t.acronym} onClick={() => setFilterTeam(t.acronym)} className={`px-6 py-2.5 rounded-xl text-[10px] flex items-center gap-2.5 transition-all ${filterTeam === t.acronym ? 'bg-blue-600 text-white shadow-lg border-transparent' : 'bg-[#121212] text-slate-500 border border-white/5 hover:border-white/20'}`}>
-              {t.logo_url && <img src={t.logo_url} alt="" className="w-5 h-5 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]" />}{t.acronym}
+            <button key={t.acronym} onClick={() => setFilterTeam(t.acronym)} className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors flex items-center gap-2 whitespace-nowrap ${filterTeam === t.acronym ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>
+              {t.logo_url && <img src={t.logo_url} alt="" className="w-4 h-4 object-contain" />}{t.acronym}
             </button>
           ))}
         </div>
 
         {filterTeam !== "TODOS" && sideStatsData && (
-          <div className="flex items-center gap-6 bg-[#121212] border border-white/5 p-4 rounded-[24px] shadow-2xl backdrop-blur-sm group hover:border-blue-500/30 transition-all overflow-visible">
-              <div className="w-16 h-16 relative">
+          <div className="flex items-center gap-6 bg-[#18181b] border border-zinc-800 p-4 rounded-xl shadow-sm transition-all overflow-visible shrink-0">
+              <div className="w-14 h-14 relative">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={sideStatsData} innerRadius={18} outerRadius={28} paddingAngle={5} dataKey="value" stroke="none">
+                    <Pie data={sideStatsData} innerRadius={18} outerRadius={26} paddingAngle={5} dataKey="value" stroke="none">
                       {sideStatsData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.fill} />)}
                     </Pie>
                     <Tooltip content={<CustomPieTooltip />} wrapperStyle={{ zIndex: 9999 }} />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-[8px] text-white font-black">{teamChartData.length}G</div>
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-[8px] text-zinc-300 font-bold">{teamChartData.length}G</div>
               </div>
               <div className="flex flex-col gap-1.5">
                 {sideStatsData.map(side => (
                   <div key={side.name} className="flex items-center gap-2">
-                    <div className={`w-1 h-3 rounded-full ${side.name === 'Blue' ? 'bg-blue-500 shadow-[0_0_5px_#3b82f6]' : 'bg-red-500 shadow-[0_0_5px_#ef4444]'}`} />
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[11px] ${side.wr >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{side.wr}% WR</span>
-                      <span className="text-[7px] text-slate-600 font-mono">{side.value} JOGOS</span>
+                    <div className={`w-1 h-3 rounded-full ${side.name === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+                    <div className="flex items-center gap-3">
+                      <span className={`text-[11px] font-black ${side.wr >= 50 ? 'text-emerald-500' : 'text-red-500'}`}>{side.wr}% WR</span>
+                      <span className="text-[9px] text-zinc-500 font-bold uppercase">{side.value} JOGOS</span>
                     </div>
                   </div>
                 ))}
@@ -411,23 +610,20 @@ export default function PlayersHubPage() {
       </div>
 
       {filterTeam === "TODOS" ? (
-        <div className="bg-[#121212] border border-white/5 rounded-[40px] p-6 md:p-10 shadow-2xl relative overflow-hidden">
-          {/* Fundo Decorativo Fuchsia para o MVP global */}
-          <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-fuchsia-500/5 blur-[120px] rounded-full pointer-events-none" />
-
-          <div className="flex flex-col md:flex-row justify-between items-center mb-10 relative z-10 gap-6">
+        <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 md:p-8 shadow-sm relative overflow-hidden flex flex-col">
+          
+          <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-6 border-b border-zinc-800 pb-6 shrink-0">
             <div>
-              <h2 className="text-3xl text-white flex items-center gap-3">
-                <span className="text-fuchsia-500">🏆</span> POWER RANKINGS
+              <h2 className="text-xl text-white font-black uppercase tracking-tight flex items-center gap-3">
+                <span className="text-amber-500">🏆</span> POWER RANKINGS
               </h2>
-              <p className="text-[9px] text-slate-500 tracking-[0.3em] mt-2">ALGORITMO DE EFICIÊNCIA TIER 2</p>
+              <p className="text-[10px] text-zinc-500 tracking-widest font-bold mt-1 uppercase">Algoritmo de Eficiência Tática</p>
             </div>
 
-            {/* TAB SELETOR DO LEADERBOARD */}
-            <div className="flex gap-2 bg-black/40 p-1.5 rounded-2xl border border-white/5 overflow-x-auto max-w-full custom-scrollbar">
+            <div className="flex gap-2 bg-zinc-900 p-1.5 rounded-lg border border-zinc-800 overflow-x-auto max-w-full custom-scrollbar">
               <button 
                 onClick={() => setLeaderboardTab('GLOBAL')} 
-                className={`px-6 py-3 rounded-xl text-[10px] transition-all flex items-center gap-2 whitespace-nowrap ${leaderboardTab === 'GLOBAL' ? 'bg-gradient-to-r from-fuchsia-600 to-pink-600 text-white shadow-[0_0_15px_rgba(232,121,249,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors flex items-center gap-2 whitespace-nowrap ${leaderboardTab === 'GLOBAL' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
               >
                 ★ GLOBAL
               </button>
@@ -435,73 +631,61 @@ export default function PlayersHubPage() {
                 <button 
                   key={role} 
                   onClick={() => setLeaderboardTab(role.toUpperCase())} 
-                  className={`px-5 py-3 rounded-xl text-[10px] transition-all flex items-center gap-2 whitespace-nowrap ${leaderboardTab === role.toUpperCase() ? 'bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                  className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors flex items-center gap-2 whitespace-nowrap ${leaderboardTab === role.toUpperCase() ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
                 >
-                  <span className="opacity-70">{getRoleIcon(role, "w-4 h-4")}</span> {role.toUpperCase()}
+                  <span className="opacity-70">{getRoleIcon(role, "w-3 h-3")}</span> {role.toUpperCase()}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* LISTA DO LEADERBOARD */}
-          <div className="space-y-3 relative z-10">
-            {/* Cabeçalho da Lista */}
-            <div className="hidden md:flex items-center px-6 py-2 text-[8px] text-slate-600 tracking-widest border-b border-white/5 mb-4">
-               <div className="w-12 text-center">RANK</div>
-               <div className="w-[250px] ml-4">OPERATIVO</div>
-               <div className="flex-1 text-center opacity-70">ATRIBUTOS TÁTICOS</div>
-               <div className="w-24 text-right">RATING GERAL</div>
-            </div>
-
+          <div className="flex flex-col gap-3 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2">
             {leaderboardPlayers.length === 0 ? (
-              <div className="text-center py-20 text-slate-600 text-xs tracking-widest">NENHUM OPERATIVO ENCONTRADO.</div>
+              <div className="text-center py-20 text-zinc-600 text-xs tracking-widest font-bold uppercase">Nenhum operativo encontrado no filtro.</div>
             ) : (
               leaderboardPlayers.map((p, index) => {
                 const isTop1 = index === 0;
                 const team = teams.find((t: any) => t.acronym === p.team_acronym);
-                const roleIcon = getRoleIcon(p.primary_role, "w-3 h-3");
+                const roleIcon = getRoleIcon(String(p.primary_role), "w-3 h-3");
                 
                 return (
                   <Link 
                     key={p.puuid} 
                     href={`/dashboard/players/${p.puuid}`} 
-                    className={`flex flex-col md:flex-row items-center p-4 md:p-5 rounded-3xl border transition-all group relative overflow-hidden ${isTop1 ? 'bg-gradient-to-r from-fuchsia-500/10 via-black to-black border-fuchsia-500/30 hover:border-fuchsia-400 shadow-[0_0_20px_rgba(232,121,249,0.05)]' : 'bg-black/40 border-white/5 hover:border-blue-500/40 hover:bg-[#1a1c23]'}`}
+                    className={`flex flex-col md:flex-row items-center p-4 rounded-xl border transition-colors group relative overflow-hidden ${isTop1 ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/50' : 'bg-zinc-900/50 border-zinc-800 hover:border-zinc-600'}`}
                   >
-                    {isTop1 && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-fuchsia-400 to-pink-600 shadow-[0_0_10px_rgba(232,121,249,0.5)]" />}
+                    {isTop1 && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-amber-500" />}
                     
-                    {/* INFO RANK E FOTO */}
                     <div className="flex w-full md:w-auto items-center justify-between md:justify-start mb-4 md:mb-0">
-                      <span className={`text-3xl font-black w-12 text-center ${isTop1 ? 'text-fuchsia-400 drop-shadow-[0_0_10px_rgba(232,121,249,0.5)]' : 'text-slate-700 group-hover:text-slate-500 transition-colors'}`}>
+                      <span className={`text-2xl font-black w-12 text-center ${isTop1 ? 'text-amber-500' : 'text-zinc-600 group-hover:text-zinc-400 transition-colors'}`}>
                         #{index + 1}
                       </span>
                       
-                      <div className="flex items-center gap-4 flex-1 md:w-[250px] ml-4">
-                        <img src={p.photo_url || DEFAULT_AVATAR} className={`w-14 h-14 object-cover rounded-[18px] border-2 ${isTop1 ? 'border-fuchsia-500/50 shadow-[0_0_15px_rgba(232,121,249,0.2)]' : 'border-white/5 shadow-lg'}`} alt="" />
-                        <div className="flex flex-col">
-                          <span className={`text-lg tracking-tighter leading-none ${isTop1 ? 'text-white' : 'text-slate-300 group-hover:text-white transition-colors'}`}>{p.nickname}</span>
-                          <div className="flex items-center gap-2 mt-2 bg-black/40 px-2 py-1 rounded-md border border-white/5 w-fit">
-                            {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]" />}
-                            <span className="text-[8px] text-slate-400 tracking-widest">{p.team_acronym}</span>
-                            <span className="text-slate-600">|</span>
+                      <div className="flex items-center gap-4 flex-1 md:w-[220px] ml-2">
+                        <img src={p.photo_url || DEFAULT_AVATAR} className={`w-12 h-12 object-cover rounded-lg border-2 ${isTop1 ? 'border-amber-500/50' : 'border-zinc-800'}`} alt="" />
+                        <div className="flex flex-col min-w-0">
+                          <span className={`text-base font-black uppercase tracking-tight truncate ${isTop1 ? 'text-amber-500' : 'text-zinc-300 group-hover:text-white transition-colors'}`}>{p.nickname}</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain" />}
+                            <span className="text-[9px] font-bold text-zinc-500 uppercase">{p.team_acronym}</span>
+                            <span className="text-zinc-700">|</span>
                             {leaderboardTab === 'GLOBAL' && <span className="opacity-70">{roleIcon}</span>}
-                            <span className="text-[8px] text-slate-500">{p.games_played}G</span>
+                            <span className="text-[9px] font-bold text-zinc-600">{p.games_played}G</span>
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* PROGRESS BARS HORIZONTAIS */}
-                    <div className="flex-1 w-full max-w-[600px] ml-auto mr-8 hidden md:grid grid-cols-4 gap-6 items-center">
+                    <div className="flex-1 w-full max-w-[500px] ml-auto mr-8 hidden md:grid grid-cols-4 gap-4 items-center">
                       <ProgressBar label="LANE" value={p.median_lane} />
                       <ProgressBar label="IMPACTO" value={p.median_impact} />
                       <ProgressBar label="CONV." value={p.median_conversion} />
                       <ProgressBar label="VISÃO" value={p.median_vision} />
                     </div>
 
-                    {/* RATING GERAL */}
-                    <div className="flex flex-col items-end justify-center w-full md:w-24 mt-4 md:mt-0 pt-4 md:pt-0 border-t md:border-t-0 border-white/5">
-                      <span className={`text-[7px] mb-1 tracking-widest ${isTop1 ? 'text-fuchsia-500/70' : 'text-slate-600'}`}>RATING</span>
-                      <span className={`text-3xl font-black leading-none ${isTop1 ? 'text-fuchsia-400' : getScoreColor(p.mvp_score).split(' ')[0]}`}>
+                    <div className="flex flex-col items-end justify-center w-full md:w-20 mt-4 md:mt-0 pt-4 md:pt-0 border-t md:border-t-0 border-zinc-800">
+                      <span className={`text-[8px] font-bold uppercase tracking-widest mb-1 ${isTop1 ? 'text-amber-500/70' : 'text-zinc-500'}`}>RATING</span>
+                      <span className={`text-2xl font-black leading-none ${isTop1 ? 'text-amber-500' : getScoreColor(p.mvp_score)}`}>
                         {Math.round(p.mvp_score || 0)}
                       </span>
                     </div>
@@ -512,34 +696,38 @@ export default function PlayersHubPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-12">
+        <div className="space-y-6">
           
-          <div className="bg-[#121212] border border-white/5 rounded-[32px] p-8 h-[380px] shadow-2xl relative overflow-visible">
-            <h3 className="text-lg text-white mb-6 flex items-center gap-3">
-              <div className="w-1.5 h-5 bg-blue-500 rounded-full shadow-[0_0_10px_#3b82f6]" /> 
-              Performance Analytics Timeline
-            </h3>
-            <ResponsiveContainer width="100%" height="85%">
-              <LineChart data={teamChartData} margin={{ top: 5, right: 20, left: -20, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} opacity={0.3} />
-                <XAxis dataKey="match_id" tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} />} interval={0} stroke="#1e293b" />
-                <YAxis domain={[40, 100]} stroke="#475569" fontSize={9} fontStyle="italic" fontWeight="black" />
-                <Tooltip content={<CustomChartTooltip />} wrapperStyle={{ zIndex: 9999 }} />
-                <Legend verticalAlign="bottom" align="center" iconType="rect" wrapperStyle={{ paddingTop: '20px', fontSize: '9px', fontWeight: '900' }} />
-                <Line type="linear" dataKey="avg_lane" name="LANE" stroke="#c084fc" strokeWidth={3} dot={{ r: 3, fill: '#c084fc', strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                <Line type="linear" dataKey="avg_impact" name="IMPACTO" stroke="#60a5fa" strokeWidth={3} dot={{ r: 3, fill: '#60a5fa', strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                <Line type="linear" dataKey="avg_conversion" name="CONV." stroke="#34d399" strokeWidth={3} dot={{ r: 3, fill: '#34d399', strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                <Line type="linear" dataKey="avg_vision" name="VISÃO" stroke="#eab308" strokeWidth={3} dot={{ r: 3, fill: '#eab308', strokeWidth: 0 }} activeDot={{ r: 5 }} />
-              </LineChart>
-            </ResponsiveContainer>
+          <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 h-[380px] shadow-sm relative flex flex-col">
+            <div className="flex justify-between items-center mb-6 shrink-0">
+               <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
+                 <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
+                 Performance Analytics Timeline
+               </h3>
+            </div>
+            <div className="flex-1 min-h-0">
+               <ResponsiveContainer width="100%" height="100%">
+                 <LineChart data={teamChartData} margin={{ top: 5, right: 20, left: -20, bottom: 40 }}>
+                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                   <XAxis dataKey="match_id" tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} />} interval={0} stroke="#27272a" axisLine={false} tickLine={false} />
+                   <YAxis domain={[40, 100]} stroke="#71717a" fontSize={9} fontStyle="bold" axisLine={false} tickLine={false} />
+                   <Tooltip content={<CustomChartTooltip />} wrapperStyle={{ zIndex: 9999 }} cursor={{ stroke: '#3f3f46', strokeWidth: 1, strokeDasharray: '5 5' }} />
+                   <Legend verticalAlign="bottom" align="center" iconType="circle" wrapperStyle={{ paddingTop: '20px', fontSize: '10px', fontWeight: 'bold' }} />
+                   <Line type="monotone" dataKey="avg_lane" name="LANE" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#8b5cf6' }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
+                   <Line type="monotone" dataKey="avg_impact" name="IMPACTO" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#3b82f6' }} activeDot={{ r: 5, fill: '#3b82f6' }} />
+                   <Line type="monotone" dataKey="avg_conversion" name="CONV." stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#10b981' }} activeDot={{ r: 5, fill: '#10b981' }} />
+                   <Line type="monotone" dataKey="avg_vision" name="VISÃO" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#f59e0b' }} activeDot={{ r: 5, fill: '#f59e0b' }} />
+                 </LineChart>
+               </ResponsiveContainer>
+            </div>
           </div>
 
-          <section className="overflow-visible pt-4">
-            <h2 className="text-xl text-white mb-8 italic font-black flex items-center gap-3">
-              <div className="w-2 h-5 bg-blue-600 rounded-full shadow-[0_0_10px_#2563eb]" /> 
-              Tactical Operations Unit (Active Roster)
+          <section className="pt-2">
+            <h2 className="text-xl font-black text-white uppercase tracking-tight mb-6 flex items-center gap-3">
+              <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
+              Tactical Operations Unit
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 overflow-visible">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {(() => {
                 const teamPlayers = sortPlayersByRole(players.filter(p => p.team_acronym === filterTeam));
                 const maxTeamScore = Math.max(...teamPlayers.map(p => p.mvp_score || 0));
@@ -558,100 +746,117 @@ export default function PlayersHubPage() {
             </div>
           </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-visible">
-            <div className="bg-[#121212] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl items-center relative overflow-visible group">
-              <div className="w-full flex justify-between mb-8 items-center relative z-50">
-                <span className="text-white text-xl font-black italic">Tactical Vision Radar</span>
-                <div className="flex gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-visible">
+            {/* VISION RADAR */}
+            <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col items-center relative shadow-sm">
+              <div className="w-full flex justify-between mb-6 items-center border-b border-zinc-800 pb-4">
+                <span className="text-white text-lg font-black uppercase tracking-tight">Tactical Vision Radar</span>
+                <div className="flex gap-2">
                   <SideSelector value={heatmapSide} onChange={setHeatmapSide} />
                   <ObjectiveSelector value={heatmapObjective} onChange={setHeatmapObjective} />
                 </div>
               </div>
-              <div className="relative w-full max-w-[440px] aspect-square bg-black rounded-[40px] overflow-hidden border border-white/10 shadow-[0_0_50px_rgba(0,0,0,1)]">
-                <img src="https://pbs.twimg.com/media/G7GGWYIXgAEx4SP?format=jpg&name=medium" className="absolute inset-0 w-full h-full object-cover opacity-50 grayscale contrast-125" alt="" />
-                <div className="absolute inset-0 z-21 opacity-[0.05] pointer-events-none" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
-                <div className="absolute inset-0 z-25 pointer-events-none">
-                  {activeWards.map(w => {
-                    const posX = MAP_OFFSET + ((w.ward_x || 0) / GAME_MAX) * MAP_SCALE;
-                    const posY = MAP_OFFSET + ((w.ward_y || 0) / GAME_MAX) * MAP_SCALE;
-                    const isControl = w.type?.toLowerCase().includes('control');
+              <div className="relative w-full max-w-[400px] aspect-square bg-zinc-950 rounded-xl overflow-hidden border border-zinc-800">
+                <img src="https://pbs.twimg.com/media/G7GGWYIXgAEx4SP?format=jpg&name=medium" className="absolute inset-0 w-full h-full object-cover opacity-60" alt="" />
+                <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                
+                <div className="absolute inset-0 z-30 pointer-events-none">
+                  {activeWards.map((w, index) => {
+                    const rawX = Number(w.ward_x ?? w.player_x ?? 0);
+                    const rawY = Number(w.ward_y ?? w.player_y ?? 0);
+                    const posX = MAP_OFFSET + (rawX / GAME_MAX) * MAP_SCALE;
+                    const posY = MAP_OFFSET + (rawY / GAME_MAX) * MAP_SCALE;
+                    const isControl = String(w.type || w.ward_type || '').toLowerCase().includes('control');
                     const sensorColor = isControl ? '#ef4444' : '#eab308';
                     return (
-                      <div key={`sensor-${w.id}`} className="absolute w-3 h-3 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto" style={{ left: `${posX}%`, bottom: `${posY}%` }}>
-                        <div className="absolute inset-0 rounded-full animate-ping opacity-30" style={{ backgroundColor: sensorColor }} />
-                        <div className="relative w-full h-full rounded-full border border-white shadow-lg cursor-help" style={{ backgroundColor: sensorColor, boxShadow: `0 0 10px ${sensorColor}` }} />
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-3 py-1.5 bg-[#0a0a0a] border border-white/10 rounded-lg text-[9px] text-white opacity-0 group-hover/ward:opacity-100 transition-all whitespace-nowrap z-[9999] backdrop-blur-md shadow-2xl">
-                           <span className="text-slate-500 font-mono">T+</span> {formatTime(w.minute)} | {isControl ? 'CONTROL' : 'STEALTH'}
+                      <div key={`sensor-${w.id || index}`} className="absolute w-3 h-3 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto" style={{ left: `${posX}%`, bottom: `${posY}%` }}>
+                        <div className="absolute inset-0 rounded-full animate-ping opacity-40" style={{ backgroundColor: sensorColor }} />
+                        <div className="relative w-full h-full rounded-full border-2 border-zinc-900 cursor-help" style={{ backgroundColor: sensorColor }} />
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] text-white opacity-0 group-hover/ward:opacity-100 transition-opacity whitespace-nowrap z-[9999] shadow-lg font-bold">
+                           <span className="text-zinc-400 font-mono">T+</span> {formatTime(Number(w.minute) || 0)} | {isControl ? 'CONTROL' : 'STEALTH'}
                         </div>
                       </div>
                     );
                   })}
                 </div>
+                
+                {/* Empty State Fallback para Radar */}
+                {activeWards.length === 0 && (
+                  <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
+                    <span className="bg-zinc-900/90 text-zinc-500 text-[9px] font-bold px-3 py-1.5 rounded uppercase tracking-widest border border-zinc-800 shadow-md">
+                      Nenhuma visão nesta janela
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="bg-[#121212] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-visible">
-               <h3 className="text-xl text-white mb-12 italic tracking-tighter">Objective Execution Strategy</h3>
-               <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={boxPlotData} margin={{ bottom: 60, left: -20 }}>
-                    <defs>
-                      <linearGradient id="barGradientBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={1} /><stop offset="100%" stopColor="#1e3a8a" stopOpacity={0.8} /></linearGradient>
-                      <linearGradient id="barGradientRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ef4444" stopOpacity={1} /><stop offset="100%" stopColor="#7f1d1d" stopOpacity={0.8} /></linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} vertical={true} opacity={0.3} />
-                    <XAxis dataKey="key" tick={<ObjectiveAxisTick />} interval={0} height={100} axisLine={false} />
-                    <YAxis domain={[0, 45]} stroke="#475569" fontSize={10} fontStyle="italic" fontWeight="black" tickFormatter={(v) => `${v}m`} />
-                    <Tooltip content={<CustomObjectiveTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} wrapperStyle={{ zIndex: 9999 }} />
-                    <Bar dataKey="window" radius={[10, 10, 10, 10]} barSize={24}>
-                       {boxPlotData.map((entry, index) => <Cell key={`cell-${index}`} fill={heatmapSide === 'Blue' ? "url(#barGradientBlue)" : "url(#barGradientRed)"} />)}
-                    </Bar>
-                  </BarChart>
-               </ResponsiveContainer>
+            {/* OBJECTIVE BOX PLOT */}
+            <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col shadow-sm">
+               <h3 className="text-lg font-black text-white uppercase tracking-tight mb-6 border-b border-zinc-800 pb-4">Objective Execution Strategy</h3>
+               <div className="flex-1 min-h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={boxPlotData} margin={{ bottom: 30, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} vertical={true} />
+                      <XAxis dataKey="key" tick={<ObjectiveAxisTick />} interval={0} height={40} axisLine={false} tickLine={false} />
+                      <YAxis domain={[0, 45]} stroke="#71717a" fontSize={10} fontStyle="bold" tickFormatter={(v) => `${v}m`} axisLine={false} tickLine={false} />
+                      <Tooltip content={<CustomObjectiveTooltip />} cursor={{ fill: '#27272a', opacity: 0.4 }} wrapperStyle={{ zIndex: 9999 }} />
+                      <Bar dataKey="window" radius={[4, 4, 4, 4]} barSize={20} fill={String(heatmapSide).toLowerCase() === 'blue' ? "#3b82f6" : "#ef4444"} />
+                    </BarChart>
+                  </ResponsiveContainer>
+               </div>
             </div>
           </div>
 
-          <section className="bg-[#121212] border border-white/5 rounded-[48px] p-10 shadow-2xl relative overflow-visible">
-            <div className="flex justify-between items-center mb-16 relative z-10">
-               <h3 className="text-3xl text-white italic">Draft Strategy Pattern</h3>
-               <div className="flex bg-black/40 p-1.5 rounded-2xl border border-white/5">
-                 <button onClick={() => setDraftViewMode('champion')} className={`px-6 py-2.5 rounded-xl text-[10px] transition-all ${draftViewMode === 'champion' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>CHAMPS</button>
-                 <button onClick={() => setDraftViewMode('role')} className={`px-6 py-2.5 rounded-xl text-[10px] transition-all ${draftViewMode === 'role' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>ROLES</button>
+          <section className="bg-[#18181b] border border-zinc-800 rounded-2xl p-8 shadow-sm relative">
+            <div className="flex justify-between items-center mb-10 border-b border-zinc-800 pb-6">
+               <div>
+                  <h3 className="text-2xl font-black text-white uppercase tracking-tight">Draft Strategy Pattern</h3>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-1">Análise de Prioridade e Flex</p>
+               </div>
+               <div className="flex bg-zinc-900 p-1.5 rounded-lg border border-zinc-800">
+                 <button onClick={() => setDraftViewMode('champion')} className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors ${draftViewMode === 'champion' ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>CHAMPS</button>
+                 <button onClick={() => setDraftViewMode('role')} className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors ${draftViewMode === 'role' ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>ROLES</button>
                </div>
             </div>
 
-            <div className="grid grid-cols-12 gap-12 relative z-10">
-              <div className="lg:col-span-4 space-y-10">
-                <div className="flex items-center gap-3 text-blue-500 text-lg italic"><div className="w-2.5 h-6 bg-blue-600 rounded-full shadow-[0_0_15px_#3b82f6]" /> BLUE SIDE</div>
-                <div className="flex gap-4">
-                  {[1, 3, 5, 14, 16].map(seq => <DraftBanThumbnail key={seq} label={SEQUENCE_LABELS[seq]} data={draftAssignments[seq]} />)}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* BLUE SIDE */}
+              <div className="lg:col-span-4 space-y-6">
+                <div className="flex items-center gap-3 text-blue-500 text-sm font-black uppercase tracking-widest"><div className="w-2 h-4 bg-blue-500 rounded-sm" /> BLUE SIDE</div>
+                <div className="flex gap-2">
+                  {[1, 3, 5, 14, 16].map(seq => <DraftBanThumbnail key={seq} label={SEQUENCE_LABELS[seq]} data={draftAssignments[seq]} globalBans={globalBans} />)}
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {[7, 10, 11, 18, 19].map((seq, idx) => <DraftPickCard key={seq} label={`B${idx + 1}`} data={draftAssignments[seq]} side="blue" mode={draftViewMode} />)}
                 </div>
               </div>
 
-              <div className="lg:col-span-4 bg-black/40 border border-white/5 rounded-[50px] p-8 h-fit self-center shadow-inner relative overflow-hidden group">
-                <div className="absolute inset-0 bg-blue-500/5 blur-[80px] opacity-0 group-hover:opacity-100 transition-opacity" />
-                <h4 className="text-[10px] text-center mb-10 text-slate-500 tracking-[0.4em] font-black">TOP EFFICIENCY POOL</h4>
-                <div className="space-y-8">
+              {/* CENTER (TOP PICKS) */}
+              <div className="lg:col-span-4 bg-zinc-900 border border-zinc-800 rounded-xl p-6 h-fit self-center flex flex-col">
+                <h4 className="text-[10px] text-center mb-6 text-zinc-500 font-bold uppercase tracking-widest border-b border-zinc-800 pb-3">Top Efficiency Pool</h4>
+                <div className="space-y-4">
                   {mostPickedOverall.map((c: any) => (
-                    <div key={c.name} className="flex items-center justify-between group-hover:translate-x-1 transition-transform relative z-10">
-                      <div className="flex items-center gap-4">
-                        <img src={getChampionImageUrl(c.name)} className="w-12 h-12 rounded-xl border border-white/5 shadow-xl" alt="" />
-                        <div><span className="text-sm text-white">{c.name}</span><p className="text-[8px] text-slate-500 mt-1">{c.count.toFixed(0)} JOGOS</p></div>
+                    <div key={c.name} className="flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <div className="relative w-10 h-10 rounded-lg border border-zinc-700 overflow-hidden shadow-sm">
+                           <img src={getChampionImageUrl(c.name)} className="absolute inset-0 w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt="" />
+                        </div>
+                        <div><span className="text-xs font-black text-white uppercase">{c.name}</span><p className="text-[9px] font-bold text-zinc-500 uppercase">{c.count.toFixed(0)} JOGOS</p></div>
                       </div>
-                      <span className={`text-sm italic ${c.wins/c.count >= 0.5 ? 'text-emerald-400' : 'text-red-400'}`}>{((c.wins/c.count)*100).toFixed(0)}% WR</span>
+                      <span className={`text-xs font-black ${c.count > 0 && c.wins/c.count >= 0.5 ? 'text-emerald-500' : 'text-red-500'}`}>{c.count > 0 ? ((c.wins/c.count)*100).toFixed(0) : 0}% WR</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="lg:col-span-4 space-y-10 text-right">
-                <div className="flex items-center gap-3 justify-end text-red-500 text-lg italic">RED SIDE <div className="w-2.5 h-6 bg-red-600 rounded-full shadow-[0_0_20px_#ef4444]" /></div>
-                <div className="flex gap-4 justify-end">
-                  {[2, 4, 6, 13, 15].map(seq => <DraftBanThumbnail key={seq} label={SEQUENCE_LABELS[seq]} data={draftAssignments[seq]} />)}
+              {/* RED SIDE */}
+              <div className="lg:col-span-4 space-y-6">
+                <div className="flex items-center justify-end gap-3 text-red-500 text-sm font-black uppercase tracking-widest">RED SIDE <div className="w-2 h-4 bg-red-500 rounded-sm" /></div>
+                <div className="flex gap-2 justify-end">
+                  {[2, 4, 6, 13, 15].map(seq => <DraftBanThumbnail key={seq} label={SEQUENCE_LABELS[seq]} data={draftAssignments[seq]} globalBans={globalBans} />)}
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {[8, 9, 12, 17, 20].map((seq, idx) => <DraftPickCard key={seq} label={`R${idx + 1}`} data={draftAssignments[seq]} side="red" mode={draftViewMode} />)}
                 </div>
               </div>
@@ -660,22 +865,23 @@ export default function PlayersHubPage() {
         </div>
       )}
 
+      {/* MODAL EDIÇÃO */}
       {isEditModalOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-6 backdrop-blur-md">
-          <form onSubmit={handleSaveChanges} className="w-full max-w-lg bg-[#121212] border border-white/10 rounded-[40px] p-10 space-y-6 shadow-[0_0_100px_rgba(0,0,0,1)] font-black italic uppercase">
-            <h2 className="text-3xl leading-none font-black text-white">Edit Operative</h2>
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-6 backdrop-blur-sm">
+          <form onSubmit={handleSaveChanges} className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-2xl p-8 space-y-6 shadow-2xl">
+            <h2 className="text-xl font-black text-white uppercase tracking-tight border-b border-zinc-800 pb-3">Edit Operative</h2>
             <div className="space-y-2">
-              <label className="text-[10px] text-slate-500 ml-2">Nickname</label>
-              <input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase" value={editForm.nickname} onChange={e => setEditForm({...editForm, nickname: e.target.value})} />
+              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Nickname</label>
+              <input type="text" required className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-4 py-3 text-sm font-bold text-white focus:border-blue-500 outline-none transition-colors" value={editForm.nickname} onChange={e => setEditForm({...editForm, nickname: e.target.value})} />
             </div>
             <div className="space-y-2">
-              <label className="text-[10px] text-slate-500 ml-2">Team Tag</label>
-              <input type="text" required className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase" value={editForm.team_acronym} onChange={e => setEditForm({...editForm, team_acronym: e.target.value})} />
+              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Team Tag</label>
+              <input type="text" required className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-4 py-3 text-sm font-bold text-white focus:border-blue-500 outline-none transition-colors uppercase" value={editForm.team_acronym} onChange={e => setEditForm({...editForm, team_acronym: e.target.value})} />
             </div>
-            <div className="flex gap-4 pt-6">
-              <button type="button" onClick={() => handleDeletePlayer(editForm.puuid)} className="px-6 py-4 bg-red-600/10 text-red-500 border border-red-500/20 rounded-2xl hover:bg-red-600 hover:text-white transition-all">DELETE</button>
-              <button type="submit" disabled={saving} className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl shadow-lg hover:bg-blue-500 transition-all font-black uppercase">{saving ? "SAVING..." : "UPDATE_OPERATIVE"}</button>
-              <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-6 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black">X</button>
+            <div className="flex gap-3 pt-4 border-t border-zinc-800">
+              <button type="button" onClick={() => handleDeletePlayer(editForm.puuid)} className="px-5 py-3 bg-red-500/10 text-red-500 rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-red-500 hover:text-white transition-colors border border-red-500/20">Delete</button>
+              <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-5 py-3 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 rounded-lg font-bold text-[10px] uppercase tracking-widest transition-colors border border-zinc-800 ml-auto">Cancel</button>
+              <button type="submit" disabled={saving} className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-blue-500 transition-colors disabled:opacity-50">{saving ? "Saving..." : "Save"}</button>
             </div>
           </form>
         </div>
@@ -684,26 +890,26 @@ export default function PlayersHubPage() {
   );
 }
 
-// --- SUB-COMPONENTES DE ESTILO ---
+// --- SUB-COMPONENTES DE ESTILO (FLAT DESIGN) ---
 
 function ProgressBar({ label, value }: { label: string, value: number }) {
   const numValue = Math.round(value || 0);
-  let colorClass = "bg-slate-600 shadow-none";
+  let colorClass = "bg-zinc-600";
   
-  if (numValue >= 90) colorClass = "bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.5)]";
-  else if (numValue >= 80) colorClass = "bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]";
-  else if (numValue >= 70) colorClass = "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]";
-  else if (numValue >= 60) colorClass = "bg-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.5)]";
-  else if (numValue > 0) colorClass = "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]";
+  if (numValue >= 90) colorClass = "bg-purple-500";
+  else if (numValue >= 80) colorClass = "bg-blue-500";
+  else if (numValue >= 70) colorClass = "bg-emerald-500";
+  else if (numValue >= 60) colorClass = "bg-amber-500";
+  else if (numValue > 0) colorClass = "bg-red-500";
 
   return (
     <div className="flex flex-col w-full group/bar">
-      <div className="flex justify-between items-end mb-1.5 px-1">
-        <span className="text-[9px] text-slate-500 tracking-widest font-black uppercase group-hover/bar:text-slate-300 transition-colors">{label}</span>
-        <span className="text-[12px] font-mono text-white font-black">{numValue}</span>
+      <div className="flex justify-between items-end mb-1 px-0.5">
+        <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">{label}</span>
+        <span className="text-[10px] font-black text-white">{numValue}</span>
       </div>
-      <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
-        <div className={`h-full rounded-full ${colorClass} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, numValue))}%` }} />
+      <div className="h-1.5 w-full bg-zinc-800 rounded-sm overflow-hidden">
+        <div className={`h-full ${colorClass} transition-all duration-1000`} style={{ width: `${Math.min(100, Math.max(0, numValue))}%` }} />
       </div>
     </div>
   );
@@ -713,67 +919,59 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
   const team = teams.find((t: any) => t.acronym === player.team_acronym);
   const isGlobalMVP = player.is_mvp;
   
-  let cardBorder = 'border-white/5 hover:border-blue-500/50';
-  let cardShadow = 'shadow-xl';
-  let cardBg = 'bg-[#121212]';
+  let cardBorder = 'border-zinc-800 hover:border-blue-500';
   let nameColor = 'text-white';
   
   if (isGlobalMVP) {
-    cardBorder = 'border-fuchsia-500/50';
-    cardShadow = 'shadow-[0_0_30px_rgba(232,121,249,0.1)]';
-    nameColor = 'text-fuchsia-400 drop-shadow-[0_0_10px_rgba(232,121,249,0.3)]';
+    cardBorder = 'border-amber-500/50 hover:border-amber-500';
+    nameColor = 'text-amber-500';
   } else if (isTeamMVP) {
-    cardBorder = 'border-amber-500/50';
-    cardShadow = 'shadow-[0_0_30px_rgba(251,191,36,0.1)]';
-    nameColor = 'text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.3)]';
+    cardBorder = 'border-emerald-500/50 hover:border-emerald-500';
+    nameColor = 'text-emerald-500';
   }
 
   return (
-    <div className="relative group h-full overflow-visible">
-      {isAdmin && <button onClick={(e) => { e.preventDefault(); onEdit(); }} className="absolute -top-2 -right-2 z-50 bg-blue-600 hover:bg-blue-500 p-2 rounded-xl opacity-0 group-hover:opacity-100 transition-all text-white shadow-xl">✏️</button>}
+    <div className="relative group h-full">
+      {isAdmin && <button onClick={(e) => { e.preventDefault(); onEdit(); }} className="absolute -top-2 -right-2 z-50 bg-blue-600 hover:bg-blue-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs shadow-md">✏️</button>}
       
       {isGlobalMVP && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-40 bg-gradient-to-r from-fuchsia-400 to-pink-600 text-white text-[9px] font-black px-4 py-1 rounded-full shadow-[0_0_20px_rgba(232,121,249,0.5)] italic tracking-[0.2em] border border-white/20">
-          SEASON_MVP
+        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-amber-500 text-amber-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
+          SEASON MVP
         </div>
       )}
       {!isGlobalMVP && isTeamMVP && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-40 bg-gradient-to-r from-amber-400 to-yellow-600 text-black text-[9px] font-black px-4 py-1 rounded-full shadow-[0_0_20px_rgba(251,191,36,0.5)] italic tracking-[0.2em] border border-black/50">
-          TEAM_STAR
+        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-emerald-500 text-emerald-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
+          TEAM STAR
         </div>
       )}
 
-      <Link href={`/dashboard/players/${player.puuid}`} className={`${cardBg} border transition-all flex flex-col items-center block h-full p-6 rounded-[32px] relative overflow-hidden ${cardShadow} ${cardBorder}`}>
+      <Link href={`/dashboard/players/${player.puuid}`} className={`bg-[#18181b] border transition-colors flex flex-col items-center block h-full p-5 rounded-2xl relative overflow-hidden shadow-sm ${cardBorder}`}>
         
-        {isGlobalMVP && <div className="absolute inset-0 bg-gradient-to-b from-fuchsia-500/10 to-transparent pointer-events-none" />}
-        {!isGlobalMVP && isTeamMVP && <div className="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent pointer-events-none" />}
-        
-        <div className="relative mb-6">
-          <div className={`p-1 rounded-[28px] transition-all duration-500 group-hover:scale-105 ${isGlobalMVP ? 'bg-gradient-to-tr from-fuchsia-400 to-pink-600 shadow-[0_0_20px_rgba(232,121,249,0.3)]' : isTeamMVP ? 'bg-gradient-to-tr from-amber-400 to-yellow-600 shadow-[0_0_20px_rgba(251,191,36,0.3)]' : 'bg-white/5'}`}>
-            <div className="relative w-20 h-20 bg-[#1a1a1a] rounded-[24px] overflow-hidden flex items-center justify-center">
-              <div className="absolute inset-0 bg-white/5 blur-xl opacity-20" />
+        <div className="relative mb-4 mt-2">
+          <div className={`p-0.5 rounded-xl transition-all duration-300 group-hover:scale-105 ${isGlobalMVP ? 'bg-amber-500' : isTeamMVP ? 'bg-emerald-500' : 'bg-transparent'}`}>
+            <div className="relative w-16 h-16 bg-zinc-900 rounded-xl overflow-hidden border border-zinc-700 flex items-center justify-center">
               {player.photo_url ? (
                 <img src={player.photo_url} alt={player.nickname} className="w-full h-full object-cover relative z-10" />
               ) : (
-                <span className="text-2xl font-black text-slate-700 relative z-10">{player.nickname?.substring(0, 2).toUpperCase()}</span>
+                <span className="text-xl font-black text-zinc-700 relative z-10">{player.nickname?.substring(0, 2).toUpperCase()}</span>
               )}
             </div>
           </div>
-          <div className="absolute -bottom-2 -right-2 bg-[#121212] p-2 rounded-xl border border-white/10 shadow-2xl z-20">
-            {getRoleIcon(player.primary_role, "w-4 h-4")}
+          <div className="absolute -bottom-2 -right-2 bg-zinc-950 p-1.5 rounded-lg border border-zinc-800 z-20">
+            {getRoleIcon(String(player.primary_role), "w-3 h-3")}
           </div>
         </div>
 
-        <h3 className={`text-xl font-black italic text-center truncate w-full mb-2 tracking-tighter ${nameColor}`}>
+        <h3 className={`text-base font-black text-center truncate w-full mb-1 tracking-tight uppercase ${nameColor}`}>
           {player.nickname}
         </h3>
         
-        <div className="flex items-center gap-2.5 mb-8 px-4 py-1.5 rounded-full bg-black/40 border border-white/5">
-          {team?.logo_url && <img src={team.logo_url} alt="" className="w-6 h-6 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />}
-          <p className="text-slate-400 font-bold text-[10px] tracking-widest">{player.team_acronym} • {player.games_played}G</p>
+        <div className="flex items-center gap-2 mb-6 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded">
+          {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain" />}
+          <p className="text-zinc-400 font-bold text-[9px] uppercase">{player.team_acronym} • {player.games_played}G</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 w-full mt-auto relative z-10">
+        <div className="grid grid-cols-2 gap-1.5 w-full mt-auto relative z-10">
           <StatBadge label="LANE" value={player.median_lane} />
           <StatBadge label="IMPACT" value={player.median_impact} />
           <StatBadge label="CONV" value={player.median_conversion} />
@@ -786,62 +984,87 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
 
 function StatBadge({ label, value }: { label: string, value: number | null }) {
   return (
-    <div className="flex flex-col items-center justify-center py-2.5 px-1 rounded-xl bg-black/40 border border-white/5 group-hover:border-white/10 transition-colors">
-      <span className="text-[7px] text-slate-600 tracking-tighter mb-1 uppercase">{label}</span>
-      <span className={`text-xs font-mono font-black ${getScoreColor(value)}`}>{value ? Math.round(value) : '-'}</span>
+    <div className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg bg-zinc-900 border border-zinc-800 transition-colors">
+      <span className="text-[7px] font-bold text-zinc-500 tracking-widest uppercase mb-0.5">{label}</span>
+      <span className={`text-[11px] font-black ${getScoreColor(value)}`}>{value ? Math.round(value) : '-'}</span>
     </div>
   );
 }
 
-function DraftBanThumbnail({ label, data }: any) {
+function DraftBanThumbnail({ label, data, globalBans }: any) {
+  const banRate = data && globalBans ? globalBans[normalizeChampName(data.name)] : 0;
   return (
-    <div className="text-center group relative flex-1 max-w-[44px]">
-       <p className="text-[7px] text-slate-600 mb-2 font-black italic">{label}</p>
-       <div className="w-full aspect-square bg-[#121212] border border-white/5 rounded-lg overflow-hidden flex items-center justify-center shadow-lg group-hover:border-white/20 transition-all">
-          {data ? <img src={data.image} className="w-full h-full grayscale opacity-40 object-cover" alt="" /> : <div className="w-full h-full bg-black/20" />}
+    <div className="text-center group relative flex-1">
+       <p className="text-[8px] font-bold text-zinc-500 uppercase mb-1">{label}</p>
+       <div className="w-full aspect-square bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden flex items-center justify-center transition-colors group-hover:border-zinc-500 shadow-sm relative">
+          {data ? (
+             <img src={data.image} className="absolute inset-0 w-full h-full grayscale opacity-60 object-cover group-hover:grayscale-0 group-hover:opacity-100 group-hover:scale-110 transition-all duration-500" alt="" />
+          ) : (
+             <div className="w-full h-full bg-transparent" />
+          )}
        </div>
+       
+       {data && (
+         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max bg-zinc-950 border border-zinc-800 text-white text-[9px] p-2 rounded opacity-0 group-hover:opacity-100 pointer-events-none z-[9999] shadow-2xl flex flex-col items-center gap-1 transition-all duration-200">
+            <span className="font-black uppercase tracking-widest text-zinc-200">{data.name}</span>
+            <span className="font-mono text-red-500 font-bold">{banRate || 0}% BAN RATE GERAL</span>
+            <span className="text-[7px] text-zinc-500 uppercase tracking-widest font-bold border-t border-zinc-800 pt-1 mt-0.5">{data.count} bans neste slot</span>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[4px] border-x-transparent border-t-[4px] border-t-zinc-800"></div>
+         </div>
+       )}
     </div>
   );
 }
 
 function DraftPickCard({ label, data, side, mode }: any) {
   const isBlue = side === 'blue';
+  
   return (
     <div className="group relative">
-      <div className={`p-4 rounded-2xl border transition-all flex items-center gap-5 relative overflow-visible shadow-lg ${isBlue ? 'border-blue-500/10 bg-blue-500/5 hover:bg-blue-500/10' : 'border-red-500/10 bg-red-500/5 flex-row-reverse hover:bg-red-500/10'}`}>
-        <div className={`absolute top-0 bottom-0 w-1 ${isBlue ? 'left-0 bg-blue-500 shadow-[0_0_15px_#3b82f6]' : 'right-0 bg-red-500 shadow-[0_0_15px_#ef4444]'}`} />
-        <span className={`text-xs font-black italic ${isBlue ? 'text-blue-400' : 'text-red-400'}`}>{label}</span>
-        {data ? (
-          <>
-            <div className="relative">
-              {mode === 'role' ? (
-                <div className="w-12 h-12 flex items-center justify-center bg-black border border-white/10 rounded-xl shadow-lg">
-                  {getRoleIcon(data.name, "w-7 h-7")}
-                </div>
-              ) : (
-                <img src={data.image} className="w-12 h-12 rounded-xl border border-white/10 shadow-xl group-hover:scale-105 transition-transform" alt="" />
-              )}
-            </div>
-            <div className={`flex-1 min-w-0 ${!isBlue && 'text-right'}`}>
-              <p className="text-xs text-white tracking-tighter truncate leading-none mb-2 font-black italic uppercase">{data.name}</p>
-              <div className={`flex items-center gap-3 text-[9px] font-black italic ${!isBlue && 'flex-row-reverse'}`}>
-                <span className={data.wr >= 50 ? 'text-emerald-400' : 'text-red-400'}>{data.wr}% WR</span>
-                <span className="text-slate-600 opacity-30">|</span>
-                <span className="text-slate-500 uppercase">{data.count} JOGOS</span>
-              </div>
-            </div>
-          </>
-        ) : <span className="text-[9px] text-slate-800 italic uppercase">NO_DATA</span>}
+      <div className={`h-16 rounded-xl border transition-all flex items-center relative overflow-hidden shadow-sm ${isBlue ? 'border-blue-900/30 bg-blue-900/10 hover:border-blue-500/50' : 'border-red-900/30 bg-red-900/10 hover:border-red-500/50 flex-row-reverse'}`}>
+        
+        {data && mode === 'champion' && (
+           <div className={`absolute inset-0 w-full h-full ${!isBlue ? '-scale-x-100' : ''}`}>
+             <img src={data.splash} className="w-full h-full object-cover object-[center_20%] opacity-80 transition-transform duration-500 group-hover:scale-110" alt="" />
+           </div>
+        )}
+        
+        <div className={`absolute inset-0 bg-gradient-to-r ${isBlue ? 'from-zinc-950 via-zinc-900/60 to-transparent' : 'from-transparent via-zinc-900/60 to-zinc-950'}`} />
+
+        <div className={`absolute top-0 bottom-0 w-1.5 z-20 ${isBlue ? 'left-0 bg-blue-500' : 'right-0 bg-red-500'}`} />
+        
+        <div className={`relative z-20 flex w-full items-center justify-between px-4 ${!isBlue && 'flex-row-reverse'}`}>
+           <div className={`flex items-center gap-4 ${!isBlue && 'flex-row-reverse'}`}>
+              <span className={`text-[10px] font-black uppercase ${isBlue ? 'text-blue-400' : 'text-red-400'}`}>{label}</span>
+              {data ? (
+                <>
+                  {mode === 'role' && (
+                    <div className="w-8 h-8 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-md">
+                      {getRoleIcon(data.name, "w-4 h-4")}
+                    </div>
+                  )}
+                  <div className={`flex flex-col ${!isBlue && 'items-end'}`}>
+                    <span className="text-sm font-black text-white uppercase tracking-tight">{data.name}</span>
+                    <div className={`flex items-center gap-2 text-[9px] font-bold ${!isBlue && 'flex-row-reverse'}`}>
+                      <span className={data.wr >= 50 ? 'text-emerald-500' : 'text-red-500'}>{data.wr ? data.wr.toFixed(0) : 0}% WR</span>
+                      <span className="text-zinc-600">|</span>
+                      <span className="text-zinc-400 uppercase">{data.count} JOGOS</span>
+                    </div>
+                  </div>
+                </>
+              ) : <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest ml-2">Empty</span>}
+           </div>
+        </div>
       </div>
       
       {data && data.ratings && (
-        <div className={`absolute z-[9999] top-0 ${isBlue ? 'left-full ml-4' : 'right-full mr-4'} opacity-0 group-hover:opacity-100 transition-all pointer-events-none duration-300 transform scale-95 group-hover:scale-100`}>
-          <div className="bg-[#0a0a0a] border border-white/10 p-5 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,1)] min-w-[190px] backdrop-blur-xl">
-             <p className="text-[8px] text-slate-500 mb-4 font-black uppercase tracking-widest border-b border-white/5 pb-2 font-black italic uppercase text-center">Stats with {data.name}</p>
-             <div className="space-y-2.5 font-black italic uppercase">
+        <div className={`absolute z-[9999] top-1/2 -translate-y-1/2 ${isBlue ? 'left-[102%]' : 'right-[102%]'} opacity-0 group-hover:opacity-100 transition-all pointer-events-none duration-200`}>
+          <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px]">
+             <p className="text-[8px] text-blue-400 font-bold uppercase tracking-widest border-b border-zinc-800 pb-1.5 mb-2 text-center">Performance Avg</p>
+             <div className="space-y-1.5 uppercase">
                 <RatingLine label="LANE" value={data.ratings.lane} />
                 <RatingLine label="IMPACT" value={data.ratings.impact} />
-                <RatingLine label="CONVERSION" value={data.ratings.conv} />
+                <RatingLine label="CONV" value={data.ratings.conv} />
                 <RatingLine label="VISION" value={data.ratings.vision} />
              </div>
           </div>
@@ -854,21 +1077,22 @@ function DraftPickCard({ label, data, side, mode }: any) {
 function RatingLine({ label, value }: { label: string, value: number }) {
   return (
     <div className="flex justify-between items-center gap-4">
-      <span className="text-[8px] text-slate-600 font-black tracking-widest">{label}</span>
-      <span className={`text-[10px] font-mono font-black ${getScoreColor(value)}`}>{value ? value.toFixed(1) : '0.0'}</span>
+      <span className="text-[8px] text-zinc-500 font-bold tracking-widest">{label}</span>
+      <span className={`text-[10px] font-black ${getScoreColor(value)}`}>{value ? value.toFixed(1) : '0.0'}</span>
     </div>
   );
 }
 
 // --- DROPDOWNS CUSTOMIZADOS ---
 
-function TournamentSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+// NOVO SELETOR MÚLTIPLO PARA CAMPEONATOS
+function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  
+
   useEffect(() => {
     const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
-    document.addEventListener("mousedown", click); 
+    document.addEventListener("mousedown", click);
     return () => document.removeEventListener("mousedown", click);
   }, []);
 
@@ -885,40 +1109,67 @@ function TournamentSelector({ value, onChange }: { value: string, onChange: (val
     { id: 'LPL', label: 'LPL' },
     { id: 'MSI', label: 'MSI' },
     { id: 'MUNDIAL', label: 'MUNDIAL' },
-    { id: 'SCRIM', label: 'SCRIMS' }
+    { id: 'SCRIM', label: 'SCRIMS' } // OPÇÃO DE SCRIMS ADICIONADA AQUI
   ];
 
-  const currentLabel = options.find(o => o.id === value)?.label || value;
+  const toggleOption = (id: string) => {
+    if (id === 'ALL') {
+      onChange(['ALL']);
+      return;
+    }
+    
+    let newValues = value.filter(v => v !== 'ALL');
+    if (newValues.includes(id)) {
+      newValues = newValues.filter(v => v !== id);
+      if (newValues.length === 0) newValues = ['ALL'];
+    } else {
+      newValues.push(id);
+    }
+    onChange(newValues);
+  };
+
+  const currentLabel = value.includes('ALL') 
+    ? 'TODOS OS CAMPEONATOS' 
+    : value.length === 1 
+      ? options.find(o => o.id === value[0])?.label 
+      : `${value.length} CAMPEONATOS`;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Campeonato</label>
+      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[240px] hover:border-blue-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase"
       >
-        <span className="flex-1 text-left text-blue-400 group-hover:drop-shadow-[0_0_5px_rgba(59,130,246,0.5)] transition-all">{currentLabel}</span>
-        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left">{currentLabel}</span>
+        <span className={`text-[8px] text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] z-[9999] max-h-[320px] overflow-y-auto custom-scrollbar backdrop-blur-xl">
-          {options.map(opt => (
-            <button 
-              key={opt.id} 
-              onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-blue-500/10' : ''}`}
-            >
-              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-blue-400' : 'text-slate-400'}`}>{opt.label}</span>
-            </button>
-          ))}
+        <div className="absolute top-full mt-1 right-0 min-w-[200px] bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden shadow-xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
+          {options.map((opt) => {
+            const isSelected = value.includes(opt.id);
+            return (
+              <button 
+                key={opt.id} 
+                onClick={() => toggleOption(opt.id)} 
+                className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${isSelected ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
+              >
+                <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                   {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
+                </div>
+                <span className="text-[10px] font-bold uppercase">{opt.label}</span>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+// O componente CockpitDropdown original ainda é mantido pois é usado pelo SplitSelector (que aceita só 1 escolha)
+function CockpitDropdown({ label, value, onChange, options }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   
@@ -928,35 +1179,28 @@ function SplitSelector({ value, onChange }: { value: string, onChange: (val: str
     return () => document.removeEventListener("mousedown", click);
   }, []);
 
-  const options = [
-    { id: 'ALL', label: 'ANO INTEIRO' },
-    { id: 'SPLIT 1', label: 'SPLIT 1' },
-    { id: 'SPLIT 2', label: 'SPLIT 2' },
-    { id: 'SPLIT 3', label: 'SPLIT 3' }
-  ];
-
-  const currentLabel = options.find(o => o.id === value)?.label || value;
+  const currentLabel = options.find((o:any) => o.id === value)?.label || value;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">Timeline</label>
+      {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-[#121212] border border-white/5 px-5 py-3.5 rounded-[16px] flex items-center justify-between gap-4 min-w-[140px] hover:border-emerald-500/40 transition-all shadow-lg text-[10px] text-white font-black italic uppercase group"
+        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase"
       >
-        <span className="flex-1 text-left text-emerald-400 group-hover:drop-shadow-[0_0_5px_rgba(16,185,129,0.5)] transition-all">{currentLabel}</span>
-        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left">{currentLabel}</span>
+        <span className={`text-[8px] text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 left-0 w-full bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] z-[9999] backdrop-blur-xl">
-          {options.map(opt => (
+        <div className="absolute top-full mt-1 right-0 min-w-[160px] bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden shadow-xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
+          {options.map((opt:any) => (
             <button 
               key={opt.id} 
               onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-5 py-3.5 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === opt.id ? 'bg-emerald-500/10' : ''}`}
+              className={`w-full flex items-center px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
             >
-              <span className={`text-[10px] font-black italic uppercase ${value === opt.id ? 'text-emerald-400' : 'text-slate-400'}`}>{opt.label}</span>
+              <span className="text-[10px] font-bold uppercase">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -965,27 +1209,38 @@ function SplitSelector({ value, onChange }: { value: string, onChange: (val: str
   );
 }
 
+function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  return (
+    <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
+      { id: 'ALL', label: 'ANO INTEIRO' }, { id: 'SPLIT 1', label: 'SPLIT 1' }, 
+      { id: 'SPLIT 2', label: 'SPLIT 2' }, { id: 'SPLIT 3', label: 'SPLIT 3' }
+    ]} />
+  );
+}
+
 function ObjectiveSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  
   useEffect(() => {
     const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
-    document.addEventListener("mousedown", click); return () => document.removeEventListener("mousedown", click);
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
   }, []);
 
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-black/40 border border-white/5 px-4 py-2 rounded-xl flex items-center gap-3 min-w-[170px] hover:border-white/20 transition-all shadow-lg text-[10px] text-white font-black italic uppercase">
-        <img src={OBJECTIVE_ASSETS[value]?.icon} className="w-4 h-4 object-contain" alt="" />
+      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[140px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
+        <img src={OBJECTIVE_ASSETS[value]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
         <span className="flex-1 text-left">{OBJECTIVE_LABELS[value]}</span>
-        <span className="text-[8px] opacity-40">▼</span>
+        <span className="text-[8px] text-zinc-500">▼</span>
       </button>
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-2xl z-[9999] min-w-[180px] backdrop-blur-xl">
+        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[140px]">
           {ORDERED_OBJECTIVES.map(objKey => (
-            <button key={objKey} onClick={() => { onChange(objKey); setIsOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === objKey ? 'bg-white/5' : ''}`}>
-              <img src={OBJECTIVE_ASSETS[objKey]?.icon} className="w-4 h-4 object-contain" alt="" />
-              <span className={`text-[10px] font-black italic uppercase ${value === objKey ? 'text-blue-400' : 'text-slate-400'}`}>{OBJECTIVE_LABELS[objKey]}</span>
+            <button key={objKey} onClick={() => { onChange(objKey); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === objKey ? 'bg-zinc-800' : ''}`}>
+              <img src={OBJECTIVE_ASSETS[objKey]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
+              <span className={`text-[9px] font-bold uppercase ${value === objKey ? 'text-blue-400' : 'text-zinc-400'}`}>{OBJECTIVE_LABELS[objKey]}</span>
             </button>
           ))}
         </div>
@@ -1004,17 +1259,17 @@ function SideSelector({ value, onChange }: { value: string, onChange: (val: stri
 
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-black/40 border border-white/5 px-4 py-2 rounded-xl flex items-center gap-3 min-w-[120px] hover:border-white/20 transition-all shadow-lg text-[10px] text-white font-black italic uppercase">
-        <div className={`w-1.5 h-3 rounded-full ${value === 'Blue' ? 'bg-blue-500 shadow-[0_0_8px_#3b82f6]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'}`} />
+      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[100px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
+        <div className={`w-1.5 h-2.5 rounded-sm ${value === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
         <span className="flex-1 text-left">{value} Side</span>
-        <span className="text-[8px] opacity-40">▼</span>
+        <span className="text-[8px] text-zinc-500">▼</span>
       </button>
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 bg-[#0a0a0a] border border-white/10 rounded-xl overflow-hidden shadow-2xl z-[9999] min-w-[140px] backdrop-blur-xl">
+        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[100px]">
           {['Blue', 'Red'].map(side => (
-            <button key={side} onClick={() => { onChange(side); setIsOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 ${value === side ? 'bg-white/5' : ''}`}>
-              <div className={`w-1.5 h-3 rounded-full ${side === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
-              <span className={`text-[10px] font-black italic uppercase ${value === side ? 'text-white' : 'text-slate-500'}`}>{side} Side</span>
+            <button key={side} onClick={() => { onChange(side); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === side ? 'bg-zinc-800' : ''}`}>
+              <div className={`w-1.5 h-2.5 rounded-sm ${side === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+              <span className={`text-[9px] font-bold uppercase ${value === side ? 'text-white' : 'text-zinc-400'}`}>{side} Side</span>
             </button>
           ))}
         </div>
@@ -1023,14 +1278,16 @@ function SideSelector({ value, onChange }: { value: string, onChange: (val: stri
   );
 }
 
+// --- GRÁFICOS (TOOLTIPS & TICKS FLAT) ---
+
 const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
   const match = teamChartData?.find((d: any) => d.match_id === payload.value);
   return (
     <g transform={`translate(${x},${y})`}>
       {match?.opponent_logo ? (
-        <image href={match.opponent_logo} x={-10} y={8} width="20" height="20" style={{ filter: 'drop-shadow(0 0 5px rgba(255, 255, 255, 0.4))' }} />
+        <image href={match.opponent_logo} x={-8} y={5} width="16" height="16" />
       ) : (
-        <text x={0} y={20} textAnchor="middle" fill="#475569" fontSize={7} fontWeight="900" fontStyle="italic">VS {match?.opponent_acronym || '?'}</text>
+        <text x={0} y={15} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {String(match?.opponent_acronym || '?').toUpperCase()}</text>
       )}
     </g>
   );
@@ -1039,12 +1296,15 @@ const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
 const CustomChartTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-[#0a0a0a] border border-white/10 p-4 rounded-2xl shadow-2xl min-w-[180px] backdrop-blur-md z-[9999]">
-        <div className="space-y-2">
+      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
+        <div className="space-y-1.5">
           {payload.map((p: any) => (
-            <div key={p.dataKey} className="flex justify-between items-center gap-4 text-[10px] text-white italic font-black uppercase">
-              <span style={{ color: p.color }}>{p.name}</span>
-              <span className="font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5">{p.value.toFixed(1)}</span>
+            <div key={p.dataKey} className="flex justify-between items-center gap-3 text-[9px] font-bold text-white">
+              <div className="flex items-center gap-1.5">
+                 <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: p.color }} />
+                 <span className="text-zinc-400">{p.name}</span>
+              </div>
+              <span className="font-black">{p.value.toFixed(1)}</span>
             </div>
           ))}
         </div>
@@ -1058,15 +1318,15 @@ const CustomPieTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
-      <div className="bg-[#0a0a0a] border border-white/10 p-4 rounded-2xl shadow-2xl min-w-[160px] backdrop-blur-xl z-[9999] font-black italic uppercase">
-        <div className="flex items-center gap-2 mb-3 border-b border-white/5 pb-2">
-           <div className={`w-1.5 h-3 rounded-full ${data.name === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
-           <span className="text-white text-[10px]">{data.name} PERFORMANCE</span>
+      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
+        <div className="flex items-center gap-2 mb-2 border-b border-zinc-800 pb-2">
+           <div className={`w-1 h-3 rounded-sm ${data.name === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+           <span className="text-white text-[9px] font-bold">{data.name} PERFORMANCE</span>
         </div>
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 font-bold">
            {Object.keys(data.ratings).map(key => (
              <div key={key} className="flex justify-between items-center text-[9px]">
-               <span className="text-slate-500">{key}</span>
+               <span className="text-zinc-500">{key}</span>
                <span className={`${getScoreColor(data.ratings[key])}`}>{data.ratings[key].toFixed(1)}</span>
              </div>
            ))}
@@ -1078,18 +1338,21 @@ const CustomPieTooltip = ({ active, payload }: any) => {
 };
 
 const CustomObjectiveTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
+  if (active && payload && payload.length && payload[0].payload.window) {
     const data = payload[0].payload;
     return (
-      <div className="bg-[#0a0a0a] border border-white/10 p-5 rounded-2xl shadow-2xl backdrop-blur-xl z-[9999] font-black italic uppercase">
-        <div className="flex items-center gap-4 mb-4 border-b border-white/5 pb-3">
-          <img src={data.hoverImg} className="w-12 h-12 object-contain" alt="" />
-          <div><p className="text-white text-xs font-black italic leading-none">{data.name}</p><span className="text-[7px] text-slate-500 tracking-widest mt-1 uppercase font-black">SQUAD TIMING DATA</span></div>
+      <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-lg shadow-xl uppercase min-w-[180px]">
+        <div className="flex items-center gap-3 mb-3 border-b border-zinc-800 pb-2">
+          <img src={data.hoverImg} className="w-8 h-8 object-contain" alt="" />
+          <div>
+             <p className="text-white text-[10px] font-black">{data.name}</p>
+             <span className="text-[7px] text-zinc-500 font-bold tracking-widest">TIMING DATA</span>
+          </div>
         </div>
-        <div className="space-y-3 font-black">
-           <div className="flex justify-between items-center leading-none"><span className="text-[8px] text-slate-500">MÉDIA TÁTICA</span><span className="text-blue-400 font-mono text-sm">{formatTime(data.avg)}</span></div>
-           <div className="flex justify-between items-center leading-none"><span className="text-[8px] text-slate-500">JANELA MÍNIMA</span><span className="text-white font-mono text-xs">{formatTime(payload[0].value[0])}</span></div>
-           <div className="flex justify-between items-center leading-none"><span className="text-[8px] text-slate-500">JANELA MÁXIMA</span><span className="text-white font-mono text-xs">{formatTime(payload[0].value[1])}</span></div>
+        <div className="space-y-2 font-bold">
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">MÉDIA TÁTICA</span><span className="text-blue-400 text-[10px] font-black">{formatTime(data.avg)}</span></div>
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÍNIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[0])}</span></div>
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÁXIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[1])}</span></div>
         </div>
       </div>
     );
@@ -1101,7 +1364,7 @@ const ObjectiveAxisTick = ({ x, y, payload }: any) => {
   const assets = OBJECTIVE_ASSETS[payload.value];
   return (
     <g transform={`translate(${x},${y})`}>
-      {assets && <image href={assets.icon} x={-10} y={10} width="20" height="20" style={{ filter: 'drop-shadow(0_0_5px_rgba(255,255,255,0.1))' }} />}
+      {assets && <image href={assets.icon} x={-8} y={5} width="16" height="16" />}
     </g>
   );
 };
