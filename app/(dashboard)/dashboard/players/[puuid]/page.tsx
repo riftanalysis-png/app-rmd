@@ -43,25 +43,41 @@ const getRoleIcon = (role: string, size: string = "w-5 h-5") => {
   return <img src={url} alt={role} className={`${size} object-contain brightness-200`} />;
 };
 
-// --- CORES TIER 2 ---
+// --- CORES TIER 2 (FLAT DESIGN + GLOW) ---
 function getScoreColor(score: any) {
   const s = Number(score);
-  if (!s || s === 0) return "text-slate-600 border-slate-800 bg-slate-900/20";
-  if (s >= 90) return "text-purple-400 border-purple-400/40 bg-purple-400/10 shadow-[0_0_15px_rgba(192,132,252,0.15)]"; 
-  if (s >= 80) return "text-blue-400 border-blue-400/40 bg-blue-400/10 shadow-[0_0_15px_rgba(96,165,250,0.15)]";     
-  if (s >= 70) return "text-emerald-400 border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_15px_rgba(52,211,153,0.15)]"; 
-  if (s >= 60) return "text-yellow-400 border-yellow-400/40 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.15)]";  
-  return "text-red-400 border-red-400/40 bg-red-400/10 shadow-[0_0_15px_rgba(248,113,113,0.15)]";                               
+  if (!s || s === 0) return "text-zinc-600";
+  if (s >= 90) return "text-purple-400 drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]"; 
+  if (s >= 80) return "text-blue-400 drop-shadow-[0_0_8px_rgba(59,130,246,0.5)]";     
+  if (s >= 70) return "text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]"; 
+  if (s >= 60) return "text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]";  
+  return "text-red-400 drop-shadow-[0_0_8px_rgba(248,113,113,0.5)]";                                 
 }
 
 function getScoreColorText(score: any) {
   const s = Number(score);
-  if (!s || s === 0) return "text-slate-500";
-  if (s >= 90) return "text-purple-400";
-  if (s >= 80) return "text-blue-400";
-  if (s >= 70) return "text-emerald-400";
-  if (s >= 60) return "text-yellow-400";
+  if (!s || s === 0) return "text-zinc-600";
+  if (s >= 90) return "text-purple-400"; 
+  if (s >= 80) return "text-blue-400";     
+  if (s >= 70) return "text-emerald-400"; 
+  if (s >= 60) return "text-amber-400";  
   return "text-red-400";
+}
+
+function getChampionImageUrl(championName: string | null) {
+  if (!championName || championName === '777') return DEFAULT_AVATAR;
+  let sanitized = championName.replace(/['\s\.]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  return `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${sanitized}.png`;
+}
+
+function getChampionSplashUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${sanitized}_0.jpg`;
 }
 
 // --- MATEMÁTICA: REGRESSÃO LINEAR E R² ---
@@ -90,7 +106,6 @@ function calculateRegression(data: any[], xKey: string, yKey: string) {
   return { points: [ { [xKey]: minX, [yKey]: slope * minX + intercept }, { [xKey]: maxX, [yKey]: slope * maxX + intercept } ], r2: Math.min(1, Math.max(0, r2)) };
 }
 
-// --- ESTATÍSTICAS BOXPLOT ---
 function calculateBoxPlotStats(data: number[]) {
   if (data.length === 0) return { min: 0, q1: 0, median: 0, q3: 0, max: 0, count: 0, q3_diff: 0 };
   const sorted = [...data].sort((a, b) => a - b);
@@ -113,7 +128,6 @@ export default function PlayerProfilePage() {
   const router = useRouter();
   const dropdownRef = useRef<any>(null);
   
-  // --- ESTADOS DE DADOS BRUTOS ---
   const [player, setPlayer] = useState<any>(null);
   const [teams, setTeams] = useState<any[]>([]);
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
@@ -121,15 +135,12 @@ export default function PlayerProfilePage() {
   const [allMatchesRaw, setAllMatchesRaw] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeDropdown, setActiveDropdown] = useState<any>(null);
-  const [showGuide, setShowGuide] = useState(false);
   
-  // --- ESTADOS DO COCKPIT TÁTICO ---
-  const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
+  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO_DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [sideFilter, setSideFilter] = useState<'ALL' | 'BLUE' | 'RED'>('ALL');
   const [opponentFilter, setOpponentFilter] = useState<string>('ALL');
 
-  // --- FETCH MESTRE (Puxa tudo do jogador de uma vez só) ---
   const fetchTacticalData = useCallback(async () => {
     if (!puuid) return;
     setLoading(true);
@@ -148,7 +159,6 @@ export default function PlayerProfilePage() {
         const teamLookup: Record<string, string> = {};
         allPRes.data.forEach(p => { teamLookup[p.puuid] = p.team_acronym; });
 
-        // Cruzamento de Partidas
         if (statsRes.data && statsRes.data.length > 0) {
           const matchIds = statsRes.data.map(m => m.match_id);
           const { data: participants } = await supabase.from('player_stats_detailed').select('match_id, puuid').in('match_id', matchIds);
@@ -182,7 +192,6 @@ export default function PlayerProfilePage() {
           setAllMatchesRaw([]);
         }
 
-        // Salva todos os rosters em memória para o filtro de equipes
         let rosterQuery = supabase.from('hub_players_roster').select('puuid, nickname, team_acronym, game_type');
         if (globalSplit !== 'ALL') rosterQuery = rosterQuery.eq('split', globalSplit);
 
@@ -209,30 +218,18 @@ export default function PlayerProfilePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [fetchTacticalData]);
 
-
-  // --- MOTOR DE FILTRAGEM LOCAL (INSTANTÂNEO E CASE INSENSITIVE) ---
   const filteredMatches = useMemo(() => {
     return allMatchesRaw.filter(m => {
-      const isScrim = m.game_type?.toUpperCase() === 'SCRIM' || m.game_type?.toUpperCase() === 'SCRIMS';
-      
-      // 1. Filtro Oficial vs Scrim
-      if (matchType === 'SCRIM' && !isScrim) return false;
-      if (matchType === 'OFICIAL' && isScrim) return false;
-
-      // 2. Filtro de Split
+      if (!globalTournaments.includes('ALL')) {
+        if (!globalTournaments.includes(m.game_type?.toUpperCase())) return false;
+      }
       if (globalSplit !== 'ALL' && m.split?.toUpperCase() !== globalSplit.toUpperCase()) return false;
-
-      // 3. Filtro de Lado
       if (sideFilter !== 'ALL' && m.side?.toUpperCase() !== sideFilter) return false;
-
-      // 4. Filtro de Adversário
       if (opponentFilter !== 'ALL' && m.opponent_acronym?.toUpperCase() !== opponentFilter.toUpperCase()) return false;
-
       return true;
     });
-  }, [allMatchesRaw, matchType, globalSplit, sideFilter, opponentFilter]);
+  }, [allMatchesRaw, globalTournaments, globalSplit, sideFilter, opponentFilter]);
 
-  // --- LISTA DINÂMICA DE ADVERSÁRIOS PARA O DROPDOWN 'VS' ---
   const availableOpponents = useMemo(() => {
     const opps = new Set(filteredMatches.map(m => m.opponent_acronym?.toUpperCase()));
     opps.delete('MIX'); 
@@ -240,29 +237,30 @@ export default function PlayerProfilePage() {
     return Array.from(opps).sort() as string[];
   }, [filteredMatches]);
 
-  // --- MÁGICA: FILTRO DE EQUIPAS DO CAMPEONATO ---
   const displayedTeams = useMemo(() => {
     if (!teams.length || !rosterList.length) return teams;
-    
-    // Descobre quais torneios este jogador jogou (exceto Scrims)
-    const validTourneys = Array.from(new Set(allMatchesRaw.map(m => m.game_type).filter(g => g && g !== 'SCRIM' && g !== 'UNKNOWN')));
-    
+    const validTourneys = Array.from(new Set(allMatchesRaw.map(m => m.game_type).filter(g => g && g !== 'UNKNOWN')));
     const activeInTourney = new Set(
        rosterList
-          .filter(r => validTourneys.includes(r.game_type?.toUpperCase() || r.game_type))
-          .map(r => r.team_acronym?.toUpperCase())
+         .filter(r => validTourneys.includes(r.game_type?.toUpperCase() || r.game_type))
+         .map(r => r.team_acronym?.toUpperCase())
     );
-    
     return teams.filter(t => activeInTourney.has(t.acronym?.toUpperCase()) || t.acronym?.toUpperCase() === player?.team_acronym?.toUpperCase());
   }, [teams, rosterList, allMatchesRaw, player]);
 
-
-  // --- CÁLCULOS ANALÍTICOS GERAIS ---
-  const bubbleData = useMemo(() => filteredMatches.map(m => ({ x: Number(m.gpm) || 0, y: Number(m.dpm) || 0, z: m.eff_val, is_win: m.is_win, champion: m.champion, opponent_acronym: m.opponent_acronym, side: m.side })), [filteredMatches]);
+  const bubbleData = useMemo(() => filteredMatches.map(m => ({ 
+    x: Math.round(Number(m.gpm) || 0), 
+    y: Math.round(Number(m.dpm) || 0), 
+    z: m.eff_val, 
+    is_win: m.is_win, 
+    champion: m.champion, 
+    opponent_acronym: m.opponent_acronym, 
+    side: m.side 
+  })), [filteredMatches]);
   
   const goldBoxPlotData = useMemo(() => {
     const wins = filteredMatches.filter(m => m.is_win).map(m => Number(m.gold_diff_at_12) || 0); const losses = filteredMatches.filter(m => !m.is_win).map(m => Number(m.gold_diff_at_12) || 0);
-    return [{ name: 'VITÓRIAS', ...calculateBoxPlotStats(wins), color: '#fbbf24' }, { name: 'DERROTAS', ...calculateBoxPlotStats(losses), color: '#ef4444' }];
+    return [{ name: 'VITÓRIAS', ...calculateBoxPlotStats(wins), color: '#3b82f6' }, { name: 'DERROTAS', ...calculateBoxPlotStats(losses), color: '#ef4444' }];
   }, [filteredMatches]);
   
   const xpBoxPlotData = useMemo(() => {
@@ -310,60 +308,62 @@ export default function PlayerProfilePage() {
       return { lane: l, impact: i, conv: c, vision: v, avg: (l+i+c+v)/4 }
   }, [filteredMatches]);
 
+  // Main Champion Banner Logic
+  const mainChampName = topChampions.length > 0 ? topChampions[0].name : null;
+  const mainChampSplash = mainChampName ? getChampionSplashUrl(mainChampName) : null;
 
-  if (loading && !player) return <div className="p-20 text-blue-500 font-black text-center animate-pulse italic uppercase tracking-[0.2em]">Circuito Desafiante: Syncing System...</div>;
+  if (loading && !player) return (
+    <div className="flex items-center justify-center h-screen bg-[#0a0a0a]">
+      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Sincronizando Operativo...</p>
+    </div>
+  );
   if (!loading && !player) return <div className="p-20 text-red-500 font-black text-center uppercase tracking-widest">Operativo não encontrado no banco de dados.</div>;
 
   return (
-    <div className="p-4 md:p-8 max-w-[1700px] mx-auto space-y-8 bg-[#06090f] min-h-screen text-white font-black uppercase italic tracking-tighter relative overflow-visible">
+    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible">
       
-      {/* CAMADA 1: HEADER E NAVEGAÇÃO */}
-      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-slate-800 pb-8 relative z-[250]">
+      {/* HEADER */}
+      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-8 relative z-[250]">
         <div className="flex items-center gap-6">
-           <Link href="/dashboard/players" className="w-12 h-12 flex items-center justify-center bg-slate-900 border border-slate-800 rounded-full hover:bg-blue-600 hover:border-blue-500 transition-all group">
-             <span className="text-xl text-slate-500 group-hover:text-white transition-colors">←</span>
+           <Link href="/dashboard/players" className="w-12 h-12 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-full hover:bg-zinc-800 hover:scale-105 transition-all duration-300 group shadow-md">
+             <span className="text-xl text-zinc-500 group-hover:text-white transition-colors">←</span>
            </Link>
-           <div className="border-l-4 border-blue-500 pl-4">
-             <h1 className="text-4xl text-white leading-none">OPERATIVE <span className="text-blue-500">INTEL</span></h1>
-             <p className="text-[9px] text-slate-500 tracking-[0.4em] mt-2 font-black">DOSSIER TÁTICO INDIVIDUAL</p>
+           <div className="animate-fade-in-right">
+             <h1 className="text-4xl font-black text-white uppercase tracking-tight">OPERATIVE <span className="text-blue-500 drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]">INTEL</span></h1>
+             <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DOSSIER TÁTICO INDIVIDUAL</p>
            </div>
         </div>
 
-        {/* COCKPIT DE ESTADO GERAL (CAMADA 2) */}
-        <div className="flex gap-6 items-end bg-transparent">
-           <div className="flex bg-slate-950/80 p-1.5 rounded-[16px] border border-slate-800 shadow-inner h-[50px] items-center">
-              <button onClick={() => setMatchType('ALL')} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'ALL' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>AMBOS</button>
-              <button onClick={() => setMatchType('OFICIAL')} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'OFICIAL' ? 'bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'text-blue-900 hover:text-blue-400'}`}>OFICIAL</button>
-              <button onClick={() => setMatchType('SCRIM')} className={`px-4 py-2 rounded-xl text-[9px] transition-all ${matchType === 'SCRIM' ? 'bg-amber-500 text-black shadow-[0_0_15px_rgba(245,158,11,0.4)]' : 'text-amber-900 hover:text-amber-500'}`}>SCRIMS</button>
-           </div>
-
+        <div className="flex gap-4 items-end bg-transparent animate-fade-in-down">
+           <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
            <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
         </div>
       </header>
 
-      {/* CAMADA 3: BARRA DE TIMES E MICRO-ANÁLISE (VS + LADO) */}
-      <div className="flex flex-col lg:flex-row justify-between items-center gap-6 bg-slate-900/40 p-4 rounded-[32px] border border-slate-800 shadow-2xl backdrop-blur-md relative z-[200]">
+      {/* BARRA DE TIMES E MICRO-ANÁLISE */}
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[200] overflow-visible">
         
-        {/* BARRA DE TIMES DINÂMICA (Só do Campeonato Atual) */}
-        <div className="flex items-center gap-4 w-full lg:w-auto" ref={dropdownRef}>
-          <div className="flex flex-wrap gap-4 px-4 justify-center lg:justify-start w-full">
+        <div className="flex flex-wrap justify-start gap-2 bg-zinc-900/80 p-1.5 rounded-lg border border-zinc-800/80 max-w-full overflow-x-auto custom-scrollbar flex-1 backdrop-blur-sm" ref={dropdownRef}>
             {displayedTeams.map((t: any) => {
-              // Garante que o dropdown respeita a ordem Top -> Sup
               const teamRoster = sortPlayersByRole(allPlayers.filter((p:any) => p.team_acronym === t.acronym));
+              const isSelected = t.acronym === player.team_acronym || activeDropdown === t.acronym;
               
               return (
                 <div key={t.acronym} className="relative">
-                  <button onClick={() => setActiveDropdown(activeDropdown === t.acronym ? null : t.acronym)} className="transition-all hover:scale-110 outline-none shrink-0 py-1">
-                    <img src={t.logo_url} className={`w-8 h-8 object-contain transition-all ${t.acronym === player.team_acronym || activeDropdown === t.acronym ? 'opacity-100 scale-125' : 'opacity-30 hover:opacity-100 grayscale hover:grayscale-0'}`} alt={t.acronym} />
+                  <button 
+                    onClick={() => setActiveDropdown(activeDropdown === t.acronym ? null : t.acronym)} 
+                    className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-all duration-300 flex items-center gap-2 whitespace-nowrap ${isSelected ? 'bg-zinc-700 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}
+                  >
+                    <img src={t.logo_url} className={`w-4 h-4 object-contain transition-transform duration-300 ${isSelected ? 'scale-110' : ''}`} alt={t.acronym} />
+                    {t.acronym}
                   </button>
                   
-                  {/* DROPDOWN DOS JOGADORES DAQUELE TIME */}
                   {activeDropdown === t.acronym && (
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-3 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] min-w-[200px] overflow-hidden z-[9999]">
+                    <div className="absolute top-full left-0 mt-2 bg-zinc-900/95 border border-zinc-700/50 rounded-lg shadow-2xl min-w-[180px] overflow-hidden z-[9999] backdrop-blur-md animate-fade-in-down origin-top">
                       {teamRoster.map((tm:any) => (
-                        <button key={tm.puuid} onClick={() => { router.push(`/dashboard/players/${tm.puuid}`); setActiveDropdown(null); }} className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] hover:bg-blue-600 border-b border-slate-800/50 last:border-0 transition-colors ${tm.puuid === player.puuid ? 'bg-blue-900/40 text-blue-400' : 'text-white'}`}>
-                          <span className="opacity-70">{getRoleIcon(tm.primary_role, "w-4 h-4")}</span>
-                          <span className="font-black italic uppercase">{tm.nickname}</span>
+                        <button key={tm.puuid} onClick={() => { router.push(`/dashboard/players/${tm.puuid}`); setActiveDropdown(null); }} className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] hover:bg-zinc-800 border-b border-zinc-800/50 last:border-0 transition-all duration-200 ${tm.puuid === player.puuid ? 'bg-zinc-800 text-blue-400 font-black pl-5' : 'text-zinc-300 font-bold uppercase'}`}>
+                          <span className="opacity-80">{getRoleIcon(tm.primary_role, "w-4 h-4")}</span>
+                          {tm.nickname}
                         </button>
                       ))}
                     </div>
@@ -373,85 +373,81 @@ export default function PlayerProfilePage() {
             })}
 
             {displayedTeams.length === 0 && (
-               <p className="text-[10px] text-slate-500 font-mono py-2 italic uppercase">SEM TIMES DISPONÍVEIS</p>
+               <p className="text-[10px] text-zinc-500 font-bold py-2 uppercase tracking-widest px-4">SEM TIMES DISPONÍVEIS</p>
             )}
-          </div>
         </div>
 
-        {/* MICRO-ANÁLISE IN-GAME */}
-        <div className="flex items-center gap-4 shrink-0 lg:border-l lg:border-slate-800/60 lg:pl-6 w-full lg:w-auto justify-end">
+        <div className="flex items-center gap-4 shrink-0 w-full lg:w-auto justify-end">
            <div className="flex items-center gap-2">
-              <span className="text-[8px] text-slate-500 tracking-widest uppercase">VS</span>
               <CockpitDropdown 
-                 label="" 
+                 label="ADVERSÁRIO" 
                  value={opponentFilter} 
                  onChange={setOpponentFilter} 
                  options={[{ id: 'ALL', label: 'TODOS OS TIMES' }, ...availableOpponents.map(opp => ({ id: opp, label: opp }))]} 
-                 color="purple"
                />
            </div>
 
-           <div className="flex bg-slate-950/80 p-1 rounded-xl border border-slate-800 shadow-inner ml-2">
-             <button onClick={() => setSideFilter('ALL')} className={`px-4 py-1.5 rounded-lg text-[9px] transition-all ${sideFilter === 'ALL' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>BOTH</button>
-             <button onClick={() => setSideFilter('BLUE')} className={`px-4 py-1.5 rounded-lg text-[9px] transition-all flex items-center gap-1.5 ${sideFilter === 'BLUE' ? 'bg-blue-600 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'text-blue-900 hover:text-blue-400'}`}><div className="w-1.5 h-1.5 rounded-full bg-current"></div> BLUE</button>
-             <button onClick={() => setSideFilter('RED')} className={`px-4 py-1.5 rounded-lg text-[9px] transition-all flex items-center gap-1.5 ${sideFilter === 'RED' ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.4)]' : 'text-red-900 hover:text-red-400'}`}><div className="w-1.5 h-1.5 rounded-full bg-current"></div> RED</button>
+           <div className="flex bg-zinc-900/80 p-1.5 rounded-lg border border-zinc-800/80 backdrop-blur-sm">
+             <button onClick={() => setSideFilter('ALL')} className={`px-4 py-2 rounded-md text-[10px] font-bold uppercase transition-all duration-300 ${sideFilter === 'ALL' ? 'bg-zinc-700 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}>BOTH</button>
+             <button onClick={() => setSideFilter('BLUE')} className={`px-4 py-2 rounded-md text-[10px] font-bold uppercase transition-all duration-300 flex items-center gap-1.5 ${sideFilter === 'BLUE' ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.4)]' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><div className="w-1.5 h-1.5 rounded-full bg-current"></div> BLUE</button>
+             <button onClick={() => setSideFilter('RED')} className={`px-4 py-2 rounded-md text-[10px] font-bold uppercase transition-all duration-300 flex items-center gap-1.5 ${sideFilter === 'RED' ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.4)]' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><div className="w-1.5 h-1.5 rounded-full bg-current"></div> RED</button>
            </div>
         </div>
       </div>
 
-      {/* MANUAL TÁTICO BOTÃO */}
-      <button onClick={() => setShowGuide(true)} className="fixed bottom-10 right-10 z-[250] flex items-center justify-center w-14 h-14 bg-blue-600 border-2 border-blue-400 rounded-full shadow-[0_0_30px_rgba(37,99,235,0.4)] hover:scale-110 active:scale-95 transition-all group">
-        <span className="text-2xl font-black italic">?</span>
-        <div className="absolute inset-0 bg-blue-400/20 rounded-full animate-ping group-hover:hidden"></div>
-      </button>
-
-      <div className="grid grid-cols-12 gap-6 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         
-        {/* CARTINHA DO OPERATIVO */}
-        <div className="col-span-12 xl:col-span-3 flex flex-col gap-6 z-[150] sticky top-6 h-fit">
+        {/* COLUNA ESQUERDA (PERFIL E CHAMPIONS) */}
+        <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6 z-[150] sticky top-6 h-fit">
           
-          <div className="bg-slate-900/60 border border-slate-800 rounded-[32px] p-6 relative overflow-hidden shadow-2xl backdrop-blur-md">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-50"></div>
+          {/* CARTINHA DO OPERATIVO COM SPLASH ART ANIMADA */}
+          <div className="bg-[#18181b] border border-zinc-800 rounded-3xl relative overflow-hidden shadow-xl flex flex-col items-center group transition-all duration-500 hover:border-zinc-700 hover:shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
             
-            <p className="absolute top-4 left-5 text-[8px] text-slate-500 font-mono tracking-widest uppercase">ID: {(player.puuid || "00").substring(0,8)}</p>
-            <div className="absolute top-3 right-4 bg-black/40 px-3 py-1.5 rounded-lg border border-slate-800">
-               <p className="text-[8px] text-slate-400 tracking-[0.2em] font-mono"><span className="text-blue-400">{filteredMatches.length}</span> MATCHES</p>
-            </div>
+            {/* Background Splash Art Dynamica */}
+            {mainChampSplash && (
+              <div className="absolute inset-0 z-0 transition-all duration-700 opacity-20 group-hover:opacity-40 group-hover:scale-105">
+                <img src={mainChampSplash} className="w-full h-full object-cover object-[center_30%]" alt="" />
+                <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/40 via-[#18181b]/80 to-[#18181b]" />
+              </div>
+            )}
 
-            <div className="flex flex-col items-center mt-10">
-              <div className="relative group">
-                <div className="absolute inset-0 bg-blue-500 rounded-full blur-2xl opacity-10 group-hover:opacity-30 transition-opacity duration-500"></div>
-                
-                <div className="relative w-36 h-36 rounded-2xl border border-slate-700 bg-slate-950 p-1.5 shadow-inner overflow-visible">
-                  <img src={player.photo_url || DEFAULT_AVATAR} alt={player.nickname} className="w-full h-full object-cover rounded-xl grayscale-[20%] group-hover:grayscale-0 transition-all duration-500" />
-                  <div className="absolute -bottom-4 -right-4 bg-[#06090f] border border-slate-700 p-2.5 rounded-xl shadow-xl z-20 group-hover:border-blue-500/50 transition-colors">
+            <div className="relative z-10 w-full p-8 flex flex-col items-center">
+              <p className="absolute top-6 left-6 text-[8px] text-zinc-400 font-bold tracking-widest uppercase bg-zinc-950/60 px-2 py-1 rounded backdrop-blur-sm border border-zinc-800/50">ID: {(player.puuid || "00").substring(0,8)}</p>
+              <div className="absolute top-6 right-6 bg-zinc-950/60 backdrop-blur-sm px-2.5 py-1.5 rounded border border-zinc-800/50">
+                 <p className="text-[8px] text-zinc-300 font-bold uppercase tracking-widest"><span className="text-blue-400">{filteredMatches.length}</span> GAMES</p>
+              </div>
+
+              <div className="relative mt-10 mb-6 group-hover:-translate-y-2 transition-transform duration-500">
+                <div className="absolute inset-0 bg-blue-500 rounded-2xl blur-xl opacity-0 group-hover:opacity-20 transition-opacity duration-700"></div>
+                <div className="relative w-36 h-36 rounded-2xl border border-zinc-700 bg-zinc-900 p-1.5 shadow-2xl overflow-visible">
+                  <img src={player.photo_url || DEFAULT_AVATAR} alt={player.nickname} className="w-full h-full object-cover rounded-xl grayscale-[30%] group-hover:grayscale-0 transition-all duration-500" />
+                  <div className="absolute -bottom-4 -right-4 bg-zinc-950 border border-zinc-700 p-2.5 rounded-xl shadow-xl z-20 group-hover:scale-110 group-hover:border-blue-500/50 transition-all duration-300">
                     {getRoleIcon(player.primary_role, "w-6 h-6")}
                   </div>
                 </div>
               </div>
-              
-              <h2 className="text-3xl font-black mt-8 text-white tracking-tighter drop-shadow-md">{player.nickname}</h2>
-              <div className="flex items-center gap-2 mt-2">
-                 <p className="text-blue-400 text-[9px] tracking-[0.3em] uppercase font-mono bg-blue-900/20 px-3 py-1.5 rounded-md border border-blue-500/20">{player.team_acronym}</p>
-                 <p className="text-slate-400 text-[9px] tracking-[0.3em] uppercase font-mono bg-slate-800/50 px-3 py-1.5 rounded-md border border-slate-700/50">{player.primary_role}</p>
+                
+              <h2 className="text-3xl font-black mt-2 text-white uppercase tracking-tight drop-shadow-md">{player.nickname}</h2>
+              <div className="flex items-center gap-2 mt-3 mb-4">
+                 <p className="text-blue-400 text-[10px] tracking-widest uppercase font-bold bg-blue-900/20 px-2.5 py-1 rounded border border-blue-900/30 backdrop-blur-sm">{player.team_acronym}</p>
+                 <p className="text-zinc-300 text-[10px] tracking-widest uppercase font-bold bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-700/50 backdrop-blur-sm">{player.primary_role}</p>
               </div>
 
               {/* OVERALL EM DESTAQUE */}
               {filteredMatches.length > 0 && (
-                <div className="mt-8 text-center w-full border-t border-slate-800/60 pt-6">
-                   <p className="text-[8px] text-slate-500 font-black tracking-[0.3em] uppercase mb-1">RATING TÁTICO</p>
-                   <p className={`text-5xl font-black ${getScoreColor(playerStatsFiltered.avg).split(' ')[0]}`}>{Math.round(playerStatsFiltered.avg)}</p>
+                <div className="w-full pt-6 flex flex-col items-center mt-2 group-hover:scale-105 transition-transform duration-500">
+                   <p className="text-[9px] text-zinc-400 font-bold tracking-[0.2em] uppercase mb-1">RATING TÁTICO</p>
+                   <p className={`text-5xl font-black transition-colors duration-500 ${getScoreColor(playerStatsFiltered.avg)}`}>{Math.round(playerStatsFiltered.avg)}</p>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="bg-slate-900/60 border border-slate-800 rounded-[32px] overflow-hidden shadow-2xl backdrop-blur-md">
-            <div className="bg-slate-950/80 py-3 px-6 border-b border-slate-800 flex justify-between items-center">
-              <p className="text-[8px] text-slate-400 tracking-[0.3em] uppercase">Estatísticas Filtradas</p>
-              <span className="text-[7px] font-mono text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">LIVE</span>
+          <div className="bg-[#18181b] border border-zinc-800 rounded-3xl overflow-hidden shadow-sm transition-all duration-500 hover:border-zinc-700 hover:shadow-lg hover:-translate-y-1">
+            <div className="bg-zinc-900/80 py-4 px-6 border-b border-zinc-800 flex justify-between items-center backdrop-blur-sm">
+              <p className="text-[9px] text-zinc-400 tracking-widest font-bold uppercase">Estatísticas (Filtro)</p>
             </div>
-            <div className="grid grid-cols-2 gap-px bg-slate-800">
+            <div className="grid grid-cols-2 gap-px bg-zinc-800">
               <StatBadge label="LANE" val={playerStatsFiltered.lane} />
               <StatBadge label="IMPACTO" val={playerStatsFiltered.impact} />
               <StatBadge label="CONV" val={playerStatsFiltered.conv} />
@@ -459,55 +455,60 @@ export default function PlayerProfilePage() {
             </div>
           </div>
 
-          {/* Módulo 3: Champion Pool */}
-          <div className="bg-slate-900/60 border border-slate-800 rounded-[32px] p-6 shadow-2xl backdrop-blur-md">
-            <p className="text-[9px] text-slate-400 tracking-[0.3em] uppercase mb-4 border-b border-slate-800/80 pb-3 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-blue-500 rotate-45"></span>
+          {/* Módulo 3: Champion Pool (Cards Interativos) */}
+          <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-6 shadow-sm transition-all duration-500 hover:border-zinc-700">
+            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mb-5 border-b border-zinc-800 pb-3 flex items-center gap-2">
               Operativos Utilizados
             </p>
             
-            <div className="space-y-2 relative">
+            <div className="space-y-3">
               {topChampions.length === 0 ? (
-                 <div className="text-center py-10 text-slate-600 text-xs tracking-widest font-black uppercase">SEM JOGOS NO FILTRO</div>
+                 <div className="text-center py-6 text-zinc-600 text-[10px] tracking-widest font-bold uppercase">SEM JOGOS NO FILTRO</div>
               ) : (
                 topChampions.map((c: any) => {
                   const winrate = Math.round((c.wins / c.games) * 100);
                   const losses = c.games - c.wins;
+                  const champSplash = getChampionSplashUrl(c.name);
                   
                   return (
-                    <div key={c.name} className="relative group flex items-center justify-between p-2 rounded-lg bg-slate-950/50 border border-slate-800/50 hover:border-blue-500/30 hover:bg-slate-900 transition-all cursor-help">
-                      <div className="flex items-center gap-3">
-                        <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${c.name}.png`} className="w-7 h-7 rounded border border-slate-700 group-hover:border-blue-400/50 transition-colors grayscale-[30%] group-hover:grayscale-0" alt={c.name} />
+                    <div key={c.name} className="relative group flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-all duration-300 cursor-help overflow-hidden hover:-translate-y-0.5 hover:shadow-md">
+                      
+                      {/* Fundo do Card (Splash Art + Gradiente) */}
+                      <div className="absolute inset-0 z-0 opacity-20 group-hover:opacity-40 transition-opacity duration-500">
+                         <img src={champSplash} className="w-full h-full object-cover object-[center_20%]" alt="" />
+                      </div>
+                      <div className="absolute inset-0 bg-gradient-to-r from-zinc-900 via-zinc-900/80 to-transparent z-0" />
+
+                      <div className="relative z-10 flex items-center gap-3">
+                        <img src={getChampionImageUrl(c.name)} className="w-9 h-9 rounded-lg border border-zinc-700 group-hover:border-zinc-400 transition-colors shadow-sm" alt={c.name} />
                         <div className="text-left">
-                          <p className="text-[10px] text-slate-200">{c.name}</p>
-                          <p className="text-[8px] text-slate-500 font-mono">{c.games} MATCHES</p>
+                          <p className="text-[12px] font-black text-white uppercase drop-shadow-md">{c.name}</p>
+                          <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest">{c.games} GAMES</p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className={`text-[11px] font-black ${winrate >= 60 ? 'text-blue-400' : winrate < 50 ? 'text-red-400' : 'text-slate-300'}`}>{winrate}%</p>
-                        <p className="text-[7px] text-slate-500 font-mono">WINRATE</p>
+                      <div className="relative z-10 text-right">
+                        <p className={`text-[13px] font-black drop-shadow-md ${winrate >= 60 ? 'text-blue-400' : winrate < 50 ? 'text-red-400' : 'text-zinc-200'}`}>{winrate}%</p>
+                        <p className="text-[8px] text-zinc-400 font-bold uppercase tracking-widest">WR</p>
                       </div>
 
-                      {/* POPOVER */}
-                      <div className="absolute left-[calc(100%+16px)] top-1/2 -translate-y-1/2 w-52 bg-[#0a0f18] border border-slate-700 rounded-2xl p-4 shadow-[0_0_40px_rgba(0,0,0,0.9)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-[300]">
-                        <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-4 h-4 bg-[#0a0f18] border-l border-b border-slate-700 rotate-45"></div>
-
+                      {/* POPOVER ANIMADO */}
+                      <div className="absolute left-[calc(100%+16px)] top-1/2 -translate-y-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-2xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-[300] origin-left scale-95 group-hover:scale-100">
                         <div className="relative z-10">
-                          <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-3">
-                            <p className="text-[12px] text-white uppercase">{c.name}</p>
-                            <p className="text-[10px] font-mono"><span className="text-blue-400">{c.wins}W</span> - <span className="text-red-400">{losses}L</span></p>
+                          <div className="flex justify-between items-center border-b border-zinc-800 pb-3 mb-4">
+                            <p className="text-[11px] font-black text-white uppercase tracking-widest">{c.name}</p>
+                            <p className="text-[10px] font-black bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800"><span className="text-blue-500">{c.wins}W</span> <span className="text-zinc-600 px-0.5">-</span> <span className="text-red-500">{losses}L</span></p>
                           </div>
                           
-                          <div className="grid grid-cols-2 gap-3 text-[10px] font-mono">
-                            <div><p className="text-slate-500 mb-0.5 text-[8px]">LANE</p><p className={getScoreColorText(c.ml)}>{Math.round(c.ml)}</p></div>
-                            <div><p className="text-slate-500 mb-0.5 text-[8px]">IMPACTO</p><p className={getScoreColorText(c.mi)}>{Math.round(c.mi)}</p></div>
-                            <div><p className="text-slate-500 mb-0.5 text-[8px]">CONVERSÃO</p><p className={getScoreColorText(c.mc)}>{Math.round(c.mc)}</p></div>
-                            <div><p className="text-slate-500 mb-0.5 text-[8px]">VISÃO</p><p className={getScoreColorText(c.mv)}>{Math.round(c.mv)}</p></div>
+                          <div className="grid grid-cols-2 gap-4 text-[9px] font-bold">
+                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">LANE</p><p className={`text-sm font-black ${getScoreColorText(c.ml)}`}>{Math.round(c.ml)}</p></div>
+                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">IMPACTO</p><p className={`text-sm font-black ${getScoreColorText(c.mi)}`}>{Math.round(c.mi)}</p></div>
+                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">CONV.</p><p className={`text-sm font-black ${getScoreColorText(c.mc)}`}>{Math.round(c.mc)}</p></div>
+                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">VISÃO</p><p className={`text-sm font-black ${getScoreColorText(c.mv)}`}>{Math.round(c.mv)}</p></div>
                           </div>
                           
-                          <div className="mt-3 pt-2 border-t border-slate-800 flex justify-between items-center">
-                             <p className="text-slate-500 text-[8px]">NOTA MÉDIA GERAL</p>
-                             <p className={`text-[12px] font-black ${getScoreColorText(c.avg)}`}>{Math.round(c.avg)}</p>
+                          <div className="mt-4 pt-3 border-t border-zinc-800 flex justify-between items-center bg-zinc-900/50 -mx-5 -mb-5 px-5 py-3 rounded-b-2xl">
+                             <p className="text-zinc-400 text-[9px] font-bold uppercase tracking-widest">RATING TÁTICO</p>
+                             <p className={`text-[14px] font-black ${getScoreColorText(c.avg)}`}>{Math.round(c.avg)}</p>
                           </div>
                         </div>
                       </div>
@@ -519,27 +520,27 @@ export default function PlayerProfilePage() {
           </div>
         </div>
 
-        <div className="col-span-12 xl:col-span-9 space-y-8">
+        {/* COLUNA DIREITA: GRÁFICOS (HOVERS E ANIMAÇÕES) */}
+        <div className="lg:col-span-8 xl:col-span-9 space-y-6">
           
           {filteredMatches.length === 0 ? (
-             <div className="bg-slate-900/40 border border-slate-800 rounded-[40px] p-20 flex flex-col items-center justify-center text-center shadow-inner h-full min-h-[600px]">
-               <span className="text-6xl mb-6 grayscale opacity-20">🗄️</span>
-               <h3 className="text-3xl text-slate-500 font-black italic">SEM DADOS TÁTICOS DISPONÍVEIS</h3>
-               <p className="text-[10px] text-slate-600 mt-3 uppercase tracking-widest max-w-md">O filtro selecionado não retornou nenhuma partida. Altere a timeline ou o adversário no painel de controle acima.</p>
+             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-20 flex flex-col items-center justify-center text-center shadow-sm min-h-[600px] h-full animate-fade-in">
+               <h3 className="text-2xl text-zinc-500 font-black uppercase tracking-tight">SEM DADOS DISPONÍVEIS</h3>
+               <p className="text-[10px] text-zinc-600 mt-2 uppercase tracking-widest font-bold max-w-md">O filtro selecionado não retornou nenhuma partida. Altere a timeline ou o adversário no painel de controle acima.</p>
              </div>
           ) : (
-            <>
-              <div className="grid grid-cols-2 gap-6">
+            <div className="animate-fade-in-up">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 <ChartWrapper title="Eficiência de Recursos (GPM x DPM)">
                   <ResponsiveContainer width="100%" height={240}>
                     <ScatterChart margin={{ top: 20, right: 40, left: 10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/>
-                      <XAxis type="number" dataKey="x" stroke="#475569" fontSize={10} domain={['dataMin - 30', 'dataMax + 30']} />
-                      <YAxis type="number" dataKey="y" stroke="#475569" fontSize={10} domain={['dataMin - 50', 'dataMax + 50']} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
+                      <XAxis type="number" dataKey="x" stroke="#71717a" fontSize={10} domain={['dataMin - 30', 'dataMax + 30']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
+                      <YAxis type="number" dataKey="y" stroke="#71717a" fontSize={10} domain={['dataMin - 50', 'dataMax + 50']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
                       <ZAxis type="number" dataKey="z" range={[400, 4500]} domain={['dataMin', 'dataMax']} />
-                      <Tooltip content={<CustomCommonTooltip teams={teams} />} />
-                      <Scatter data={bubbleData} dataKey="z">
-                        {bubbleData.map((e, i) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.6} stroke="#06090f" strokeWidth={1} />))}
+                      <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
+                      <Scatter data={bubbleData} dataKey="z" animationDuration={1000}>
+                        {bubbleData.map((e, i) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.8} className="hover:opacity-100 transition-opacity cursor-crosshair" />))}
                       </Scatter>
                     </ScatterChart>
                   </ResponsiveContainer>
@@ -548,32 +549,37 @@ export default function PlayerProfilePage() {
                 <ChartWrapper title="Histórico de Notas (Performance)">
                   <ResponsiveContainer width="100%" height={240}>
                     <LineChart data={filteredMatches.slice(-12)} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/>
-                      <YAxis domain={[40, 100]} stroke="#475569" fontSize={10}/>
-                      <Tooltip content={<CustomCommonTooltip teams={teams} />}/>
-                      <Legend iconType="circle" wrapperStyle={{fontSize: '9px', paddingTop: '10px'}}/>
-                      <Line type="monotone" dataKey="lane_rating" name="Lane" stroke="#c084fc" strokeWidth={3} dot={{r:3}}/>
-                      <Line type="monotone" dataKey="impact_rating" name="Impact" stroke="#60a5fa" strokeWidth={3} dot={{r:3}}/>
-                      <Line type="monotone" dataKey="conversion_rating" name="Conv." stroke="#34d399" strokeWidth={3} dot={{r:3}}/>
-                      <Line type="monotone" dataKey="vision_rating" name="Visão" stroke="#fbbf24" strokeWidth={3} dot={{r:3}}/>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
+                      <YAxis domain={[40, 100]} stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/>
+                      <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
+                      <Legend iconType="circle" wrapperStyle={{fontSize: '9px', paddingTop: '10px', fontWeight: 'bold'}}/>
+                      <Line type="monotone" dataKey="lane_rating" name="Lane" stroke="#c084fc" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                      <Line type="monotone" dataKey="impact_rating" name="Impacto" stroke="#60a5fa" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                      <Line type="monotone" dataKey="conversion_rating" name="Conv." stroke="#34d399" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                      <Line type="monotone" dataKey="vision_rating" name="Visão" stroke="#fbbf24" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
                     </LineChart>
                   </ResponsiveContainer>
                 </ChartWrapper>
               </div>
 
-              <div className="grid grid-cols-2 gap-6">
-                <ChartWrapper title="Win Chance by Gold Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={goldChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/><XAxis dataKey="val" stroke="#475569" fontSize={10} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#475569" fontSize={10}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#fbbf24" strokeWidth={3} strokeDasharray="5 5" fill="#fbbf24" fillOpacity={0.05} connectNulls/></AreaChart></ResponsiveContainer></ChartWrapper>
-                <ChartWrapper title="Win Chance by XP Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={xpChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/><XAxis dataKey="val" stroke="#475569" fontSize={10} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#475569" fontSize={10}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#3b82f6" strokeWidth={3} strokeDasharray="5 5" fill="#3b82f6" fillOpacity={0.05} connectNulls/></AreaChart></ResponsiveContainer></ChartWrapper>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <ChartWrapper title="Win Chance by Gold Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={goldChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#fbbf24" strokeWidth={2} fill="#fbbf24" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
+                <ChartWrapper title="Win Chance by XP Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={xpChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#3b82f6" strokeWidth={2} fill="#3b82f6" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
               </div>
 
-              <div className="grid grid-cols-2 gap-6">
-                <ChartWrapper title="Distribuição Gold Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={goldBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/><XAxis dataKey="name" stroke="#475569" fontSize={10}/><YAxis stroke="#475569" fontSize={10}/><Tooltip content={<CustomBoxPlotTooltip />}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.3}>{goldBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} stroke={e.color} strokeWidth={2} />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
-                <ChartWrapper title="Distribuição XP Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={xpBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/><XAxis dataKey="name" stroke="#475569" fontSize={10}/><YAxis stroke="#475569" fontSize={10}/><Tooltip content={<CustomBoxPlotTooltip />}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.3}>{xpBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} stroke={e.color} strokeWidth={2} />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <ChartWrapper title="Distribuição Gold Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={goldBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{goldBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
+                <ChartWrapper title="Distribuição XP Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={xpBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{xpBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
               </div>
 
-              <div className="bg-slate-900/10 border border-slate-800/40 rounded-[48px] p-8 shadow-inner">
-                <h3 className="text-blue-500 text-[10px] tracking-[0.5em] mb-10 text-center font-black italic uppercase">Matriz Relacional de Performance</h3>
-                <div className="grid grid-cols-2 gap-8">
+              <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm transition-all duration-500 hover:border-zinc-700">
+                <div className="flex justify-between items-center mb-8 border-b border-zinc-800 pb-4">
+                   <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
+                     <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
+                     Matriz Relacional de Performance
+                   </h3>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                   <RelationalChart title="Mortes@12 vs Mortes Totais" data={filteredMatches} teams={teams} x="deaths_at_12" y="deaths" xN="M@12" yN="Total" />
                   <RelationalChart title="KP% vs Visão por Minuto" data={filteredMatches} teams={teams} x="kp_val" y="vspm" xN="KP%" yN="VPM" />
                   <RelationalChart title="Mortes@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="deaths_at_12" y="xp_diff_at_12" xN="M@12" yN="XP Diff" />
@@ -582,7 +588,7 @@ export default function PlayerProfilePage() {
                   <RelationalChart title="Mortes vs Kill Participation" data={filteredMatches} teams={teams} x="deaths" y="kp_val" xN="Mortes" yN="KP%" />
                 </div>
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -590,9 +596,91 @@ export default function PlayerProfilePage() {
   );
 }
 
-// --- SUB-COMPONENTES AUXILIARES ---
+// --- SUB-COMPONENTES AUXILIARES (FLAT DESIGN INTERATIVO) ---
 
-function CockpitDropdown({ label, value, onChange, options, color }: any) {
+function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click);
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  const options = [
+    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
+    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
+    { id: 'CBLOL', label: 'CBLOL' },
+    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
+    { id: 'FIRST_STAND', label: 'FIRST STAND' },
+    { id: 'LCK', label: 'LCK' },
+    { id: 'LCS', label: 'LCS' },
+    { id: 'LEC', label: 'LEC' },
+    { id: 'LPL', label: 'LPL' },
+    { id: 'MSI', label: 'MSI' },
+    { id: 'MUNDIAL', label: 'MUNDIAL' },
+    { id: 'SCRIM', label: 'SCRIMS' } 
+  ];
+
+  const toggleOption = (id: string) => {
+    if (id === 'ALL') {
+      onChange(['ALL']);
+      return;
+    }
+    
+    let newValues = value.filter(v => v !== 'ALL');
+    if (newValues.includes(id)) {
+      newValues = newValues.filter(v => v !== id);
+      if (newValues.length === 0) newValues = ['ALL'];
+    } else {
+      newValues.push(id);
+    }
+    onChange(newValues);
+  };
+
+  const currentLabel = value.includes('ALL') 
+    ? 'TODOS OS CAMPEONATOS' 
+    : value.length === 1 
+      ? options.find(o => o.id === value[0])?.label 
+      : `${value.length} CAMPEONATOS`;
+
+  return (
+    <div className="relative flex flex-col" ref={ref}>
+      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase shadow-sm"
+      >
+        <span className="flex-1 text-left">{currentLabel}</span>
+        <span className={`text-[8px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full mt-2 right-0 min-w-[200px] bg-zinc-900/95 backdrop-blur-md border border-zinc-700/50 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar animate-fade-in-down origin-top">
+          {options.map((opt) => {
+            const isSelected = value.includes(opt.id);
+            return (
+              <button 
+                key={opt.id} 
+                onClick={() => toggleOption(opt.id)} 
+                className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${isSelected ? 'bg-zinc-800/80 text-white' : 'text-zinc-400'}`}
+              >
+                <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                   {isSelected && <span className="text-white text-[9px] font-black">✓</span>}
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wide">{opt.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CockpitDropdown({ label, value, onChange, options }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   
@@ -603,35 +691,27 @@ function CockpitDropdown({ label, value, onChange, options, color }: any) {
   }, []);
 
   const currentLabel = options.find((o:any) => o.id === value)?.label || value;
-  
-  const colorClasses: Record<string, {text: string, bg: string, shadow: string}> = {
-    blue: { text: 'text-blue-400', bg: 'bg-blue-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(59,130,246,0.5)]' },
-    emerald: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]' },
-    purple: { text: 'text-purple-400', bg: 'bg-purple-500/10', shadow: 'group-hover:drop-shadow-[0_0_5px_rgba(168,85,247,0.5)]' }
-  };
-  
-  const c = colorClasses[color] || colorClasses.blue;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      {label && <label className="text-[7px] text-slate-500 tracking-[0.2em] uppercase mb-1.5 ml-2 font-black">{label}</label>}
+      {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl flex items-center justify-between gap-4 min-w-[140px] hover:border-slate-600 transition-all shadow-inner text-[9px] text-white font-black italic uppercase group"
+        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-md flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase shadow-sm"
       >
-        <span className={`flex-1 text-left ${c.text} ${c.shadow} transition-all`}>{currentLabel}</span>
-        <span className={`text-[8px] text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left">{currentLabel}</span>
+        <span className={`text-[8px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 min-w-[160px] bg-[#0a0f18] border border-slate-700 rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-[9999] max-h-[320px] overflow-y-auto custom-scrollbar">
+        <div className="absolute top-full mt-2 right-0 min-w-[160px] bg-zinc-900/95 backdrop-blur-md border border-zinc-700/50 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar animate-fade-in-down origin-top">
           {options.map((opt:any) => (
             <button 
               key={opt.id} 
               onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-4 py-3 hover:bg-slate-800 transition-colors border-b border-slate-800/50 last:border-0 ${value === opt.id ? c.bg : ''}`}
+              className={`w-full flex items-center px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? 'bg-zinc-800/80 text-white font-black' : 'text-zinc-400 font-bold'}`}
             >
-              <span className={`text-[9px] font-black italic uppercase ${value === opt.id ? c.text : 'text-slate-400'}`}>{opt.label}</span>
+              <span className="text-[10px] uppercase tracking-wide">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -641,7 +721,7 @@ function CockpitDropdown({ label, value, onChange, options, color }: any) {
 }
 
 function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} color="emerald" options={[
+  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
     { id: 'ALL', label: 'ANO INTEIRO' }, { id: 'SPLIT 1', label: 'SPLIT 1' }, 
     { id: 'SPLIT 2', label: 'SPLIT 2' }, { id: 'SPLIT 3', label: 'SPLIT 3' }
   ]} />
@@ -650,21 +730,21 @@ function SplitSelector({ value, onChange }: { value: string, onChange: (val: str
 function RelationalChart({ title, data, teams, x, y, xN, yN }: any) {
   const stats = useMemo(() => calculateRegression(data, x, y), [data, x, y]);
   return (
-    <div className="bg-slate-950/40 border border-slate-800 rounded-3xl p-6 relative group transition-all hover:border-blue-500/30">
+    <div className="bg-zinc-950/50 border border-zinc-800 rounded-2xl p-6 relative group transition-all duration-300 hover:border-zinc-600 hover:-translate-y-1 hover:shadow-lg">
       <div className="flex justify-between items-start mb-4">
-        <p className="text-[8px] text-slate-500 font-black uppercase tracking-widest">{title}</p>
-        <div className="bg-blue-600/20 border border-blue-500/40 px-3 py-1 rounded shadow-lg">
-          <p className="text-[11px] text-blue-400 font-mono font-black italic">R² = {stats.r2.toFixed(2)}</p>
+        <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">{title}</p>
+        <div className="bg-zinc-900 border border-zinc-800 px-2 py-1 rounded shadow-sm group-hover:border-blue-900/50 transition-colors">
+          <p className="text-[9px] text-blue-500 font-black">R² = {stats.r2.toFixed(2)}</p>
         </div>
       </div>
       <ResponsiveContainer width="100%" height={180}>
         <ComposedChart>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-          <XAxis type="number" dataKey={x} stroke="#475569" fontSize={8} domain={['auto', 'auto']} />
-          <YAxis type="number" dataKey={y} stroke="#475569" fontSize={8} domain={['auto', 'auto']} />
-          <Tooltip content={<CustomCommonTooltip teams={teams} />} />
-          <Line data={stats.points} type="linear" dataKey={y} stroke="#3b82f6" strokeWidth={1} strokeDasharray="4 4" dot={false} activeDot={false} isAnimationActive={false} />
-          <Scatter data={data} name="Partidas">{data.map((e: any, i: number) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.4} />))}</Scatter>
+          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
+          <XAxis type="number" dataKey={x} stroke="#71717a" fontSize={9} domain={['auto', 'auto']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
+          <YAxis type="number" dataKey={y} stroke="#71717a" fontSize={9} domain={['auto', 'auto']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
+          <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
+          <Line data={stats.points} type="linear" dataKey={y} stroke="#3b82f6" strokeWidth={2} strokeDasharray="4 4" dot={false} activeDot={false} isAnimationActive={false} />
+          <Scatter data={data} name="Partidas" animationDuration={800}>{data.map((e: any, i: number) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.8} className="hover:opacity-100 transition-opacity cursor-crosshair" />))}</Scatter>
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -677,42 +757,76 @@ function CustomCommonTooltip({ active, payload, teams, showMetrics }: any) {
     if (!data || !data.champion) return null;
     const opponentTeam = teams.find((t: any) => t.acronym.toLowerCase() === (data.opponent_acronym || '').toLowerCase());
     return (
-      <div className="bg-slate-950 border border-slate-700 p-4 rounded-2xl shadow-2xl font-mono text-[10px] z-[500]">
-        <div className="flex items-center gap-3 mb-3 border-b border-slate-800 pb-2">
-          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${data.champion}.png`} className="w-10 h-10 rounded-lg shadow-lg" alt={data.champion} />
-          <div className="flex-1 leading-none">
-            <p className="text-[11px] text-white font-black uppercase mb-1">{data.champion}</p>
-            <div className="flex items-center gap-1.5">
+      <div className="bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.8)] z-[500] min-w-[170px] animate-fade-in-up">
+        <div className="flex items-center gap-3 mb-3 border-b border-zinc-800 pb-3">
+          <img src={`https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${data.champion}.png`} className="w-10 h-10 rounded-lg shadow-sm border border-zinc-700" alt={data.champion} />
+          <div className="flex-1 leading-tight">
+            <p className="text-[11px] text-white font-black uppercase">{data.champion}</p>
+            <div className="flex items-center gap-1.5 mt-1 bg-zinc-900 px-1.5 py-0.5 rounded w-fit">
                {opponentTeam?.logo_url && <img src={opponentTeam.logo_url} className="w-3.5 h-3.5 object-contain" alt="" />}
-               <p className="text-slate-500 uppercase font-black">VS {data.opponent_acronym} • {data.side}</p>
+               <p className="text-zinc-400 text-[8px] font-bold uppercase tracking-widest">VS {data.opponent_acronym} • {data.side}</p>
             </div>
           </div>
         </div>
-        {payload.map((p: any) => (<p key={p.dataKey || p.name} style={{color: p.color}}>{p.name === 'z' ? 'EFF' : (p.name || p.dataKey).toUpperCase()}: {p.name === 'z' ? Number(p.value).toFixed(1) + '%' : Math.round(p.value)}</p>))}
-        {!showMetrics && <p className={`mt-2 font-black border-t border-slate-800 pt-1 ${data.is_win ? 'text-blue-400' : 'text-red-400'}`}>RESULTADO: {data.is_win ? 'VITÓRIA' : 'DERROTA'}</p>}
+        <div className="space-y-1.5 font-bold text-[9px] uppercase tracking-widest text-zinc-400">
+          {payload.map((p: any) => (<div key={p.dataKey || p.name} className="flex justify-between items-center"><span style={{color: p.color}}>{p.name === 'z' ? 'EFF' : (p.name || p.dataKey)}</span><span className="text-white font-black">{p.name === 'z' ? Number(p.value).toFixed(1) + '%' : Math.round(p.value)}</span></div>))}
+        </div>
+        {!showMetrics && <p className={`mt-3 font-black text-[10px] uppercase tracking-widest border-t border-zinc-800 pt-2 text-center ${data.is_win ? 'text-blue-500' : 'text-red-500'}`}>RESULTADO: {data.is_win ? 'VITÓRIA' : 'DERROTA'}</p>}
       </div>
     );
   }
   return null;
 }
 
-function GuideSection({ title, text }: any) { return ( <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-3xl"><h3 className="text-blue-400 font-black italic uppercase mb-2">// {title}</h3><p className="text-slate-400 text-[11px] leading-relaxed tracking-wider uppercase">{text}</p></div> ); }
-
 function StatBadge({ label, val }: any) { 
   const c = getScoreColor(val); 
-  const textColorClass = c.split(' ').find(cls => cls.startsWith('text-')) || 'text-slate-400';
-  const bgColorClass = c.split(' ').find(cls => cls.startsWith('bg-')) || 'bg-slate-800';
-  
   return ( 
-    <div className="bg-[#06090f] p-4 flex flex-col items-center justify-center relative overflow-hidden group">
-      <div className={`absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 ${bgColorClass}`}></div>
-      
-      <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest mb-1 relative z-10">{label}</p>
-      <p className={`text-2xl font-black relative z-10 ${textColorClass}`}>{Math.round(val || 0)}</p>
+    <div className="bg-[#18181b] p-5 flex flex-col items-center justify-center transition-colors group">
+      <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest mb-1 group-hover:text-zinc-400 transition-colors">{label}</p>
+      <p className={`text-3xl font-black transition-transform duration-300 group-hover:scale-110 ${c}`}>{Math.round(val || 0)}</p>
     </div> 
   ); 
 }
 
-function ChartWrapper({ title, children }: any) { return ( <div className="bg-slate-900/20 border border-slate-800 rounded-[40px] p-8 h-[320px] flex flex-col shadow-xl overflow-hidden"><h3 className="text-[10px] text-slate-500 mb-6 text-center font-black uppercase tracking-widest">{title}</h3><div className="flex-1 min-h-[240px]">{children}</div></div> ); }
-function CustomBoxPlotTooltip({ active, payload }: any) { if (active && payload && payload.length) { const data = payload[0].payload; return ( <div className="bg-slate-950 border border-slate-700 p-3 rounded-xl shadow-2xl font-mono text-[10px]"><p className="border-b border-slate-800 pb-2 mb-2 font-black italic uppercase" style={{ color: data.color }}>{data.name}</p><p>MÁX: {Math.round(data.max)}</p><p>Q3: {Math.round(data.q3)}</p><p className="text-blue-400">MED: {Math.round(data.median)}</p><p>Q1: {Math.round(data.q1)}</p><p>MÍN: {Math.round(data.min)}</p><p className="pt-2 opacity-50 uppercase text-[8px]">N: {data.count} JOGOS</p></div> ); } return null; }
-function CustomProbabilityTooltip({ active, payload }: any) { if (active && payload && payload.length) { const data = payload[0].payload; if (data.chance === null) return null; return ( <div className="bg-slate-950 border border-slate-700 p-4 rounded-2xl shadow-2xl"><p className="text-[8px] text-slate-500 uppercase font-black mb-1">Métrica: {data.val > 0 ? '+' : ''}{data.val} {data.type}</p><p className={`text-[18px] font-black italic ${data.chance >= 60 ? 'text-emerald-400' : 'text-yellow-400'}`}>{data.chance}% CHANCE</p><p className="text-[9px] text-slate-400 mt-2 font-black uppercase opacity-60">{data.wins} / {data.total} VITÓRIAS</p></div> ); } return null; }
+function ChartWrapper({ title, children }: any) { return ( <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-6 h-[320px] flex flex-col shadow-sm transition-all duration-300 hover:border-zinc-700 hover:shadow-lg"><h3 className="text-[10px] text-zinc-400 mb-6 font-bold uppercase tracking-widest">{title}</h3><div className="flex-1 min-h-[240px]">{children}</div></div> ); }
+
+function CustomBoxPlotTooltip({ active, payload }: any) { 
+  if (active && payload && payload.length) { 
+    const data = payload[0].payload; 
+    return ( 
+      <div className="bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 p-4 rounded-2xl shadow-2xl font-bold text-[9px] uppercase tracking-widest min-w-[140px] animate-fade-in-up">
+        <p className="border-b border-zinc-800 pb-2 mb-3 font-black text-[11px]" style={{ color: data.color }}>{data.name}</p>
+        <div className="space-y-1.5 text-zinc-400">
+          <div className="flex justify-between"><span>MÁX</span><span className="text-white">{Math.round(data.max)}</span></div>
+          <div className="flex justify-between"><span>Q3</span><span className="text-white">{Math.round(data.q3)}</span></div>
+          <div className="flex justify-between text-blue-500 font-black"><span>MED</span><span>{Math.round(data.median)}</span></div>
+          <div className="flex justify-between"><span>Q1</span><span className="text-white">{Math.round(data.q1)}</span></div>
+          <div className="flex justify-between"><span>MÍN</span><span className="text-white">{Math.round(data.min)}</span></div>
+        </div>
+        <p className="pt-3 mt-3 border-t border-zinc-800 text-zinc-500 text-[8px] text-center bg-zinc-900 rounded py-1">GAMES: {data.count}</p>
+      </div> 
+    ); 
+  } 
+  return null; 
+}
+
+function CustomProbabilityTooltip({ active, payload }: any) { 
+  if (active && payload && payload.length) { 
+    const data = payload[0].payload; 
+    if (data.chance === null) return null; 
+    return ( 
+      <div className="bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 p-5 rounded-2xl shadow-2xl min-w-[160px] animate-fade-in-up">
+        <p className="text-[9px] text-zinc-400 uppercase font-bold tracking-widest mb-1 border-b border-zinc-800 pb-3 flex items-center justify-between">
+          <span>Métrica</span>
+          <span className="text-white bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">{data.val > 0 ? '+' : ''}{data.val} {data.type}</span>
+        </p>
+        <p className={`text-2xl font-black mt-3 text-center drop-shadow-md ${data.chance >= 60 ? 'text-blue-500' : data.chance < 50 ? 'text-red-400' : 'text-zinc-300'}`}>{data.chance}%</p>
+        <p className="text-[8px] text-zinc-500 mt-2 font-bold uppercase tracking-widest text-center">CHANCE DE VITÓRIA</p>
+        <div className="mt-3 pt-2 border-t border-zinc-800">
+           <p className="text-[9px] text-zinc-400 font-bold uppercase text-center"><span className="text-white">{data.wins}</span> EM <span className="text-white">{data.total}</span> CENÁRIOS</p>
+        </div>
+      </div> 
+    ); 
+  } 
+  return null; 
+}
