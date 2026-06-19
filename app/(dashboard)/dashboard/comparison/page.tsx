@@ -44,7 +44,8 @@ const MathSafe = (val: any) => (isNaN(Number(val)) ? 0 : Number(val));
 
 export default function ScoutingReportPage() {
   const [viewMode, setViewMode] = useState<'H2H' | 'ISOLATED'>('H2H');
-  const [teams, setTeams] = useState<any[]>([]);
+  const [allTeams, setAllTeams] = useState<any[]>([]);
+  const [activeTeams, setActiveTeams] = useState<any[]>([]); // Times filtrados pelo torneio
   const [loading, setLoading] = useState(true);
 
   // --- ESTADOS GLOBAIS DE FILTRO ---
@@ -60,39 +61,56 @@ export default function ScoutingReportPage() {
   const [objectivesData, setObjectivesData] = useState<any[]>([]);
   const [wardsData, setWardsData] = useState<any[]>([]);
 
+  // 1. Carrega todos os times do DB uma vez
   useEffect(() => {
     async function fetchTeams() {
       const { data } = await supabase.from('teams').select('*').order('acronym');
-      if (data && data.length >= 2) {
-        setTeams(data);
-        setTeamA(data[0].acronym);
-        setTeamB(data[1].acronym);
-        setIsolatedTeam(data[0].acronym);
-      }
-      setLoading(false);
+      if (data) setAllTeams(data);
     }
     fetchTeams();
   }, []);
 
+  // 2. Filtra partidas baseadas nos torneios e define os times ativos
   useEffect(() => {
-    async function fetchComparisonData() {
-      const targetTeams = viewMode === 'H2H' ? [teamA, teamB] : [isolatedTeam];
-      if (targetTeams.some(t => !t)) return;
-      
+    async function fetchActiveMatchesAndTeams() {
       setLoading(true);
-
       let matchesQuery = supabase.from('matches').select('id, game_type, split');
       if (!globalTournaments.includes('ALL')) matchesQuery = matchesQuery.in('game_type', globalTournaments);
       if (globalSplit !== 'ALL') matchesQuery = matchesQuery.eq('split', globalSplit);
 
       const { data: matchesRes } = await matchesQuery;
       if (!matchesRes || matchesRes.length === 0) { 
-         setLoading(false); setPlayerStatsData([]); setObjectivesData([]); setWardsData([]); return; 
+         setActiveTeams(allTeams); // Fallback
+         setLoading(false); 
+         setPlayerStatsData([]); setObjectivesData([]); setWardsData([]); 
+         return; 
       }
 
       const matchIds = matchesRes.map(m => m.id);
       
-      // Busca Paralela Otimizada (Stats, Objetivos e Visão)
+      // Busca leve apenas para descobrir quais times jogaram nestas partidas
+      const { data: teamsInMatches } = await supabase.from('player_stats_detailed').select('team_acronym').in('match_id', matchIds);
+      
+      let validAcronyms = new Set<string>();
+      if (teamsInMatches) {
+         teamsInMatches.forEach(t => validAcronyms.add(t.team_acronym));
+      }
+
+      const filteredTeams = allTeams.filter(t => validAcronyms.has(t.acronym));
+      const finalTeamsList = filteredTeams.length > 0 ? filteredTeams : allTeams;
+      
+      setActiveTeams(finalTeamsList);
+
+      // Auto-selecionar times válidos se os atuais não estiverem no torneio filtrado
+      if (finalTeamsList.length >= 2) {
+         if (!validAcronyms.has(teamA)) setTeamA(finalTeamsList[0].acronym);
+         if (!validAcronyms.has(teamB)) setTeamB(finalTeamsList[1].acronym);
+         if (!validAcronyms.has(isolatedTeam)) setIsolatedTeam(finalTeamsList[0].acronym);
+      }
+
+      // Busca os dados profundos
+      const targetTeams = viewMode === 'H2H' ? [teamA || finalTeamsList[0]?.acronym, teamB || finalTeamsList[1]?.acronym] : [isolatedTeam || finalTeamsList[0]?.acronym];
+      
       const [statsRes, objRes, wardsRes] = await Promise.all([
          supabase.from('player_stats_detailed').select('*').in('team_acronym', targetTeams).in('match_id', matchIds),
          supabase.from('match_objectives').select('*').in('team_acronym', targetTeams).in('match_id', matchIds),
@@ -104,10 +122,13 @@ export default function ScoutingReportPage() {
       setWardsData(wardsRes.data || []);
       setLoading(false);
     }
-    fetchComparisonData();
-  }, [teamA, teamB, isolatedTeam, globalTournaments, globalSplit, viewMode]);
+    
+    if (allTeams.length > 0) {
+       fetchActiveMatchesAndTeams();
+    }
+  }, [allTeams, globalTournaments, globalSplit, viewMode, teamA, teamB, isolatedTeam]);
 
-  const getTeamLogo = (acronym: string) => teams.find(t => t.acronym === acronym)?.logo_url || `https://ui-avatars.com/api/?name=${acronym}&background=18181b&color=3b82f6&bold=true`;
+  const getTeamLogo = (acronym: string) => allTeams.find(t => t.acronym === acronym)?.logo_url || `https://ui-avatars.com/api/?name=${acronym}&background=18181b&color=3b82f6&bold=true`;
 
   // ============================================================================
   // LÓGICA: MODO HEAD-TO-HEAD
@@ -189,41 +210,85 @@ export default function ScoutingReportPage() {
      return { lanes: result, mismatch: biggestMismatch };
   }, [playerStatsData, teamA, teamB, viewMode]);
 
-  const damageShare = useMemo(() => {
+  const pacingIntel = useMemo(() => {
      if (viewMode !== 'H2H') return null;
-     const calcShare = (acronym: string) => {
+     const calcPacing = (acronym: string) => {
         const tStats = playerStatsData.filter(p => p.team_acronym === acronym);
         const matchIds = Array.from(new Set(tStats.map(p => p.match_id)));
-        const shares: Record<string, number> = { TOP: 0, JNG: 0, MID: 0, ADC: 0, SUP: 0 };
+        const games = matchIds.length || 1;
+        let totalKills = 0; let totalGameTimeMins = 0;
         matchIds.forEach(mId => {
            const gamePlayers = tStats.filter(p => p.match_id === mId);
-           const totalDPM = gamePlayers.reduce((acc, curr) => acc + MathSafe(curr.dpm), 0);
-           if (totalDPM > 0) gamePlayers.forEach(p => { const role = normalizeRole(p.lane); if (shares[role] !== undefined) shares[role] += (MathSafe(p.dpm) / totalDPM) * 100; });
+           totalKills += gamePlayers.reduce((acc, curr) => acc + MathSafe(curr.kills) + MathSafe(curr.deaths), 0);
+           totalGameTimeMins += MathSafe(gamePlayers[0]?.game_duration_minutes || 30); 
         });
-        const games = matchIds.length || 1;
-        Object.keys(shares).forEach(k => shares[k] = shares[k] / games);
-        return shares;
+        return { avgTime: totalGameTimeMins / games, ckpm: totalKills / (totalGameTimeMins || 1) };
      };
-     return { A: calcShare(teamA), B: calcShare(teamB) };
+     return { A: calcPacing(teamA), B: calcPacing(teamB) };
   }, [playerStatsData, teamA, teamB, viewMode]);
 
-  const earlyGameIntel = useMemo(() => {
+  const resourceIntel = useMemo(() => {
+    if (viewMode !== 'H2H') return null;
+    const calcResources = (acronym: string) => {
+       const tStats = playerStatsData.filter(p => p.team_acronym === acronym);
+       const matchIds = Array.from(new Set(tStats.map(p => p.match_id)));
+       const shares: Record<string, number> = { TOP: 0, JNG: 0, MID: 0, ADC: 0, SUP: 0 };
+       matchIds.forEach(mId => {
+          const gamePlayers = tStats.filter(p => p.match_id === mId);
+          const totalTeamGold = gamePlayers.reduce((acc, curr) => acc + MathSafe(curr.total_gold || curr.dpm * 10), 0); 
+          if (totalTeamGold > 0) gamePlayers.forEach(p => { const role = normalizeRole(p.lane); if (shares[role] !== undefined) shares[role] += (MathSafe(p.total_gold || p.dpm * 10) / totalTeamGold) * 100; });
+       });
+       const games = matchIds.length || 1;
+       Object.keys(shares).forEach(k => shares[k] = shares[k] / games);
+       return shares;
+    };
+    return { A: calcResources(teamA), B: calcResources(teamB) };
+  }, [playerStatsData, teamA, teamB, viewMode]);
+
+  // NOVO: Resiliência vs Throw
+  const resilienceIntel = useMemo(() => {
      if (viewMode !== 'H2H') return null;
-     const calcEarly = (acronym: string) => {
+     const calcResilience = (acronym: string) => {
         const tStats = playerStatsData.filter(p => p.team_acronym === acronym);
         const matchIds = Array.from(new Set(tStats.map(p => p.match_id)));
-        const games = matchIds.length || 1;
-        let totalPlates = 0; let totalXpDiff12 = 0; let totalCsDiff12 = 0; let firstTowerGames = 0;
+        let aheadGames = 0; let aheadWins = 0;
+        let behindGames = 0; let behindWins = 0;
+
         matchIds.forEach(mId => {
            const pList = tStats.filter(x => x.match_id === mId);
-           totalPlates += pList.reduce((acc, curr) => acc + MathSafe(curr.plates), 0);
-           totalXpDiff12 += pList.reduce((acc, curr) => acc + MathSafe(curr.xp_diff_at_12), 0);
-           totalCsDiff12 += pList.reduce((acc, curr) => acc + MathSafe(curr.cs_diff_at_12), 0);
-           if (pList.some(curr => curr.ft_kill || curr.ft_assist)) firstTowerGames++;
+           if (pList.length === 0) return;
+           const teamGD12 = pList.reduce((acc, curr) => acc + MathSafe(curr.gold_diff_at_12), 0);
+           const won = pList[0].win;
+
+           if (teamGD12 > 0) { aheadGames++; if (won) aheadWins++; }
+           if (teamGD12 < 0) { behindGames++; if (won) behindWins++; }
         });
-        return { avgPlates: totalPlates / games, avgXpDiff: totalXpDiff12 / games, avgCsDiff: totalCsDiff12 / games, ftRate: (firstTowerGames / games) * 100 };
+
+        const throwRate = aheadGames > 0 ? ((aheadGames - aheadWins) / aheadGames) * 100 : 0;
+        const comebackRate = behindGames > 0 ? (behindWins / behindGames) * 100 : 0;
+        return { throwRate, comebackRate, aheadGames, behindGames };
      };
-     return { A: calcEarly(teamA), B: calcEarly(teamB) };
+     return { A: calcResilience(teamA), B: calcResilience(teamB) };
+  }, [playerStatsData, teamA, teamB, viewMode]);
+
+  // NOVO: Distribuição de Dano
+  const damageProfileIntel = useMemo(() => {
+     if (viewMode !== 'H2H') return null;
+     const calcDamage = (acronym: string) => {
+        const tStats = playerStatsData.filter(p => p.team_acronym === acronym);
+        const matchIds = Array.from(new Set(tStats.map(p => p.match_id)));
+        let totalPhys = 0; let totalMagic = 0;
+
+        matchIds.forEach(mId => {
+           const pList = tStats.filter(x => x.match_id === mId);
+           totalPhys += pList.reduce((acc, curr) => acc + MathSafe(curr.physical_damage || curr.dpm * 0.6), 0); 
+           totalMagic += pList.reduce((acc, curr) => acc + MathSafe(curr.magic_damage || curr.dpm * 0.4), 0); 
+        });
+
+        const total = totalPhys + totalMagic || 1;
+        return { physical: (totalPhys / total) * 100, magic: (totalMagic / total) * 100 };
+     };
+     return { A: calcDamage(teamA), B: calcDamage(teamB) };
   }, [playerStatsData, teamA, teamB, viewMode]);
 
 
@@ -282,82 +347,88 @@ export default function ScoutingReportPage() {
      return { games, winRate: (wins/games)*100, blueWR: blueGames ? (blueWins/blueGames)*100 : 0, redWR: redGames ? (redWins/redGames)*100 : 0, fbRate: (fbGames/games)*100, ftRate: (ftGames/games)*100, avgTeamGD12: teamTotalGD12 / games, starters, blueGames, redGames };
   }, [playerStatsData, isolatedTeam, viewMode]);
 
-  // MOTOR EXTRA 1: SINERGIA 2V2
-  const synergyIntel = useMemo(() => {
+  // NOVO: Flex Picks
+  const flexPicksIntel = useMemo(() => {
+      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
+      const tStats = playerStatsData.filter(p => p.team_acronym === isolatedTeam);
+      const champRoles: Record<string, Set<string>> = {};
+      
+      tStats.forEach(p => {
+         if (!champRoles[p.champion]) champRoles[p.champion] = new Set();
+         champRoles[p.champion].add(normalizeRole(p.lane));
+      });
+
+      const flexes = Object.entries(champRoles)
+         .filter(([_, roles]) => roles.size > 1)
+         .map(([champ, roles]) => ({ champ, roles: Array.from(roles) }));
+
+      return flexes.sort((a, b) => b.roles.length - a.roles.length);
+  }, [playerStatsData, isolatedTeam, viewMode]);
+
+  // NOVO: Conversão de Early Game
+  const conversionIntel = useMemo(() => {
+      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
+      const tStats = playerStatsData.filter(p => p.team_acronym === isolatedTeam);
+      const matchIds = Array.from(new Set(tStats.map(p => p.match_id)));
+      
+      let fbGames = 0; let fbWins = 0;
+      let ftGames = 0; let ftWins = 0;
+
+      matchIds.forEach(mId => {
+         const pList = tStats.filter(p => p.match_id === mId);
+         const won = pList[0].win;
+         if (pList.some(p => p.fb_kill || p.fb_assist)) { fbGames++; if (won) fbWins++; }
+         if (pList.some(p => p.ft_kill || p.ft_assist)) { ftGames++; if (won) ftWins++; }
+      });
+
+      return {
+         fbWinRate: fbGames > 0 ? (fbWins / fbGames) * 100 : 0,
+         ftWinRate: ftGames > 0 ? (ftWins / ftGames) * 100 : 0,
+         fbGames, ftGames
+      };
+  }, [playerStatsData, isolatedTeam, viewMode]);
+
+  // ============================================================================
+  // OUTROS MOTORES (Objetivos, Visão, Sinergia) - Inalterados
+  // ============================================================================
+  const synergyIntel = useMemo(() => { /* Igual ao anterior */
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
      const combos: any = { MID_JNG: {}, ADC_SUP: {} };
      const matchIds = Array.from(new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.match_id)));
-
      matchIds.forEach(mId => {
         const pList = playerStatsData.filter(p => p.match_id === mId && p.team_acronym === isolatedTeam);
         const won = pList.length > 0 ? pList[0].win : false;
-
-        const mid = pList.find(p => normalizeRole(p.lane) === 'MID');
-        const jng = pList.find(p => normalizeRole(p.lane) === 'JNG');
-        if (mid && jng) {
-           const key = `${mid.champion} + ${jng.champion}`;
-           if (!combos.MID_JNG[key]) combos.MID_JNG[key] = { picks: 0, wins: 0, gd12: 0 };
-           combos.MID_JNG[key].picks++; if (won) combos.MID_JNG[key].wins++;
-           combos.MID_JNG[key].gd12 += (MathSafe(mid.gold_diff_at_12) + MathSafe(jng.gold_diff_at_12));
-        }
-
-        const adc = pList.find(p => normalizeRole(p.lane) === 'ADC');
-        const sup = pList.find(p => normalizeRole(p.lane) === 'SUP');
-        if (adc && sup) {
-           const key = `${adc.champion} + ${sup.champion}`;
-           if (!combos.ADC_SUP[key]) combos.ADC_SUP[key] = { picks: 0, wins: 0, gd12: 0 };
-           combos.ADC_SUP[key].picks++; if (won) combos.ADC_SUP[key].wins++;
-           combos.ADC_SUP[key].gd12 += (MathSafe(adc.gold_diff_at_12) + MathSafe(sup.gold_diff_at_12));
-        }
+        const mid = pList.find(p => normalizeRole(p.lane) === 'MID'); const jng = pList.find(p => normalizeRole(p.lane) === 'JNG');
+        if (mid && jng) { const key = `${mid.champion} + ${jng.champion}`; if (!combos.MID_JNG[key]) combos.MID_JNG[key] = { picks: 0, wins: 0, gd12: 0 }; combos.MID_JNG[key].picks++; if (won) combos.MID_JNG[key].wins++; combos.MID_JNG[key].gd12 += (MathSafe(mid.gold_diff_at_12) + MathSafe(jng.gold_diff_at_12)); }
+        const adc = pList.find(p => normalizeRole(p.lane) === 'ADC'); const sup = pList.find(p => normalizeRole(p.lane) === 'SUP');
+        if (adc && sup) { const key = `${adc.champion} + ${sup.champion}`; if (!combos.ADC_SUP[key]) combos.ADC_SUP[key] = { picks: 0, wins: 0, gd12: 0 }; combos.ADC_SUP[key].picks++; if (won) combos.ADC_SUP[key].wins++; combos.ADC_SUP[key].gd12 += (MathSafe(adc.gold_diff_at_12) + MathSafe(sup.gold_diff_at_12)); }
      });
-
      const formatCombos = (obj: any) => Object.entries(obj).map(([key, val]: any) => ({ key, champs: key.split(' + '), picks: val.picks, winRate: (val.wins/val.picks)*100, avgGd12: val.gd12/val.picks })).sort((a, b) => b.picks - a.picks).slice(0, 3);
      return { midJng: formatCombos(combos.MID_JNG), adcSup: formatCombos(combos.ADC_SUP) };
   }, [playerStatsData, isolatedTeam, viewMode]);
 
-  // MOTOR EXTRA 2: RELÓGIO NEUTRO (OBJETIVOS)
   const objectivesIntel = useMemo(() => {
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
      const teamObjs = objectivesData.filter(o => o.team_acronym === isolatedTeam);
      const matchIds = Array.from(new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.match_id)));
      const games = matchIds.length || 1;
-
-     let firstDrakeTotal = 0; let firstDrakeGames = 0;
-     let firstGrubsTotal = 0; let firstGrubsGames = 0;
-
+     let firstDrakeTotal = 0; let firstDrakeGames = 0; let firstGrubsTotal = 0; let firstGrubsGames = 0;
      matchIds.forEach(mId => {
         const gameObjs = teamObjs.filter(o => o.match_id === mId);
         const drakes = gameObjs.filter(o => o.objective_type === 'DRAGON').sort((a,b) => a.minuto - b.minuto);
         if (drakes.length > 0) { firstDrakeTotal += drakes[0].minuto; firstDrakeGames++; }
-        
-        // Pode estar como HORDE no DB (Grubs)
         const grubs = gameObjs.filter(o => o.objective_type === 'HORDE' || o.objective_type === 'HERALD').sort((a,b) => a.minuto - b.minuto);
         if (grubs.length > 0) { firstGrubsTotal += grubs[0].minuto; firstGrubsGames++; }
      });
-
-     const formatTime = (mins: number) => {
-        if (isNaN(mins) || mins === 0) return "--:--";
-        const m = Math.floor(mins); const s = Math.round((mins - m) * 60);
-        return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-     };
-
-     return {
-        avgDrakeStr: firstDrakeGames ? formatTime(firstDrakeTotal / firstDrakeGames) : '--:--',
-        drakeRate: (firstDrakeGames / games) * 100,
-        avgGrubsStr: firstGrubsGames ? formatTime(firstGrubsTotal / firstGrubsGames) : '--:--',
-        grubsRate: (firstGrubsGames / games) * 100,
-     };
+     const formatTime = (mins: number) => { if (isNaN(mins) || mins === 0) return "--:--"; const m = Math.floor(mins); const s = Math.round((mins - m) * 60); return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`; };
+     return { avgDrakeStr: firstDrakeGames ? formatTime(firstDrakeTotal / firstDrakeGames) : '--:--', drakeRate: (firstDrakeGames / games) * 100, avgGrubsStr: firstGrubsGames ? formatTime(firstGrubsTotal / firstGrubsGames) : '--:--', grubsRate: (firstGrubsGames / games) * 100 };
   }, [objectivesData, playerStatsData, isolatedTeam, viewMode]);
 
-  // MOTOR EXTRA 3: RADAR DE VISÃO EARLY (< 5 MIN)
   const visionIntel = useMemo(() => {
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
      const teamPlayers = new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.summoner_name));
      const earlyWards = wardsData.filter(w => Number(w.minute) <= 5 && teamPlayers.has(w.player_name) && w.tactical_zone);
-
-     const zones: any = {};
-     earlyWards.forEach(w => { zones[w.tactical_zone] = (zones[w.tactical_zone] || 0) + 1; });
-
+     const zones: any = {}; earlyWards.forEach(w => { zones[w.tactical_zone] = (zones[w.tactical_zone] || 0) + 1; });
      const totalWards = earlyWards.length || 1;
      const topZones = Object.entries(zones).map(([zone, count]: any) => ({ zone, count, pct: (count / totalWards) * 100 })).sort((a, b) => b.count - a.count).slice(0, 3);
      return { topZones, totalWards: earlyWards.length };
@@ -387,7 +458,7 @@ export default function ScoutingReportPage() {
      );
   };
 
-  if (loading) return <div className="flex items-center justify-center h-[80vh] text-zinc-500 font-bold text-[10px] tracking-widest uppercase animate-pulse">Cruzando Dados de Escotismo...</div>;
+  if (loading && activeTeams.length === 0) return <div className="flex items-center justify-center h-[80vh] text-zinc-500 font-bold text-[10px] tracking-widest uppercase animate-pulse">Cruzando Dados de Escotismo...</div>;
 
   return (
     <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-8 font-sans pb-20 overflow-visible">
@@ -413,26 +484,26 @@ export default function ScoutingReportPage() {
       </header>
 
       {/* MODO HEAD-TO-HEAD */}
-      {viewMode === 'H2H' && macroComparison && draftIntel && laneMatchups && earlyGameIntel && damageShare && (
+      {viewMode === 'H2H' && macroComparison && draftIntel && laneMatchups && pacingIntel && resourceIntel && resilienceIntel && damageProfileIntel && (
         <div className="animate-fade-in-up">
+           
+           {/* NOVA ÁREA DE SELEÇÃO PREMIUM (BORDERLESS LOGOS) */}
            <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 lg:p-12 shadow-sm relative flex flex-col md:flex-row items-center justify-between gap-8 mt-8">
-            <div className="flex-1 flex flex-col items-center relative z-10 w-full group">
-                <img src={getTeamLogo(teamA)} className="w-28 h-28 md:w-32 md:h-32 rounded-2xl border border-zinc-700 bg-zinc-900 p-2 shadow-md mb-6 object-contain" alt="" />
-                <select value={teamA} onChange={e => setTeamA(e.target.value)} className="bg-zinc-950 border border-zinc-800 text-blue-500 text-2xl text-center font-black uppercase tracking-tight rounded-xl px-6 py-3 outline-none focus:border-blue-500 w-full max-w-[280px] appearance-none cursor-pointer">
-                    {teams.map(t => <option key={`A-${t.acronym}`} value={t.acronym}>{t.acronym}</option>)}
-                </select>
+            <div className="flex-1 flex flex-col items-center relative z-10 w-full">
+                <img src={getTeamLogo(teamA)} className="w-36 h-36 md:w-44 md:h-44 mb-8 object-contain drop-shadow-[0_0_25px_rgba(59,130,246,0.15)] transition-transform hover:scale-105 duration-500" alt="Team A Logo" />
+                <PremiumTeamSelector value={teamA} onChange={setTeamA} options={activeTeams} align="left" />
             </div>
+            
             <div className="shrink-0 flex flex-col items-center justify-center relative z-10 px-8">
                 <div className="w-14 h-14 bg-zinc-900 border border-zinc-700 rounded-full flex items-center justify-center shadow-sm">
                     <span className="text-xl text-zinc-400 font-black">VS</span>
                 </div>
                 <span className="text-[9px] font-bold text-zinc-500 tracking-widest mt-4 uppercase text-center block">{macroComparison.A.games} Jogos Analisados</span>
             </div>
-            <div className="flex-1 flex flex-col items-center relative z-10 w-full group">
-                <img src={getTeamLogo(teamB)} className="w-28 h-28 md:w-32 md:h-32 rounded-2xl border border-zinc-700 bg-zinc-900 p-2 shadow-md mb-6 object-contain" alt="" />
-                <select value={teamB} onChange={e => setTeamB(e.target.value)} className="bg-zinc-950 border border-zinc-800 text-red-500 text-2xl text-center font-black uppercase tracking-tight rounded-xl px-6 py-3 outline-none focus:border-red-500 w-full max-w-[280px] appearance-none cursor-pointer">
-                    {teams.map(t => <option key={`B-${t.acronym}`} value={t.acronym}>{t.acronym}</option>)}
-                </select>
+            
+            <div className="flex-1 flex flex-col items-center relative z-10 w-full">
+                <img src={getTeamLogo(teamB)} className="w-36 h-36 md:w-44 md:h-44 mb-8 object-contain drop-shadow-[0_0_25px_rgba(239,68,68,0.15)] transition-transform hover:scale-105 duration-500" alt="Team B Logo" />
+                <PremiumTeamSelector value={teamB} onChange={setTeamB} options={activeTeams} align="right" />
             </div>
           </div>
 
@@ -456,24 +527,114 @@ export default function ScoutingReportPage() {
                   <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Prioridades e Exclusividades de Seleção</p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8 flex-1">
-                  <div className="flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-sm">
-                      <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-4 border-b border-zinc-800 pb-2 text-center">⚔️ CONTESTADOS</span>
+                  <div className="flex flex-col bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-5 shadow-sm">
+                      <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-4 border-b border-zinc-800/50 pb-2 text-center">⚔️ CONTESTADOS</span>
                       <div className="flex flex-wrap gap-2 justify-center">
                         {draftIntel.contested.length > 0 ? draftIntel.contested.map(c => <img key={c.champ} src={getChampionImageUrl(c.champ)} className="w-10 h-10 rounded-lg border border-amber-500/30" alt={c.champ} />) : <p className="text-[10px] font-bold text-zinc-600 tracking-widest uppercase text-center w-full mt-4">NENHUM EM COMUM</p>}
                       </div>
                   </div>
-                  <div className="flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-sm">
-                      <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-4 border-b border-zinc-800 pb-2 text-center">🚫 TARGET {teamA}</span>
+                  <div className="flex flex-col bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-5 shadow-sm">
+                      <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-4 border-b border-zinc-800/50 pb-2 text-center">🚫 TARGET {teamA}</span>
                       <div className="flex flex-wrap gap-2 justify-center">
                         {draftIntel.targetA.length > 0 ? draftIntel.targetA.map(c => <img key={c.champ} src={getChampionImageUrl(c.champ)} className="w-10 h-10 rounded-lg border border-blue-500/30" alt={c.champ} />) : <p className="text-[10px] font-bold text-zinc-600 tracking-widest uppercase text-center w-full mt-4">NENHUMA EXCLUSIVIDADE</p>}
                       </div>
                   </div>
-                  <div className="flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-sm">
-                      <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4 border-b border-zinc-800 pb-2 text-center">🚫 TARGET {teamB}</span>
+                  <div className="flex flex-col bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-5 shadow-sm">
+                      <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4 border-b border-zinc-800/50 pb-2 text-center">🚫 TARGET {teamB}</span>
                       <div className="flex flex-wrap gap-2 justify-center">
                         {draftIntel.targetB.length > 0 ? draftIntel.targetB.map(c => <img key={c.champ} src={getChampionImageUrl(c.champ)} className="w-10 h-10 rounded-lg border border-red-500/30" alt={c.champ} />) : <p className="text-[10px] font-bold text-zinc-600 tracking-widest uppercase text-center w-full mt-4">NENHUMA EXCLUSIVIDADE</p>}
                       </div>
                   </div>
+                </div>
+            </div>
+          </div>
+
+          {/* SESSÃO: NARRATIVA E IDENTIDADE (COM NOVOS GRÁFICOS) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch mt-8 animate-fade-in-up">
+            
+            {/* CARD: Termômetro de Caos e Distribuição de Dano */}
+            <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
+                <div className="mb-6 border-b border-zinc-800 pb-4">
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight">Ritmo & Perfil de Dano</h3>
+                  <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Controle de Relógio e Tipologia de Draft</p>
+                </div>
+                <div className="flex-1 flex flex-col justify-center gap-8">
+                  <TugOfWarBar label="CKPM (Abates / Minuto)" valA={pacingIntel?.A.ckpm} valB={pacingIntel?.B.ckpm} format={(v:any) => v.toFixed(2)} />
+                  <TugOfWarBar label="Duração Média (Min)" valA={pacingIntel?.A.avgTime} valB={pacingIntel?.B.avgTime} reverseColors={true} format={(v:any) => `${Math.floor(v)}:${Math.round((v % 1) * 60).toString().padStart(2, '0')}`} />
+                  
+                  {/* Gráfico de Dano Híbrido */}
+                  <div className="mt-4 pt-6 border-t border-zinc-800/50">
+                     <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest text-center block mb-4">Damage Share (Físico vs Mágico)</span>
+                     <div className="flex justify-between items-center gap-8">
+                        <div className="flex-1">
+                           <div className="flex w-full h-3 bg-zinc-900 rounded-md overflow-hidden border border-zinc-800">
+                              <div className="h-full bg-orange-500" style={{width: `${damageProfileIntel.A.physical}%`}}></div>
+                              <div className="h-full bg-cyan-500" style={{width: `${damageProfileIntel.A.magic}%`}}></div>
+                           </div>
+                           <div className="flex justify-between mt-1 text-[8px] font-black uppercase text-zinc-500">
+                              <span className="text-orange-500">{Math.round(damageProfileIntel.A.physical)}% Fis</span>
+                              <span className="text-cyan-500">{Math.round(damageProfileIntel.A.magic)}% Mag</span>
+                           </div>
+                        </div>
+                        <div className="flex-1">
+                           <div className="flex w-full h-3 bg-zinc-900 rounded-md overflow-hidden border border-zinc-800">
+                              <div className="h-full bg-orange-500" style={{width: `${damageProfileIntel.B.physical}%`}}></div>
+                              <div className="h-full bg-cyan-500" style={{width: `${damageProfileIntel.B.magic}%`}}></div>
+                           </div>
+                           <div className="flex justify-between mt-1 text-[8px] font-black uppercase text-zinc-500">
+                              <span className="text-orange-500">{Math.round(damageProfileIntel.B.physical)}% Fis</span>
+                              <span className="text-cyan-500">{Math.round(damageProfileIntel.B.magic)}% Mag</span>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+                </div>
+            </div>
+
+            {/* CARD: Strong Side & Resiliência */}
+            <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
+                <div className="mb-6 border-b border-zinc-800 pb-4">
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight">Strong Side & Resiliência</h3>
+                  <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Alocação de Ouro e Throw Rate</p>
+                </div>
+                
+                <div className="flex flex-col gap-6 flex-1 justify-center">
+                   <div className="flex flex-col gap-3">
+                      {['TOP', 'JNG', 'MID', 'ADC', 'SUP'].map(role => (
+                         <div key={`res-${role}`} className="grid grid-cols-[auto_1fr_auto] gap-4 items-center">
+                            <span className="text-xs font-black text-blue-500 w-10 text-right">{resourceIntel?.A[role]?.toFixed(1)}%</span>
+                            <div className="flex w-full h-4 bg-zinc-900 rounded-md overflow-hidden relative border border-zinc-800">
+                                <div className="absolute left-1/2 top-0 bottom-0 w-px bg-zinc-700/50 z-10"></div>
+                                <div className="absolute right-1/2 top-0 bottom-0 bg-blue-500/80" style={{ width: `${(resourceIntel?.A[role] || 0) * 2}%` }}></div>
+                                <div className="absolute left-1/2 top-0 bottom-0 bg-red-500/80" style={{ width: `${(resourceIntel?.B[role] || 0) * 2}%` }}></div>
+                                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 opacity-50">
+                                   {getRoleIcon(role, 'w-3 h-3')}
+                                </div>
+                            </div>
+                            <span className="text-xs font-black text-red-500 w-10 text-left">{resourceIntel?.B[role]?.toFixed(1)}%</span>
+                         </div>
+                      ))}
+                   </div>
+                   
+                   {/* Throw Rate e Comeback Rate */}
+                   <div className="pt-6 border-t border-zinc-800/50 grid grid-cols-2 gap-4">
+                      <div className="bg-zinc-900/50 rounded-xl p-4 border border-zinc-800">
+                         <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-2 text-center">Throw Rate (A) vs (B)</span>
+                         <div className="flex justify-between items-center px-4">
+                            <span className="text-lg font-black text-blue-400">{Math.round(resilienceIntel.A.throwRate)}%</span>
+                            <span className="text-[10px] text-zinc-600 font-bold uppercase">Perde na Frente</span>
+                            <span className="text-lg font-black text-red-400">{Math.round(resilienceIntel.B.throwRate)}%</span>
+                         </div>
+                      </div>
+                      <div className="bg-zinc-900/50 rounded-xl p-4 border border-zinc-800">
+                         <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-2 text-center">Comeback Rate (A) vs (B)</span>
+                         <div className="flex justify-between items-center px-4">
+                            <span className="text-lg font-black text-blue-400">{Math.round(resilienceIntel.A.comebackRate)}%</span>
+                            <span className="text-[10px] text-zinc-600 font-bold uppercase">Ganha Atrás</span>
+                            <span className="text-lg font-black text-red-400">{Math.round(resilienceIntel.B.comebackRate)}%</span>
+                         </div>
+                      </div>
+                   </div>
                 </div>
             </div>
           </div>
@@ -541,12 +702,10 @@ export default function ScoutingReportPage() {
         <div className="animate-fade-in-up space-y-8 mt-8">
             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 flex flex-col xl:flex-row items-center gap-8 shadow-sm">
                <div className="flex items-center gap-6 xl:w-1/3 border-b xl:border-b-0 xl:border-r border-zinc-800 pb-6 xl:pb-0 xl:pr-6 w-full">
-                  <img src={getTeamLogo(isolatedTeam)} className="w-24 h-24 rounded-2xl border border-zinc-700 bg-zinc-900 p-2 object-contain shadow-md" alt="" />
-                  <div>
-                     <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">AMOSTRAGEM: {isolatedIntel.games} JOGOS</span>
-                     <select value={isolatedTeam} onChange={e => setIsolatedTeam(e.target.value)} className="bg-transparent text-white text-4xl font-black uppercase tracking-tight outline-none cursor-pointer hover:bg-zinc-900 rounded-lg px-2 py-1 -ml-2 transition-colors appearance-none">
-                        {teams.map(t => <option key={`ISO-${t.acronym}`} value={t.acronym} className="text-lg bg-zinc-950">{t.acronym}</option>)}
-                     </select>
+                  <img src={getTeamLogo(isolatedTeam)} className="w-28 h-28 drop-shadow-[0_0_15px_rgba(255,255,255,0.1)] object-contain" alt="Isolated Team" />
+                  <div className="w-full">
+                     <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-2">AMOSTRAGEM: {isolatedIntel.games} JOGOS</span>
+                     <PremiumTeamSelector value={isolatedTeam} onChange={setIsolatedTeam} options={activeTeams} align="left" />
                   </div>
                </div>
                <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-6 w-full">
@@ -569,77 +728,70 @@ export default function ScoutingReportPage() {
                </div>
             </div>
 
-            {/* NOVOS CARTÕES: SINERGIA, OBJETIVOS E VISÃO */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                
-               {/* 1. Sinergia 2v2 */}
+               {/* 1. Conversão e Flex Picks (Híbrido) */}
                <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm">
                   <div className="mb-6 border-b border-zinc-800 pb-4">
-                     <h3 className="text-xl font-black text-white uppercase tracking-tight">Sinergia 2v2</h3>
-                     <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Combos e Vantagens Base</p>
+                     <h3 className="text-xl font-black text-white uppercase tracking-tight">Conversão & Flex</h3>
+                     <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Eficácia de Ouro e Picks Coringa</p>
                   </div>
+                  
                   <div className="space-y-6">
-                     <div>
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block">MID & JUNGLE</span>
-                        <div className="space-y-2">
-                           {synergyIntel?.midJng.map((combo: any) => (
-                              <div key={combo.key} className="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-2 rounded-lg">
-                                 <div className="flex gap-1">
-                                    <img src={getChampionImageUrl(combo.champs[0])} className="w-7 h-7 rounded border border-zinc-700" alt=""/>
-                                    <img src={getChampionImageUrl(combo.champs[1])} className="w-7 h-7 rounded border border-zinc-700" alt=""/>
-                                 </div>
-                                 <div className="text-right">
-                                    <span className="text-xs font-black text-white block">{Math.round(combo.winRate)}% WR</span>
-                                    <span className="text-[9px] font-bold text-zinc-500">{combo.picks} Jogos</span>
-                                 </div>
-                              </div>
-                           ))}
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl text-center">
+                           <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">WR c/ First Blood</span>
+                           <span className="text-xl font-black text-blue-400">{Math.round(conversionIntel?.fbWinRate || 0)}%</span>
+                        </div>
+                        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl text-center">
+                           <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">WR c/ First Tower</span>
+                           <span className="text-xl font-black text-amber-400">{Math.round(conversionIntel?.ftWinRate || 0)}%</span>
                         </div>
                      </div>
-                     <div>
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block">BOT LANE</span>
-                        <div className="space-y-2">
-                           {synergyIntel?.adcSup.map((combo: any) => (
-                              <div key={combo.key} className="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-2 rounded-lg">
-                                 <div className="flex gap-1">
-                                    <img src={getChampionImageUrl(combo.champs[0])} className="w-7 h-7 rounded border border-zinc-700" alt=""/>
-                                    <img src={getChampionImageUrl(combo.champs[1])} className="w-7 h-7 rounded border border-zinc-700" alt=""/>
+
+                     <div className="pt-4 border-t border-zinc-800/50">
+                        <span className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-3 block text-center">🔄 Matriz de Flex Picks</span>
+                        <div className="flex flex-col gap-2 max-h-[160px] overflow-y-auto custom-scrollbar pr-2">
+                           {flexPicksIntel?.length ? flexPicksIntel.map((flex: any) => (
+                              <div key={flex.champ} className="flex justify-between items-center bg-zinc-900/50 border border-zinc-800/80 p-2 rounded-lg">
+                                 <div className="flex items-center gap-3">
+                                    <img src={getChampionImageUrl(flex.champ)} className="w-8 h-8 rounded border border-zinc-700" alt=""/>
+                                    <span className="text-[11px] font-black text-white">{flex.champ}</span>
                                  </div>
-                                 <div className="text-right">
-                                    <span className="text-xs font-black text-white block">{Math.round(combo.winRate)}% WR</span>
-                                    <span className="text-[9px] font-bold text-zinc-500">{combo.picks} Jogos</span>
+                                 <div className="flex gap-1">
+                                    {flex.roles.map((r: string) => <span key={r} className="bg-zinc-800 text-[8px] text-zinc-400 font-bold px-1.5 py-0.5 rounded">{r}</span>)}
                                  </div>
                               </div>
-                           ))}
+                           )) : <div className="text-center text-[10px] text-zinc-600 font-bold uppercase py-4">Sem Campeões Flex</div>}
                         </div>
                      </div>
                   </div>
                </div>
 
                {/* 2. Relógio Neutro */}
-               <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm">
+               <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
                   <div className="mb-6 border-b border-zinc-800 pb-4">
                      <h3 className="text-xl font-black text-white uppercase tracking-tight">Relógio Neutro</h3>
                      <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Timings Médios de Objetivos</p>
                   </div>
-                  <div className="flex flex-col gap-6 h-full justify-start mt-4">
-                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 flex items-center justify-between">
+                  <div className="flex flex-col gap-4 flex-1 justify-center">
+                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 flex items-center justify-between">
                         <div>
                            <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest block mb-1">1º Dragão</span>
-                           <span className="text-3xl font-black text-white">{objectivesIntel?.avgDrakeStr}</span>
+                           <span className="text-2xl font-black text-white">{objectivesIntel?.avgDrakeStr}</span>
                         </div>
                         <div className="text-right">
-                           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Taxa de Controle</span>
+                           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Controle</span>
                            <span className="text-lg font-black text-zinc-300">{Math.round(objectivesIntel?.drakeRate || 0)}%</span>
                         </div>
                      </div>
-                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 flex items-center justify-between">
+                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 flex items-center justify-between">
                         <div>
                            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest block mb-1">Larvas / Arauto</span>
-                           <span className="text-3xl font-black text-white">{objectivesIntel?.avgGrubsStr}</span>
+                           <span className="text-2xl font-black text-white">{objectivesIntel?.avgGrubsStr}</span>
                         </div>
                         <div className="text-right">
-                           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Taxa de Controle</span>
+                           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Controle</span>
                            <span className="text-lg font-black text-zinc-300">{Math.round(objectivesIntel?.grubsRate || 0)}%</span>
                         </div>
                      </div>
@@ -647,12 +799,12 @@ export default function ScoutingReportPage() {
                </div>
 
                {/* 3. Radar Early Game */}
-               <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm">
+               <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
                   <div className="mb-6 border-b border-zinc-800 pb-4">
                      <h3 className="text-xl font-black text-white uppercase tracking-tight">Radar Early Game</h3>
                      <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Zonas Mais Wardadas Até 5 Min</p>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-4 flex-1 flex flex-col justify-center">
                      {visionIntel?.topZones.length ? visionIntel.topZones.map((zone: any, i: number) => (
                         <div key={zone.zone} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 relative overflow-hidden">
                            <div className="absolute left-0 top-0 bottom-0 w-1 bg-zinc-700"></div>
@@ -727,6 +879,64 @@ export default function ScoutingReportPage() {
 }
 
 // --- SUB-COMPONENTES AUXILIARES (FLAT DESIGN & ZINC PALETTE) ---
+
+// NOVO: Seletor de Time Premium
+function PremiumTeamSelector({ value, onChange, options, align = "center" }: { value: string, onChange: (val: string) => void, options: any[], align?: "left"|"center"|"right" }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => { 
+     const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); }; 
+     document.addEventListener("mousedown", click); 
+     return () => document.removeEventListener("mousedown", click); 
+  }, []);
+
+  const filteredOptions = options.filter(t => t.acronym.toLowerCase().includes(search.toLowerCase()));
+  const currentTeam = options.find(t => t.acronym === value);
+
+  const alignClass = align === "left" ? "text-left" : align === "right" ? "text-right" : "text-center";
+
+  return (
+    <div className="relative flex flex-col z-[9999] w-full max-w-[280px]" ref={ref}>
+      <button 
+         onClick={() => setIsOpen(!isOpen)} 
+         className={`bg-zinc-950 border border-zinc-800 px-6 py-3 rounded-xl flex items-center justify-between gap-4 hover:border-zinc-600 transition-colors shadow-sm cursor-pointer group`}
+      >
+         <span className={`flex-1 text-2xl font-black uppercase tracking-tight text-white ${alignClass}`}>{value || 'SELECIONE'}</span>
+         <span className={`text-[10px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full mt-2 w-full bg-zinc-900/95 backdrop-blur-xl border border-zinc-700/50 rounded-2xl overflow-hidden shadow-2xl animate-fade-in-down origin-top">
+          <div className="p-3 border-b border-zinc-800/50 bg-zinc-900">
+             <input 
+                type="text" 
+                placeholder="BUSCAR TIME..." 
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 text-white text-xs font-bold uppercase px-4 py-2 rounded-lg outline-none focus:border-blue-500 transition-colors"
+                autoFocus
+             />
+          </div>
+          <div className="max-h-[320px] overflow-y-auto custom-scrollbar p-2">
+             {filteredOptions.length > 0 ? filteredOptions.map(t => (
+                <button 
+                   key={t.id} 
+                   onClick={() => { onChange(t.acronym); setIsOpen(false); setSearch(""); }} 
+                   className={`w-full flex items-center gap-4 px-4 py-3 hover:bg-zinc-800 rounded-xl transition-all ${value === t.acronym ? 'bg-zinc-800/80' : ''}`}
+                >
+                   <img src={t.logo_url || `https://ui-avatars.com/api/?name=${t.acronym}&background=18181b&color=3b82f6&bold=true`} alt={t.acronym} className="w-8 h-8 object-contain drop-shadow-md" />
+                   <span className={`text-sm font-black uppercase tracking-wide ${value === t.acronym ? 'text-white' : 'text-zinc-400'}`}>{t.acronym}</span>
+                </button>
+             )) : <div className="text-center text-[10px] font-bold text-zinc-600 py-6 uppercase">Time não encontrado</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

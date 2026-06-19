@@ -7,42 +7,59 @@ export default function UsersAdminPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
-  // Controle do Modal de Edição
+  // Controle do Modal de Edição (Adicionado account_status)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState({ 
-    id: '', full_name: '', role: 'jogador', is_approved: false, puuid: '' 
+    id: '', full_name: '', role: 'jogador', is_approved: false, puuid: '', account_status: 'pendente'
   });
 
   useEffect(() => {
     fetchUsers();
-    
-    // Atualiza a lista a cada 30 segundos para checar quem ficou online/offline
     const interval = setInterval(fetchUsers, 30000);
-    return () => clearInterval(interval);
+
+    // HEARTBEAT DA LUZINHA VERDE ONLINE MANTIDO AQUI
+    const updateMyPresence = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        await supabase.from('profiles').update({ last_seen: new Date().toISOString() }).eq('id', session.user.id);
+      }
+    };
+    updateMyPresence();
+    const pingInterval = setInterval(updateMyPresence, 4 * 60 * 1000); 
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(pingInterval);
+    };
   }, []);
 
   async function fetchUsers() {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, full_name, role, is_approved, puuid, last_seen')
+      // Puxando o account_status novo do banco
+      .select('id, full_name, role, is_approved, puuid, last_seen, account_status')
       .order('last_seen', { ascending: false });
 
     if (!error && data) {
       setUsers(data);
+    } else if (error) {
+      console.error("Erro ao buscar usuários:", error);
     }
     setLoading(false);
   }
 
-  // ==========================================
-  // HANDLERS
-  // ==========================================
+  // --- HANDLERS ---
   const handleEditClick = (user: any) => {
+    // Se o usuário é antigo e não tem account_status ainda, deduzimos pelo is_approved
+    const defaultStatus = user.is_approved ? 'aprovado' : 'pendente';
+    
     setEditForm({
       id: user.id,
       full_name: user.full_name || '',
-      role: user.role || 'jogador',
-      is_approved: user.is_approved || false,
-      puuid: user.puuid || ''
+      role: (user.role || 'jogador').toLowerCase(),
+      is_approved: !!user.is_approved,
+      puuid: user.puuid || '',
+      account_status: user.account_status || defaultStatus
     });
     setIsEditModalOpen(true);
   };
@@ -50,13 +67,16 @@ export default function UsersAdminPage() {
   const handleSaveChanges = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    
     try {
       const { error } = await supabase
         .from('profiles')
         .update({
           full_name: editForm.full_name,
           role: editForm.role.toLowerCase(),
-          is_approved: editForm.is_approved,
+          account_status: editForm.account_status,
+          // Atualizamos a chave booleana antiga automaticamente para não quebrar a arquitetura do banco
+          is_approved: editForm.account_status === 'aprovado', 
           puuid: editForm.puuid
         })
         .eq('id', editForm.id);
@@ -66,25 +86,23 @@ export default function UsersAdminPage() {
       setIsEditModalOpen(false);
       await fetchUsers();
     } catch (err: any) {
-      alert("Erro ao atualizar usuário: " + err.message);
+      console.error("Erro ao atualizar usuário:", err);
+      alert("Erro ao salvar no banco: " + err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  // ==========================================
-  // HELPERS DE STATUS E TEMPO
-  // ==========================================
-  const isUserOnline = (lastSeen: string) => {
+  // --- HELPERS ÚNICOS DE STATUS E TEMPO ---
+  const isUserOnline = (lastSeen: string | null) => {
     if (!lastSeen) return false;
     const lastSeenDate = new Date(lastSeen).getTime();
     const now = new Date().getTime();
     const diffMinutes = (now - lastSeenDate) / (1000 * 60);
-    // Se a última ação foi há menos de 5 minutos, consideramos ONLINE
     return diffMinutes < 5;
   };
 
-  const formatLastSeen = (lastSeen: string) => {
+  const formatLastSeen = (lastSeen: string | null) => {
     if (!lastSeen) return "NUNCA ACESSOU";
     const lastSeenDate = new Date(lastSeen).getTime();
     const now = new Date().getTime();
@@ -103,21 +121,22 @@ export default function UsersAdminPage() {
     return `HÁ ${diffDays} DIAS`;
   };
 
-  if (loading) return <div className="flex items-center justify-center h-[80vh] text-blue-500 font-black italic animate-pulse tracking-widest text-xs uppercase">// CARREGANDO DIRETÓRIO DE USUÁRIOS...</div>;
+  if (loading) return <div className="flex items-center justify-center h-[80vh] text-emerald-500 font-black italic animate-pulse tracking-widest text-xs uppercase">// CARREGANDO DIRETÓRIO DE USUÁRIOS...</div>;
 
-  const pendingCount = users.filter(u => !u.is_approved).length;
+  // Lógica corrigida da Notificação: Conta APENAS quem tem status explicitamente pendente
+  const pendingCount = users.filter(u => u.account_status === 'pendente' || (!u.account_status && !u.is_approved)).length;
 
   return (
     <div className="p-4 md:p-8 max-w-[1200px] mx-auto space-y-10 font-black uppercase italic tracking-tighter pb-20">
       
       <header className="border-l-4 border-emerald-500 pl-6 mb-10 flex justify-between items-center">
         <div>
-          <h1 className="text-4xl text-white leading-none">USER <span className="text-emerald-500">MANAGEMENT</span></h1>
-          <p className="text-slate-400 text-[10px] tracking-[0.4em] mt-2">CONTROLE DE ACESSO E HIERARQUIA DO SISTEMA</p>
+          <h1 className="text-4xl text-white leading-none not-italic">USER <span className="text-emerald-500">MANAGEMENT</span></h1>
+          <p className="text-slate-400 text-[10px] tracking-[0.4em] mt-2 not-italic">CONTROLE DE ACESSO E HIERARQUIA DO SISTEMA</p>
         </div>
         {pendingCount > 0 && (
-          <div className="bg-red-500/10 border border-red-500/30 px-4 py-2 rounded-xl text-red-400 text-xs tracking-widest animate-pulse flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500"></span>
+          <div className="bg-amber-500/10 border border-amber-500/30 px-4 py-2 rounded-xl text-amber-400 text-xs tracking-widest animate-pulse flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-500"></span>
             {pendingCount} PENDENTE{pendingCount > 1 ? 'S' : ''} DE APROVAÇÃO
           </div>
         )}
@@ -133,7 +152,7 @@ export default function UsersAdminPage() {
               <tr className="text-[9px] text-slate-500 tracking-[0.2em] uppercase">
                 <th className="px-4 pb-2">OPERATIVE / NOME</th>
                 <th className="px-4 pb-2 text-center">CARGO</th>
-                <th className="px-4 pb-2 text-center">STATUS DE ACESSO</th>
+                <th className="px-4 pb-2 text-center">STATUS DA CONTA</th>
                 <th className="px-4 pb-2 text-center">ATIVIDADE (ONLINE)</th>
                 <th className="px-4 pb-2 text-right">AÇÕES</th>
               </tr>
@@ -141,20 +160,20 @@ export default function UsersAdminPage() {
             <tbody>
               {users.map((user) => {
                 const online = isUserOnline(user.last_seen);
+                // Define o status real a ser mostrado
+                const visualStatus = user.account_status || (user.is_approved ? 'aprovado' : 'pendente');
                 
                 return (
                   <tr key={user.id} className="bg-white/[0.02] hover:bg-white/[0.05] transition-all group relative">
-                    {/* NOME E PUUID */}
                     <td className="p-4 rounded-l-2xl">
                       <div className="flex flex-col">
                         <span className="text-white text-lg font-black tracking-tighter leading-none">{user.full_name || 'NOME PENDENTE'}</span>
-                        <span className="text-blue-400 text-[8px] tracking-widest mt-1 opacity-50 font-mono">
+                        <span className="text-blue-400 text-[8px] tracking-widest mt-1 opacity-50 font-mono normal-case">
                           PUUID: {user.puuid ? user.puuid.substring(0, 15) + '...' : 'NÃO VINCULADO'}
                         </span>
                       </div>
                     </td>
                     
-                    {/* CARGO */}
                     <td className="p-4 text-center">
                       <span className={`text-[9px] px-2.5 py-1 rounded border tracking-widest uppercase ${
                         user.role === 'analista' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
@@ -166,36 +185,29 @@ export default function UsersAdminPage() {
                       </span>
                     </td>
                     
-                    {/* STATUS DE APROVAÇÃO */}
                     <td className="p-4 text-center">
-                      <span className={`text-[9px] px-3 py-1.5 rounded-lg border tracking-widest uppercase ${
-                        user.is_approved 
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
-                          : 'bg-red-500/10 text-red-400 border-red-500/30 animate-pulse'
-                      }`}>
-                        {user.is_approved ? '✓ APROVADO' : ' BLOQUEADO'}
-                      </span>
+                      {visualStatus === 'aprovado' && <span className="text-[9px] px-3 py-1.5 rounded-lg border tracking-widest uppercase bg-emerald-500/10 text-emerald-400 border-emerald-500/30">✓ APROVADO</span>}
+                      {visualStatus === 'bloqueado' && <span className="text-[9px] px-3 py-1.5 rounded-lg border tracking-widest uppercase bg-red-500/10 text-red-400 border-red-500/30"> BLOQUEADO</span>}
+                      {visualStatus === 'pendente' && <span className="text-[9px] px-3 py-1.5 rounded-lg border tracking-widest uppercase bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse">⏳ PENDENTE</span>}
                     </td>
                     
-                    {/* ÚLTIMO ACESSO / ONLINE */}
                     <td className="p-4 text-center">
                       <div className="flex items-center justify-center gap-2">
                         <div className="relative flex items-center justify-center">
                           {online && <div className="absolute w-3 h-3 bg-emerald-500 rounded-full animate-ping opacity-40"></div>}
                           <div className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-600'}`}></div>
                         </div>
-                        <div className="flex flex-col items-start">
+                        <div className="flex flex-col items-start w-20">
                            <span className={`text-[10px] leading-none ${online ? 'text-emerald-400' : 'text-slate-400'}`}>
                              {online ? 'ONLINE' : 'OFFLINE'}
                            </span>
-                           <span className="text-[7px] text-slate-500 tracking-widest mt-0.5">
+                           <span className="text-[7px] text-slate-500 tracking-widest mt-0.5 normal-case truncate w-full text-left">
                              {formatLastSeen(user.last_seen)}
                            </span>
                         </div>
                       </div>
                     </td>
                     
-                    {/* AÇÕES */}
                     <td className="p-4 text-right rounded-r-2xl">
                       <button 
                         onClick={() => handleEditClick(user)} 
@@ -232,7 +244,6 @@ export default function UsersAdminPage() {
             </div>
             
             <div className="space-y-4">
-              {/* NOME */}
               <div>
                 <label className="text-[10px] text-slate-500 ml-2">Nome Completo</label>
                 <input 
@@ -243,7 +254,6 @@ export default function UsersAdminPage() {
                 />
               </div>
               
-              {/* CARGO */}
               <div>
                 <label className="text-[10px] text-slate-500 ml-2">Hierarquia / Cargo</label>
                 <select 
@@ -258,7 +268,19 @@ export default function UsersAdminPage() {
                 </select>
               </div>
 
-              {/* PUUID */}
+              <div>
+                <label className="text-[10px] text-slate-500 ml-2">Status da Conta</label>
+                <select 
+                  className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-emerald-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer" 
+                  value={editForm.account_status} 
+                  onChange={e => setEditForm({...editForm, account_status: e.target.value})}
+                >
+                  <option value="pendente">⏳ PENDENTE (Aguardando)</option>
+                  <option value="aprovado">✓ APROVADO (Acesso Livre)</option>
+                  <option value="bloqueado">⛔ BLOQUEADO (Sem Acesso)</option>
+                </select>
+              </div>
+
               <div>
                 <label className="text-[10px] text-slate-500 ml-2">PUUID Vinculado (Opcional se for Staff)</label>
                 <input 
@@ -269,21 +291,6 @@ export default function UsersAdminPage() {
                   onChange={e => setEditForm({...editForm, puuid: e.target.value})} 
                 />
                 <p className="text-[8px] text-slate-600 mt-1 ml-2 normal-case">Crucial para que os jogadores vejam apenas seus próprios dados no Dashboard Pessoal.</p>
-              </div>
-
-              {/* TOGGLE DE APROVAÇÃO */}
-              <div className="pt-4 border-t border-white/5 flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-white">Status da Conta</p>
-                  <p className="text-[8px] text-slate-500 tracking-widest mt-1">Liberar acesso ao painel</p>
-                </div>
-                <button 
-                  type="button" 
-                  onClick={() => setEditForm({...editForm, is_approved: !editForm.is_approved})}
-                  className={`w-16 h-8 rounded-full transition-colors relative ${editForm.is_approved ? 'bg-emerald-500' : 'bg-slate-700'}`}
-                >
-                  <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${editForm.is_approved ? 'left-9 shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'left-1'}`}></div>
-                </button>
               </div>
             </div>
 

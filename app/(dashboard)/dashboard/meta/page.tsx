@@ -89,6 +89,7 @@ export default function MetaWarRoom() {
   
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(['ALL']);
   const [globalSplit, setGlobalSplit] = useState("ALL");
+  const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
 
   const [viewMode, setViewMode] = useState<'CHAMPIONS' | 'OBJECTIVES'>('CHAMPIONS');
   const [championView, setChampionView] = useState<'TIER_LIST' | 'TRUST_INDEX' | 'META_MATRIX'>('TIER_LIST');
@@ -97,6 +98,49 @@ export default function MetaWarRoom() {
   const [loading, setLoading] = useState(true);
   const [activeLane, setActiveLane] = useState<string>('ALL');
   const [minGames, setMinGames] = useState<number>(5);
+
+  // Carrega mapeamento de Splits válidos
+  useEffect(() => {
+    async function loadSplitsMap() {
+      const { data } = await supabase.from('matches').select('game_type, split');
+      if (data) {
+        const map: Record<string, Set<string>> = {};
+        data.forEach((d: any) => {
+          if (d.game_type && d.split) {
+            if (!map[d.game_type]) map[d.game_type] = new Set();
+            map[d.game_type].add(d.split);
+          }
+        });
+        const finalMap: Record<string, string[]> = {};
+        for (const k in map) finalMap[k] = Array.from(map[k]);
+        setValidSplitsMap(finalMap);
+      }
+    }
+    loadSplitsMap();
+  }, []);
+
+  // Recálculo Inteligente dos Splits
+  const dynamicAvailableSplits = useMemo(() => {
+    if (globalTournaments.includes('ALL')) {
+      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    }
+    const splits = new Set<string>();
+    globalTournaments.forEach(t => {
+      if (validSplitsMap[t]) {
+        validSplitsMap[t].forEach(s => splits.add(s));
+      }
+    });
+    const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  }, [globalTournaments, validSplitsMap]);
+
+  // Auto-Reset de Split
+  useEffect(() => {
+    if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
+      setGlobalSplit('ALL');
+    }
+  }, [dynamicAvailableSplits, globalSplit]);
+
 
   useEffect(() => {
     async function fetchData() {
@@ -272,12 +316,10 @@ export default function MetaWarRoom() {
     };
   }, [data.tiers, activeLane, minGames]);
 
-  // Função Auxiliar para Renderizar Itens da Matrix com Tooltip Interativo elevado no Z-Index
   const renderMatrixItem = (c: any, catTitle: string, catDesc: string, colorClass: string, borderClass: string) => (
     <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative group/matrix hover:-translate-y-1 transition-transform hover:z-[999]">
       <img src={getChampionImageUrl(c.champion)} className={`w-14 h-14 rounded-2xl border ${borderClass} shadow-sm group-hover/matrix:shadow-lg ${colorClass === 'text-zinc-500' ? 'grayscale opacity-70 group-hover/matrix:grayscale-0 group-hover/matrix:opacity-100' : ''}`} alt="" />
       
-      {/* TOOLTIP META MATRIX */}
       <div className="absolute bottom-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.8)] opacity-0 invisible group-hover/matrix:opacity-100 group-hover/matrix:visible transition-all duration-200 z-[9999] origin-bottom scale-95 group-hover/matrix:scale-100 pointer-events-none">
          <div className="flex items-center justify-between gap-3 mb-2 border-b border-zinc-800 pb-2">
             <div className="flex items-center gap-2">
@@ -580,9 +622,11 @@ export default function MetaWarRoom() {
      };
   }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate);
 
+  // A TELA DE CARREGAMENTO FICA AQUI!
   if (loading && data.tiers.length === 0) return (
-    <div className="flex items-center justify-center h-screen bg-[#0a0a0a]">
-      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Iniciando Protocolos...</p>
+    <div className="flex flex-col items-center justify-center h-[80vh] gap-4">
+      <div className="w-10 h-10 border-4 border-zinc-800 border-t-blue-500 rounded-full animate-spin"></div>
+      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Sincronizando Banco de Dados...</p>
     </div>
   );
 
@@ -599,7 +643,7 @@ export default function MetaWarRoom() {
         <div className="flex flex-wrap items-center justify-start xl:justify-end gap-6 flex-1">
           <div className="flex gap-4 items-center bg-transparent shrink-0 animate-fade-in-down">
              <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
-             <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
+             <SplitSelector value={globalSplit} onChange={setGlobalSplit} availableSplits={dynamicAvailableSplits} />
           </div>
 
           {viewMode === 'CHAMPIONS' && !selectedChamp && (
@@ -1306,20 +1350,48 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
     return () => document.removeEventListener("mousedown", click);
   }, []);
 
-  const options = [
-    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
-    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
-    { id: 'CBLOL', label: 'CBLOL' },
-    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
-    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
-    { id: 'FIRST_STAND', label: 'FIRST STAND' },
-    { id: 'LCK', label: 'LCK' },
-    { id: 'LCS', label: 'LCS' },
-    { id: 'LEC', label: 'LEC' },
-    { id: 'LPL', label: 'LPL' },
-    { id: 'MSI', label: 'MSI' },
-    { id: 'MUNDIAL', label: 'MUNDIAL' },
-    { id: 'SCRIM', label: 'SCRIMS' } 
+  const TOURNAMENT_GROUPS = [
+    {
+      label: "LIGAS TIER 1",
+      options: [
+        { id: 'CBLOL', label: 'CBLOL' },
+        { id: 'LCK', label: 'LCK' },
+        { id: 'LCS', label: 'LCS' },
+        { id: 'LEC', label: 'LEC' },
+        { id: 'LPL', label: 'LPL' }
+      ]
+    },
+    {
+      label: "LIGAS CHALLENGERS",
+      options: [
+        { id: 'CIRCUITO DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+        { id: 'LCK CHALLENGERS', label: 'LCK CHALLENGERS' },
+        { id: 'LCS CHALLENGERS', label: 'LCS CHALLENGERS' },
+        { id: 'EMEA MASTERS', label: 'EMEA MASTERS' }
+      ]
+    },
+    {
+      label: "TORNEIOS GLOBAIS",
+      options: [
+        { id: 'AMERICAS CUP', label: 'AMERICAS CUP' },
+        { id: 'EWC QUALIFIER', label: 'EWC QUALIFIER' },
+        { id: 'EWC', label: 'ESPORTS WORLD CUP' },
+        { id: 'FIRST STAND', label: 'FIRST STAND' },
+        { id: 'MSI', label: 'MSI' },
+        { id: 'MUNDIAL', label: 'MUNDIAL' },
+        { id: 'WORLD CUP', label: 'WORLD CUP' }
+      ]
+    },
+    {
+      label: "OFF-SEASON",
+      options: [
+        { id: 'CBLOL CUP', label: 'CBLOL CUP' },
+        { id: 'LCK CUP', label: 'LCK CUP' },
+        { id: 'LCS CUP', label: 'LCS CUP' },
+        { id: 'LEC CUP', label: 'LEC CUP' },
+        { id: 'SCRIM', label: 'SCRIMS' }
+      ]
+    }
   ];
 
   const toggleOption = (id: string) => {
@@ -1341,44 +1413,64 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
   const currentLabel = value.includes('ALL') 
     ? 'TODOS OS CAMPEONATOS' 
     : value.length === 1 
-      ? options.find(o => o.id === value[0])?.label 
-      : `${value.length} CAMPEONATOS`;
+      ? TOURNAMENT_GROUPS.flatMap(g => g.options).find(o => o.id === value[0])?.label 
+      : `${value.length} CAMPEONATOS SEL.`;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
       <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-zinc-900 border border-zinc-800 px-4 py-2.5 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase shadow-sm"
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
       >
-        <span className="flex-1 text-left">{currentLabel}</span>
-        <span className={`text-[8px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left truncate">{currentLabel}</span>
+        <span className={`text-[8px] transition-transform ${isOpen ? 'rotate-180 text-blue-500' : 'text-zinc-500'}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 min-w-[200px] bg-zinc-900/95 backdrop-blur-md border border-zinc-700/50 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar animate-fade-in-down origin-top">
-          {options.map((opt) => {
-            const isSelected = value.includes(opt.id);
-            return (
-              <button 
-                key={opt.id} 
-                onClick={() => toggleOption(opt.id)} 
-                className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${isSelected ? 'bg-zinc-800/80 text-white' : 'text-zinc-400'}`}
-              >
-                <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
-                   {isSelected && <span className="text-white text-[9px] font-black">✓</span>}
+        <div className="absolute top-full mt-2 right-0 w-[260px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[400px] flex flex-col">
+          
+          <button 
+            onClick={() => { onChange(['ALL']); setIsOpen(false); }} 
+            className={`w-full flex items-center gap-3 px-4 py-3 transition-colors border-b border-zinc-800 shrink-0 ${value.includes('ALL') ? 'bg-blue-600/10 text-blue-400' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}`}
+          >
+             <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
+             </div>
+             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
+          </button>
+
+          <div className="overflow-y-auto custom-scrollbar">
+            {TOURNAMENT_GROUPS.map((group, gIndex) => (
+              <div key={group.label} className={gIndex > 0 ? "border-t border-zinc-800/50" : ""}>
+                <div className="px-4 py-2 bg-zinc-900/50 sticky top-0 z-10 backdrop-blur-sm">
+                   <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">{group.label}</span>
                 </div>
-                <span className="text-[10px] font-bold uppercase tracking-wide">{opt.label}</span>
-              </button>
-            )
-          })}
+                {group.options.map((opt) => {
+                  const isSelected = value.includes(opt.id);
+                  return (
+                    <button 
+                      key={opt.id} 
+                      onClick={() => toggleOption(opt.id)} 
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors ${isSelected ? 'bg-zinc-800/50 text-white' : 'text-zinc-400'}`}
+                    >
+                      <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                         {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
+                      </div>
+                      <span className="text-[10px] font-bold uppercase">{opt.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function CockpitDropdown({ label, value, onChange, options }: any) {
+function CockpitDropdown({ label, value, onChange, options, isHighlighted = false }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   
@@ -1395,21 +1487,21 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
       {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-zinc-900 border border-zinc-800 px-4 py-2.5 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase shadow-sm"
+        className={`bg-zinc-900 border px-4 py-2.5 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
       >
-        <span className="flex-1 text-left">{currentLabel}</span>
-        <span className={`text-[8px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left truncate">{currentLabel}</span>
+        <span className={`text-[8px] transition-transform ${isOpen ? (isHighlighted ? 'rotate-180 text-amber-500' : 'rotate-180 text-blue-500') : 'text-zinc-500'}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 left-0 w-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/50 rounded-xl overflow-hidden shadow-2xl max-h-[320px] overflow-y-auto custom-scrollbar animate-fade-in-down origin-top z-[9999]">
+        <div className="absolute top-full mt-2 right-0 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
           {options.map((opt:any) => (
             <button 
               key={opt.id} 
               onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? 'bg-zinc-800/80 text-white font-black' : 'text-zinc-400 font-bold'}`}
+              className={`w-full flex items-center px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? (isHighlighted ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-600/10 text-blue-400') : 'text-zinc-400'}`}
             >
-              <span className="text-[10px] uppercase tracking-wide">{opt.label}</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -1418,13 +1510,30 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
   );
 }
 
-function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+function SplitSelector({ value, onChange, availableSplits }: { value: string, onChange: (val: string) => void, availableSplits: string[] }) {
+  const isHighlighted = value !== 'ALL';
+  
+  const LABELS: Record<string, string> = {
+    'CUP': 'SEASON CUP',
+    'SPLIT 1': 'SPLIT 1',
+    'SPLIT 2': 'SPLIT 2',
+    'SPLIT 3': 'SPLIT 3',
+    'EVENTO GLOBAL': 'EVENTO GLOBAL',
+    'OFF-SEASON': 'OFF-SEASON'
+  };
+
+  const dynamicOptions = [
+    { id: 'ALL', label: 'TODOS OS RECORTES' },
+    ...availableSplits.map(s => ({ id: s, label: LABELS[s] || s }))
+  ];
+
   return (
-    <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
-      { id: 'ALL', label: 'ANO INTEIRO' }, 
-      { id: 'SPLIT 1', label: 'SPLIT 1' }, 
-      { id: 'SPLIT 2', label: 'SPLIT 2' }, 
-      { id: 'SPLIT 3', label: 'SPLIT 3' }
-    ]} />
+    <CockpitDropdown 
+      label="RECORTE TEMPORAL" 
+      value={value} 
+      onChange={onChange} 
+      isHighlighted={isHighlighted}
+      options={dynamicOptions} 
+    />
   );
 }

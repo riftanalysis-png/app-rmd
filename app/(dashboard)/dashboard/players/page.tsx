@@ -104,6 +104,7 @@ function getScoreColor(score: number | null) {
   if (score >= 90) return "text-purple-500"; 
   if (score >= 80) return "text-blue-500";     
   if (score >= 70) return "text-emerald-500"; 
+  // O Laranja/Amber fica restrito à nota mediana (60-69), separado do Ouro do Top 1
   if (score >= 60) return "text-amber-500";  
   return "text-red-500";                                 
 }
@@ -123,24 +124,6 @@ function getRoleIcon(role: string, size: string = "w-5 h-5") {
   return <img src={`${basePath}/${iconName}`} alt={normalizedRole} className={`${size} object-contain brightness-200 opacity-80`} />;
 }
 
-const formatDate = (dateString: string) => { 
-  if (!dateString) return ''; 
-  const p = dateString.split('-'); 
-  return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; 
-};
-
-const formatTimeStr = (timeString: string) => { 
-  if (!timeString) return ''; 
-  return timeString.substring(0, 5); 
-};
-
-function getSafeTimestamp(dateString: any) {
-  if (!dateString) return 0;
-  const safeDate = String(dateString).trim().replace(' ', 'T');
-  const time = new Date(safeDate.includes('T') && !safeDate.includes('Z') && !safeDate.includes('-') && !safeDate.includes('+') ? `${safeDate}Z` : safeDate).getTime();
-  return isNaN(time) ? 0 : time;
-}
-
 // --- COMPONENTE PRINCIPAL ---
 
 export default function PlayersHubPage() {
@@ -151,9 +134,9 @@ export default function PlayersHubPage() {
   const [filterTeam, setFilterTeam] = useState<string>("TODOS");
   const [isAdmin, setIsAdmin] = useState(false);
   
-  // ESTADOS GLOBAIS DE FILTRO E LEADERBOARD (AGORA ARRAY PARA MULTI-SELEÇÃO)
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO_DESAFIANTE"]);
-  const [globalSplit, setGlobalSplit] = useState("SPLIT 1");
+  const [globalSplit, setGlobalSplit] = useState("ALL");
+  const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
   const [leaderboardTab, setLeaderboardTab] = useState<string>("GLOBAL");
 
   const [teamChartData, setTeamChartData] = useState<any[]>([]);
@@ -163,12 +146,11 @@ export default function PlayersHubPage() {
   const [globalBans, setGlobalBans] = useState<Record<string, number>>({});
   const [draftViewMode, setDraftViewMode] = useState<'champion' | 'role'>('champion');
 
-  // INICIA EM LVL 1
   const [heatmapSide, setHeatmapSide] = useState<string>("Blue");
   const [heatmapObjective, setHeatmapObjective] = useState<string>("lvl1");
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ puuid: '', nickname: '', team_acronym: '', photo_url: '', primary_role: '' });
+  const [editForm, setEditForm] = useState({ puuid: '', nickname: '', photo_url: '', primary_role: '' });
   
   const [missionsRaw, setMissionsRaw] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
@@ -176,6 +158,26 @@ export default function PlayersHubPage() {
   const [myTeamTag, setMyTeamTag] = useState('RMD');
 
   useEffect(() => { checkUserRole(); }, []);
+  
+  useEffect(() => {
+    async function loadSplitsMap() {
+      const { data } = await supabase.from('matches').select('game_type, split');
+      if (data) {
+        const map: Record<string, Set<string>> = {};
+        data.forEach((d: any) => {
+          if (d.game_type && d.split) {
+            if (!map[d.game_type]) map[d.game_type] = new Set();
+            map[d.game_type].add(d.split);
+          }
+        });
+        const finalMap: Record<string, string[]> = {};
+        for (const k in map) finalMap[k] = Array.from(map[k]);
+        setValidSplitsMap(finalMap);
+      }
+    }
+    loadSplitsMap();
+  }, []);
+
   useEffect(() => { fetchInitialData(); }, [globalTournaments, globalSplit]);
   
   useEffect(() => { 
@@ -184,6 +186,26 @@ export default function PlayersHubPage() {
       fetchAnalysisData(filterTeam); 
     } 
   }, [filterTeam, globalTournaments, globalSplit]);
+
+  const dynamicAvailableSplits = useMemo(() => {
+    if (globalTournaments.includes('ALL')) {
+      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    }
+    const splits = new Set<string>();
+    globalTournaments.forEach(t => {
+      if (validSplitsMap[t]) {
+        validSplitsMap[t].forEach(s => splits.add(s));
+      }
+    });
+    const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  }, [globalTournaments, validSplitsMap]);
+
+  useEffect(() => {
+    if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
+      setGlobalSplit('ALL');
+    }
+  }, [dynamicAvailableSplits, globalSplit]);
 
   async function checkUserRole() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -342,7 +364,6 @@ export default function PlayersHubPage() {
       setDraftStats(Array.from(groupedDraftMap.values()));
     }
     
-    // --- NOVO SISTEMA DE PAGINAÇÃO PARA AS WARDS ---
     let allWards: any[] = [];
     let fetchMore = true;
     let from = 0;
@@ -391,18 +412,15 @@ export default function PlayersHubPage() {
     ].filter(s => s.value > 0);
   }, [teamChartData, filterTeam]);
 
-  // MOTOR BLINDADO: TACTICAL VISION RADAR COM EARLY GAME E COORDENADAS SEGURAS
   const activeWards = useMemo(() => {
     const targetSide = String(heatmapSide).toLowerCase(); 
     const targetObj = String(heatmapObjective).toLowerCase();
     
-    // Filtramos primeiro o Lado. Aceitando '100', '200', 'blue', 'red'.
     let wardsToDisplay = teamWards.filter(w => {
        const wSide = String(w.side || '').toLowerCase() === '100' ? 'blue' : String(w.side || '').toLowerCase() === '200' ? 'red' : String(w.side || '').toLowerCase();
        return wSide === targetSide;
     });
 
-    // TRATAMENTO ATUALIZADO PARA O LEVEL 1 (Abaixo de 2 minutos para pegar 0:00 até 1:59)
     if (targetObj === 'lvl1') {
        return wardsToDisplay.filter(w => Number(w.minute) <= 1);
     }
@@ -414,7 +432,6 @@ export default function PlayersHubPage() {
        const wMax = Number(window.max_minute) || 0;
        wardsToDisplay = wardsToDisplay.filter(w => Number(w.minute) >= (wMin - 2) && Number(w.minute) <= (wMax + 1));
     } else {
-       // Se o time nunca fez esse obj, mapeia os wards com base no tempo do servidor Meta
        let min = 0, max = 15;
        if (targetObj === 'dragon1' || targetObj === 'horde') { min = 4; max = 9; }
        else if (targetObj === 'dragon2' || targetObj === 'riftherald') { min = 9; max = 16; }
@@ -537,29 +554,43 @@ export default function PlayersHubPage() {
   }, [players, leaderboardTab]);
 
   const handleSaveChanges = async (e: React.FormEvent) => {
-    e.preventDefault(); setSaving(true);
+    e.preventDefault(); 
+    setSaving(true);
+    
     try {
-      await supabase.from('players').update({ nickname: editForm.nickname, team_acronym: String(editForm.team_acronym || '').toUpperCase(), photo_url: editForm.photo_url, primary_role: editForm.primary_role }).eq('puuid', editForm.puuid);
-      setIsEditModalOpen(false); fetchInitialData();
-    } finally { setSaving(false); }
+      await supabase.from('players').update({ 
+        nickname: editForm.nickname, 
+        photo_url: editForm.photo_url, 
+        primary_role: editForm.primary_role 
+      }).eq('puuid', editForm.puuid);
+
+      setIsEditModalOpen(false); 
+      fetchInitialData();
+    } finally { 
+      setSaving(false); 
+    }
   };
 
   const handleDeletePlayer = async (puuid: string) => {
-    if (!confirm("Confirmar exclusão definitiva?")) return;
+    if (!confirm("Confirmar exclusão definitiva do perfil do jogador? Isso apagará todos os vínculos dele.")) return;
+    
     await supabase.from('players').delete().eq('puuid', puuid); 
-    setIsEditModalOpen(false); await fetchInitialData();
+    setIsEditModalOpen(false); 
+    await fetchInitialData();
   };
 
   if (loading && players.length === 0) return (
-    <div className="flex items-center justify-center h-screen bg-[#0a0a0a]">
-      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Sincronizando Banco de Dados...</p>
+    <div className="flex flex-col items-center justify-center h-screen bg-[#0a0a0a] gap-4">
+      <div className="w-10 h-10 border-4 border-zinc-800 border-t-blue-500 rounded-full animate-spin"></div>
+      <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Estabelecendo Conexão Tática...</p>
     </div>
   );
 
   return (
-    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible">
+    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible relative">
       
-      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-8 relative z-[200]">
+      {/* Sticky Header com Backdrop Blur */}
+      <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-4 pt-4 sticky top-0 bg-[#0a0a0a]/90 backdrop-blur-xl z-[999] rounded-b-xl shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5)] px-2 -mx-2">
         <div>
           <h1 className="text-4xl font-black text-white uppercase tracking-tight">SCOUTING <span className="text-blue-500">HUB</span></h1>
           <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DATABASE: {players.length} ACTIVE OPERATIVES</p>
@@ -567,11 +598,11 @@ export default function PlayersHubPage() {
 
         <div className="flex gap-4 items-end bg-transparent">
            <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
-           <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
+           <SplitSelector value={globalSplit} onChange={setGlobalSplit} availableSplits={dynamicAvailableSplits} />
         </div>
       </header>
 
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[100] overflow-visible">
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 relative z-[100] overflow-visible mt-8">
         <div className="flex flex-wrap justify-start gap-2 bg-zinc-900 p-1.5 rounded-lg border border-zinc-800 max-w-full overflow-x-auto custom-scrollbar flex-1">
           <button onClick={() => setFilterTeam("TODOS")} className={`px-5 py-2 rounded-md text-[10px] font-bold uppercase transition-colors whitespace-nowrap ${filterTeam === "TODOS" ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>TODOS</button>
           {teams.map(t => (
@@ -615,7 +646,7 @@ export default function PlayersHubPage() {
           <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-6 border-b border-zinc-800 pb-6 shrink-0">
             <div>
               <h2 className="text-xl text-white font-black uppercase tracking-tight flex items-center gap-3">
-                <span className="text-amber-500">🏆</span> POWER RANKINGS
+                <span className="text-yellow-400">🏆</span> POWER RANKINGS
               </h2>
               <p className="text-[10px] text-zinc-500 tracking-widest font-bold mt-1 uppercase">Algoritmo de Eficiência Tática</p>
             </div>
@@ -652,19 +683,19 @@ export default function PlayersHubPage() {
                   <Link 
                     key={p.puuid} 
                     href={`/dashboard/players/${p.puuid}`} 
-                    className={`flex flex-col md:flex-row items-center p-4 rounded-xl border transition-colors group relative overflow-hidden ${isTop1 ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/50' : 'bg-zinc-900/50 border-zinc-800 hover:border-zinc-600'}`}
+                    className={`flex flex-col md:flex-row items-center p-4 rounded-xl border transition-colors group relative overflow-hidden ${isTop1 ? 'bg-yellow-400/10 border-yellow-400/30 hover:border-yellow-400/60' : 'bg-zinc-900/50 border-zinc-800 hover:border-zinc-600'}`}
                   >
-                    {isTop1 && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-amber-500" />}
+                    {isTop1 && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-yellow-400" />}
                     
                     <div className="flex w-full md:w-auto items-center justify-between md:justify-start mb-4 md:mb-0">
-                      <span className={`text-2xl font-black w-12 text-center ${isTop1 ? 'text-amber-500' : 'text-zinc-600 group-hover:text-zinc-400 transition-colors'}`}>
+                      <span className={`text-2xl font-black w-12 text-center ${isTop1 ? 'text-yellow-400 drop-shadow-md' : 'text-zinc-600 group-hover:text-zinc-400 transition-colors'}`}>
                         #{index + 1}
                       </span>
                       
                       <div className="flex items-center gap-4 flex-1 md:w-[220px] ml-2">
-                        <img src={p.photo_url || DEFAULT_AVATAR} className={`w-12 h-12 object-cover rounded-lg border-2 ${isTop1 ? 'border-amber-500/50' : 'border-zinc-800'}`} alt="" />
+                        <img src={p.photo_url || DEFAULT_AVATAR} className={`w-12 h-12 object-cover rounded-lg border-2 ${isTop1 ? 'border-yellow-400/50' : 'border-zinc-800'}`} alt="" />
                         <div className="flex flex-col min-w-0">
-                          <span className={`text-base font-black uppercase tracking-tight truncate ${isTop1 ? 'text-amber-500' : 'text-zinc-300 group-hover:text-white transition-colors'}`}>{p.nickname}</span>
+                          <span className={`text-base font-black uppercase tracking-tight truncate ${isTop1 ? 'text-yellow-400' : 'text-zinc-300 group-hover:text-white transition-colors'}`}>{p.nickname}</span>
                           <div className="flex items-center gap-2 mt-1">
                             {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain" />}
                             <span className="text-[9px] font-bold text-zinc-500 uppercase">{p.team_acronym}</span>
@@ -684,8 +715,8 @@ export default function PlayersHubPage() {
                     </div>
 
                     <div className="flex flex-col items-end justify-center w-full md:w-20 mt-4 md:mt-0 pt-4 md:pt-0 border-t md:border-t-0 border-zinc-800">
-                      <span className={`text-[8px] font-bold uppercase tracking-widest mb-1 ${isTop1 ? 'text-amber-500/70' : 'text-zinc-500'}`}>RATING</span>
-                      <span className={`text-2xl font-black leading-none ${isTop1 ? 'text-amber-500' : getScoreColor(p.mvp_score)}`}>
+                      <span className={`text-[8px] font-bold uppercase tracking-widest mb-1 ${isTop1 ? 'text-yellow-400/70' : 'text-zinc-500'}`}>RATING</span>
+                      <span className={`text-2xl font-black leading-none ${isTop1 ? 'text-yellow-400 drop-shadow-md' : getScoreColor(p.mvp_score)}`}>
                         {Math.round(p.mvp_score || 0)}
                       </span>
                     </div>
@@ -727,23 +758,56 @@ export default function PlayersHubPage() {
               <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
               Tactical Operations Unit
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-              {(() => {
-                const teamPlayers = sortPlayersByRole(players.filter(p => p.team_acronym === filterTeam));
-                const maxTeamScore = Math.max(...teamPlayers.map(p => p.mvp_score || 0));
-                
-                return teamPlayers.map(p => (
-                  <PlayerCard 
-                    key={p.puuid} 
-                    player={p} 
-                    teams={teams} 
-                    isAdmin={isAdmin} 
-                    isTeamMVP={p.mvp_score === maxTeamScore && maxTeamScore > 0}
-                    onEdit={() => { setEditForm(p); setIsEditModalOpen(true); }} 
-                  />
-                ));
-              })()}
-            </div>
+            
+            {(() => {
+              const teamPlayers = sortPlayersByRole(players.filter(p => p.team_acronym === filterTeam));
+              const maxTeamScore = Math.max(...teamPlayers.map(p => p.mvp_score || 0));
+              
+              const maxTeamGames = Math.max(...teamPlayers.map(p => p.games_played || 0));
+              
+              const starters = teamPlayers.filter(p => p.games_played >= Math.max(3, maxTeamGames * 0.3));
+              const subs = teamPlayers.filter(p => p.games_played < Math.max(3, maxTeamGames * 0.3));
+
+              return (
+                <div className="space-y-8">
+                  {/* GRID DOS TITULARES */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    {starters.map(p => (
+                      <PlayerCard 
+                        key={p.puuid} 
+                        player={p} 
+                        teams={teams} 
+                        isAdmin={isAdmin} 
+                        isTeamMVP={p.mvp_score === maxTeamScore && maxTeamScore > 0}
+                        onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
+                      />
+                    ))}
+                  </div>
+
+                  {/* GRID DOS ACADEMY / CALL-UPS */}
+                  {subs.length > 0 && (
+                    <div className="mt-8 bg-zinc-900/30 p-6 rounded-2xl border border-zinc-800/50">
+                      <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-6 flex items-center gap-3">
+                        <span className="w-6 h-[2px] bg-zinc-700"></span> 
+                        Substitutos & Academy Call-ups
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 opacity-80 hover:opacity-100 transition-opacity">
+                        {subs.map(p => (
+                          <PlayerCard 
+                            key={p.puuid} 
+                            player={p} 
+                            teams={teams} 
+                            isAdmin={isAdmin} 
+                            isTeamMVP={false}
+                            onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </section>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-visible">
@@ -780,7 +844,6 @@ export default function PlayersHubPage() {
                   })}
                 </div>
                 
-                {/* Empty State Fallback para Radar */}
                 {activeWards.length === 0 && (
                   <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
                     <span className="bg-zinc-900/90 text-zinc-500 text-[9px] font-bold px-3 py-1.5 rounded uppercase tracking-widest border border-zinc-800 shadow-md">
@@ -874,10 +937,12 @@ export default function PlayersHubPage() {
               <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Nickname</label>
               <input type="text" required className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-4 py-3 text-sm font-bold text-white focus:border-blue-500 outline-none transition-colors" value={editForm.nickname} onChange={e => setEditForm({...editForm, nickname: e.target.value})} />
             </div>
+            
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Team Tag</label>
-              <input type="text" required className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-4 py-3 text-sm font-bold text-white focus:border-blue-500 outline-none transition-colors uppercase" value={editForm.team_acronym} onChange={e => setEditForm({...editForm, team_acronym: e.target.value})} />
+              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Photo URL</label>
+              <input type="url" className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-4 py-3 text-sm font-bold text-white focus:border-blue-500 outline-none transition-colors" value={editForm.photo_url || ''} onChange={e => setEditForm({...editForm, photo_url: e.target.value})} placeholder="https://..." />
             </div>
+
             <div className="flex gap-3 pt-4 border-t border-zinc-800">
               <button type="button" onClick={() => handleDeletePlayer(editForm.puuid)} className="px-5 py-3 bg-red-500/10 text-red-500 rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-red-500 hover:text-white transition-colors border border-red-500/20">Delete</button>
               <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-5 py-3 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 rounded-lg font-bold text-[10px] uppercase tracking-widest transition-colors border border-zinc-800 ml-auto">Cancel</button>
@@ -923,8 +988,8 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
   let nameColor = 'text-white';
   
   if (isGlobalMVP) {
-    cardBorder = 'border-amber-500/50 hover:border-amber-500';
-    nameColor = 'text-amber-500';
+    cardBorder = 'border-yellow-400/50 hover:border-yellow-400';
+    nameColor = 'text-yellow-400';
   } else if (isTeamMVP) {
     cardBorder = 'border-emerald-500/50 hover:border-emerald-500';
     nameColor = 'text-emerald-500';
@@ -935,7 +1000,7 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
       {isAdmin && <button onClick={(e) => { e.preventDefault(); onEdit(); }} className="absolute -top-2 -right-2 z-50 bg-blue-600 hover:bg-blue-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs shadow-md">✏️</button>}
       
       {isGlobalMVP && (
-        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-amber-500 text-amber-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
+        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-yellow-400 text-yellow-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
           SEASON MVP
         </div>
       )}
@@ -948,7 +1013,7 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
       <Link href={`/dashboard/players/${player.puuid}`} className={`bg-[#18181b] border transition-colors flex flex-col items-center block h-full p-5 rounded-2xl relative overflow-hidden shadow-sm ${cardBorder}`}>
         
         <div className="relative mb-4 mt-2">
-          <div className={`p-0.5 rounded-xl transition-all duration-300 group-hover:scale-105 ${isGlobalMVP ? 'bg-amber-500' : isTeamMVP ? 'bg-emerald-500' : 'bg-transparent'}`}>
+          <div className={`p-0.5 rounded-xl transition-all duration-300 group-hover:scale-105 ${isGlobalMVP ? 'bg-yellow-400' : isTeamMVP ? 'bg-emerald-500' : 'bg-transparent'}`}>
             <div className="relative w-16 h-16 bg-zinc-900 rounded-xl overflow-hidden border border-zinc-700 flex items-center justify-center">
               {player.photo_url ? (
                 <img src={player.photo_url} alt={player.nickname} className="w-full h-full object-cover relative z-10" />
@@ -1085,7 +1150,6 @@ function RatingLine({ label, value }: { label: string, value: number }) {
 
 // --- DROPDOWNS CUSTOMIZADOS ---
 
-// NOVO SELETOR MÚLTIPLO PARA CAMPEONATOS
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1096,20 +1160,48 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
     return () => document.removeEventListener("mousedown", click);
   }, []);
 
-  const options = [
-    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
-    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
-    { id: 'CBLOL', label: 'CBLOL' },
-    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
-    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
-    { id: 'FIRST_STAND', label: 'FIRST STAND' },
-    { id: 'LCK', label: 'LCK' },
-    { id: 'LCS', label: 'LCS' },
-    { id: 'LEC', label: 'LEC' },
-    { id: 'LPL', label: 'LPL' },
-    { id: 'MSI', label: 'MSI' },
-    { id: 'MUNDIAL', label: 'MUNDIAL' },
-    { id: 'SCRIM', label: 'SCRIMS' } // OPÇÃO DE SCRIMS ADICIONADA AQUI
+  const TOURNAMENT_GROUPS = [
+    {
+      label: "LIGAS TIER 1",
+      options: [
+        { id: 'CBLOL', label: 'CBLOL' },
+        { id: 'LCK', label: 'LCK' },
+        { id: 'LCS', label: 'LCS' },
+        { id: 'LEC', label: 'LEC' },
+        { id: 'LPL', label: 'LPL' }
+      ]
+    },
+    {
+      label: "LIGAS CHALLENGERS",
+      options: [
+        { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+        { id: 'LCK_CHALLENGERS', label: 'LCK CHALLENGERS' },
+        { id: 'LCS_CHALLENGERS', label: 'LCS CHALLENGERS' },
+        { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' }
+      ]
+    },
+    {
+      label: "TORNEIOS GLOBAIS",
+      options: [
+        { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
+        { id: 'EWC_QUALIFIER', label: 'EWC QUALIFIER' },
+        { id: 'EWC', label: 'ESPORTS WORLD CUP' },
+        { id: 'FIRST_STAND', label: 'FIRST STAND' },
+        { id: 'MSI', label: 'MSI' },
+        { id: 'MUNDIAL', label: 'MUNDIAL' },
+        { id: 'WORLD_CUP', label: 'WORLD CUP' }
+      ]
+    },
+    {
+      label: "OFF-SEASON E TREINOS",
+      options: [
+        { id: 'CBLOL_CUP', label: 'CBLOL CUP' },
+        { id: 'LCK_CUP', label: 'LCK CUP' },
+        { id: 'LCS_CUP', label: 'LCS CUP' },
+        { id: 'LEC_CUP', label: 'LEC CUP' },
+        { id: 'SCRIM', label: 'SCRIMS' }
+      ]
+    }
   ];
 
   const toggleOption = (id: string) => {
@@ -1131,45 +1223,64 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
   const currentLabel = value.includes('ALL') 
     ? 'TODOS OS CAMPEONATOS' 
     : value.length === 1 
-      ? options.find(o => o.id === value[0])?.label 
-      : `${value.length} CAMPEONATOS`;
+      ? TOURNAMENT_GROUPS.flatMap(g => g.options).find(o => o.id === value[0])?.label 
+      : `${value.length} CAMPEONATOS SEL.`;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
+      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">ESCOPO DE ANÁLISE</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase"
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
       >
-        <span className="flex-1 text-left">{currentLabel}</span>
-        <span className={`text-[8px] text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left truncate">{currentLabel}</span>
+        <span className={`text-[8px] transition-transform ${isOpen ? 'rotate-180 text-blue-500' : 'text-zinc-500'}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-1 right-0 min-w-[200px] bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden shadow-xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
-          {options.map((opt) => {
-            const isSelected = value.includes(opt.id);
-            return (
-              <button 
-                key={opt.id} 
-                onClick={() => toggleOption(opt.id)} 
-                className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${isSelected ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
-              >
-                <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
-                   {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
+        <div className="absolute top-full mt-2 right-0 w-[260px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[400px] flex flex-col">
+          
+          <button 
+            onClick={() => { onChange(['ALL']); setIsOpen(false); }} 
+            className={`w-full flex items-center gap-3 px-4 py-3 transition-colors border-b border-zinc-800 shrink-0 ${value.includes('ALL') ? 'bg-blue-600/10 text-blue-400' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}`}
+          >
+             <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
+             </div>
+             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
+          </button>
+
+          <div className="overflow-y-auto custom-scrollbar">
+            {TOURNAMENT_GROUPS.map((group, gIndex) => (
+              <div key={group.label} className={gIndex > 0 ? "border-t border-zinc-800/50" : ""}>
+                <div className="px-4 py-2 bg-zinc-900/50 sticky top-0 z-10 backdrop-blur-sm">
+                   <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">{group.label}</span>
                 </div>
-                <span className="text-[10px] font-bold uppercase">{opt.label}</span>
-              </button>
-            )
-          })}
+                {group.options.map((opt) => {
+                  const isSelected = value.includes(opt.id);
+                  return (
+                    <button 
+                      key={opt.id} 
+                      onClick={() => toggleOption(opt.id)} 
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors ${isSelected ? 'bg-zinc-800/50 text-white' : 'text-zinc-400'}`}
+                    >
+                      <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                         {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
+                      </div>
+                      <span className="text-[10px] font-bold uppercase">{opt.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// O componente CockpitDropdown original ainda é mantido pois é usado pelo SplitSelector (que aceita só 1 escolha)
-function CockpitDropdown({ label, value, onChange, options }: any) {
+function CockpitDropdown({ label, value, onChange, options, isHighlighted = false }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   
@@ -1186,21 +1297,21 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
       {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase"
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
       >
-        <span className="flex-1 text-left">{currentLabel}</span>
-        <span className={`text-[8px] text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left truncate">{currentLabel}</span>
+        <span className={`text-[8px] transition-transform ${isOpen ? (isHighlighted ? 'rotate-180 text-amber-500' : 'rotate-180 text-blue-500') : 'text-zinc-500'}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-1 right-0 min-w-[160px] bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden shadow-xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
+        <div className="absolute top-full mt-2 right-0 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar">
           {options.map((opt:any) => (
             <button 
               key={opt.id} 
               onClick={() => { onChange(opt.id); setIsOpen(false); }} 
-              className={`w-full flex items-center px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? 'bg-zinc-800 text-white' : 'text-zinc-400'}`}
+              className={`w-full flex items-center px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === opt.id ? (isHighlighted ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-600/10 text-blue-400') : 'text-zinc-400'}`}
             >
-              <span className="text-[10px] font-bold uppercase">{opt.label}</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -1209,12 +1320,31 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
   );
 }
 
-function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+function SplitSelector({ value, onChange, availableSplits }: { value: string, onChange: (val: string) => void, availableSplits: string[] }) {
+  const isHighlighted = value !== 'ALL';
+  
+  const LABELS: Record<string, string> = {
+    'CUP': 'SEASON CUP',
+    'SPLIT 1': 'SPLIT 1',
+    'SPLIT 2': 'SPLIT 2',
+    'SPLIT 3': 'SPLIT 3',
+    'EVENTO GLOBAL': 'EVENTO GLOBAL',
+    'OFF-SEASON': 'OFF-SEASON'
+  };
+
+  const dynamicOptions = [
+    { id: 'ALL', label: 'TODOS OS RECORTES' },
+    ...availableSplits.map(s => ({ id: s, label: LABELS[s] || s }))
+  ];
+
   return (
-    <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
-      { id: 'ALL', label: 'ANO INTEIRO' }, { id: 'SPLIT 1', label: 'SPLIT 1' }, 
-      { id: 'SPLIT 2', label: 'SPLIT 2' }, { id: 'SPLIT 3', label: 'SPLIT 3' }
-    ]} />
+    <CockpitDropdown 
+      label="RECORTE TEMPORAL" 
+      value={value} 
+      onChange={onChange} 
+      isHighlighted={isHighlighted}
+      options={dynamicOptions} 
+    />
   );
 }
 
