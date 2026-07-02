@@ -46,6 +46,38 @@ const OBJECTIVE_ASSETS: { [key: string]: { icon: string, hover: string } } = {
 
 const ORDERED_OBJECTIVES = ['lvl1', 'dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
 
+// --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
+function normalizeTournamentScope(rawName: string | null): string {
+  const name = String(rawName || '').toUpperCase();
+  if (name.includes('SCRIM')) return 'SCRIM';
+  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
+  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
+  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
+  
+  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
+  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
+  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
+  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+
+  if (name.includes('CBLOL')) return 'CBLOL';
+  if (name.includes('LCK')) return 'LCK';
+  if (name.includes('LCS')) return 'LCS';
+  if (name.includes('LEC')) return 'LEC';
+  if (name.includes('LPL')) return 'LPL';
+
+  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
+  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
+  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
+  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
+  if (name.includes('FIRST STAND')) return 'FIRST STAND';
+  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
+  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+
+  return 'OUTRO';
+}
+
 // --- UTILITÁRIOS ---
 
 function formatTime(decimal: number) {
@@ -104,7 +136,6 @@ function getScoreColor(score: number | null) {
   if (score >= 90) return "text-purple-500"; 
   if (score >= 80) return "text-blue-500";     
   if (score >= 70) return "text-emerald-500"; 
-  // O Laranja/Amber fica restrito à nota mediana (60-69), separado do Ouro do Top 1
   if (score >= 60) return "text-amber-500";  
   return "text-red-500";                                 
 }
@@ -134,9 +165,14 @@ export default function PlayersHubPage() {
   const [filterTeam, setFilterTeam] = useState<string>("TODOS");
   const [isAdmin, setIsAdmin] = useState(false);
   
-  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO_DESAFIANTE"]);
+  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
+  
+  // Dicionário que traduz o Filtro da UI -> Nome Real no Banco
+  const [scopeToRawMap, setScopeToRawMap] = useState<Record<string, string[]>>({});
+  const [isMapLoaded, setIsMapLoaded] = useState(false);
+
   const [leaderboardTab, setLeaderboardTab] = useState<string>("GLOBAL");
 
   const [teamChartData, setTeamChartData] = useState<any[]>([]);
@@ -164,28 +200,43 @@ export default function PlayersHubPage() {
       const { data } = await supabase.from('matches').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
+        const scopeMap: Record<string, Set<string>> = {};
+        
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
-            if (!map[d.game_type]) map[d.game_type] = new Set();
-            map[d.game_type].add(d.split);
+            const scope = normalizeTournamentScope(d.game_type);
+            
+            if (!map[scope]) map[scope] = new Set();
+            map[scope].add(d.split);
+            
+            if (!scopeMap[scope]) scopeMap[scope] = new Set();
+            scopeMap[scope].add(d.game_type);
           }
         });
+        
         const finalMap: Record<string, string[]> = {};
         for (const k in map) finalMap[k] = Array.from(map[k]);
         setValidSplitsMap(finalMap);
+
+        const finalScopeMap: Record<string, string[]> = {};
+        for (const k in scopeMap) finalScopeMap[k] = Array.from(scopeMap[k]);
+        setScopeToRawMap(finalScopeMap);
       }
+      setIsMapLoaded(true);
     }
     loadSplitsMap();
   }, []);
 
-  useEffect(() => { fetchInitialData(); }, [globalTournaments, globalSplit]);
+  useEffect(() => { 
+    if(isMapLoaded) fetchInitialData(); 
+  }, [globalTournaments, globalSplit, isMapLoaded]);
   
   useEffect(() => { 
-    if (filterTeam !== "TODOS") { 
+    if (filterTeam !== "TODOS" && isMapLoaded) { 
       fetchPerformanceData(filterTeam); 
       fetchAnalysisData(filterTeam); 
     } 
-  }, [filterTeam, globalTournaments, globalSplit]);
+  }, [filterTeam, globalTournaments, globalSplit, isMapLoaded]);
 
   const dynamicAvailableSplits = useMemo(() => {
     if (globalTournaments.includes('ALL')) {
@@ -220,14 +271,19 @@ export default function PlayersHubPage() {
 
     const { data: t } = await supabase.from('teams').select('*').order('acronym');
     
+    // Preparar os Raw Types Traduzidos
+    const rawTypesToFetch = globalTournaments.includes('ALL') 
+      ? [] 
+      : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
+
     let query = supabase.from('hub_players_roster').select('*');
-    if (!globalTournaments.includes('ALL')) query = query.in('game_type', globalTournaments);
+    if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
     const { data: p } = await query;
     
     let banQuery = supabase.from('view_champion_ban_stats').select('*').limit(200);
-    if (!globalTournaments.includes('ALL')) banQuery = banQuery.in('game_type', globalTournaments);
+    if (!globalTournaments.includes('ALL')) banQuery = banQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') banQuery = banQuery.eq('split', globalSplit);
     
     const [bansRes, matchCountRes] = await Promise.all([
@@ -290,18 +346,17 @@ export default function PlayersHubPage() {
        setGlobalBans(banMap);
     }
 
-    const { data: missionsData } = await supabase.from('missions').select('*');
-    if (missionsData) setMissionsRaw(missionsData);
-
-    const { data: sDetailed } = await supabase.from('player_stats_detailed').select('*').limit(20000);
+    const { data: sDetailed } = await supabase.from('player_stats_detailed').select('champion, team_acronym, lane').limit(20000);
     if (sDetailed) setStatsDetailed(sDetailed);
 
     setLoading(false);
   }
 
   async function fetchPerformanceData(team: string) {
+    const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
+
     let query = supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
-    if (!globalTournaments.includes('ALL')) query = query.in('game_type', globalTournaments);
+    if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
     const { data } = await query;
@@ -309,12 +364,14 @@ export default function PlayersHubPage() {
   }
 
   async function fetchAnalysisData(team: string) {
+    const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
+
     let objQuery = supabase.from('hub_players_objectives').select('*').eq('team_acronym', team).limit(10000);
     let draftQuery = supabase.from('hub_players_draft').select('*').eq('team_acronym', team).limit(10000);
 
     if (!globalTournaments.includes('ALL')) {
-      objQuery = objQuery.in('game_type', globalTournaments);
-      draftQuery = draftQuery.in('game_type', globalTournaments);
+      objQuery = objQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
+      draftQuery = draftQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     }
     if (globalSplit !== 'ALL') {
       objQuery = objQuery.eq('split', globalSplit);
@@ -376,7 +433,7 @@ export default function PlayersHubPage() {
         .eq('team_acronym', team)
         .range(from, from + step - 1);
 
-      if (!globalTournaments.includes('ALL')) wardsQuery = wardsQuery.in('game_type', globalTournaments);
+      if (!globalTournaments.includes('ALL')) wardsQuery = wardsQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
       if (globalSplit !== 'ALL') wardsQuery = wardsQuery.eq('split', globalSplit);
 
       const { data: wardsChunk, error } = await wardsQuery;
@@ -1174,31 +1231,31 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
     {
       label: "LIGAS CHALLENGERS",
       options: [
-        { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
-        { id: 'LCK_CHALLENGERS', label: 'LCK CHALLENGERS' },
-        { id: 'LCS_CHALLENGERS', label: 'LCS CHALLENGERS' },
-        { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' }
+        { id: 'CIRCUITO DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+        { id: 'LCK CHALLENGERS', label: 'LCK CHALLENGERS' },
+        { id: 'LCS CHALLENGERS', label: 'LCS CHALLENGERS' },
+        { id: 'EMEA MASTERS', label: 'EMEA MASTERS' }
       ]
     },
     {
       label: "TORNEIOS GLOBAIS",
       options: [
-        { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
-        { id: 'EWC_QUALIFIER', label: 'EWC QUALIFIER' },
+        { id: 'AMERICAS CUP', label: 'AMERICAS CUP' },
+        { id: 'EWC QUALIFIER', label: 'EWC QUALIFIER' },
         { id: 'EWC', label: 'ESPORTS WORLD CUP' },
-        { id: 'FIRST_STAND', label: 'FIRST STAND' },
+        { id: 'FIRST STAND', label: 'FIRST STAND' },
         { id: 'MSI', label: 'MSI' },
         { id: 'MUNDIAL', label: 'MUNDIAL' },
-        { id: 'WORLD_CUP', label: 'WORLD CUP' }
+        { id: 'WORLD CUP', label: 'WORLD CUP' }
       ]
     },
     {
       label: "OFF-SEASON E TREINOS",
       options: [
-        { id: 'CBLOL_CUP', label: 'CBLOL CUP' },
-        { id: 'LCK_CUP', label: 'LCK CUP' },
-        { id: 'LCS_CUP', label: 'LCS CUP' },
-        { id: 'LEC_CUP', label: 'LEC CUP' },
+        { id: 'CBLOL CUP', label: 'CBLOL CUP' },
+        { id: 'LCK CUP', label: 'LCK CUP' },
+        { id: 'LCS CUP', label: 'LCS CUP' },
+        { id: 'LEC CUP', label: 'LEC CUP' },
         { id: 'SCRIM', label: 'SCRIMS' }
       ]
     }

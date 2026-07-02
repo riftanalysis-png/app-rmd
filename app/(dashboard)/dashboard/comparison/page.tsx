@@ -112,7 +112,7 @@ export default function ScoutingReportPage() {
       const targetTeams = viewMode === 'H2H' ? [teamA || finalTeamsList[0]?.acronym, teamB || finalTeamsList[1]?.acronym] : [isolatedTeam || finalTeamsList[0]?.acronym];
       
       const [statsRes, objRes, wardsRes] = await Promise.all([
-         supabase.from('player_stats_detailed').select('*').in('team_acronym', targetTeams).in('match_id', matchIds),
+         supabase.from('player_stats_detailed').select('match_id, team_acronym, summoner_name, champion, lane, win, kills, deaths, assists, dpm, vspm, gold_diff_at_12, total_gold, physical_damage, magic_damage, fb_kill, fb_assist, ft_kill, ft_assist, lane_rating, impact_rating, conversion_rating, vision_rating, side, xp_diff_at_12, cs_diff_at_12, game_duration_minutes').in('team_acronym', targetTeams).in('match_id', matchIds),
          supabase.from('match_objectives').select('*').in('team_acronym', targetTeams).in('match_id', matchIds),
          supabase.from('match_wards').select('minute, tactical_zone, type, player_name, match_id').in('match_id', matchIds)
       ]);

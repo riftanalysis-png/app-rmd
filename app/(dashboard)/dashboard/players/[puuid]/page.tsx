@@ -11,6 +11,38 @@ import {
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
+// --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
+function normalizeTournamentScope(rawName: string | null): string {
+  const name = String(rawName || '').toUpperCase();
+  if (name.includes('SCRIM')) return 'SCRIM';
+  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
+  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
+  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
+  
+  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
+  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
+  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
+  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+
+  if (name.includes('CBLOL')) return 'CBLOL';
+  if (name.includes('LCK')) return 'LCK';
+  if (name.includes('LCS')) return 'LCS';
+  if (name.includes('LEC')) return 'LEC';
+  if (name.includes('LPL')) return 'LPL';
+
+  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
+  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
+  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
+  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
+  if (name.includes('FIRST STAND')) return 'FIRST STAND';
+  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
+  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+
+  return 'OUTRO';
+}
+
 // --- MAPEAMENTO E ORDENAÇÃO DE ROLES ---
 const ROLES_ORDER = ['top', 'jng', 'mid', 'adc', 'support'];
 
@@ -136,22 +168,43 @@ export default function PlayerProfilePage() {
   const [loading, setLoading] = useState(true);
   const [activeDropdown, setActiveDropdown] = useState<any>(null);
   
-  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO_DESAFIANTE"]);
+  const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
+  const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
   const [sideFilter, setSideFilter] = useState<'ALL' | 'BLUE' | 'RED'>('ALL');
   const [opponentFilter, setOpponentFilter] = useState<string>('ALL');
+
+  useEffect(() => {
+    async function loadSplitsMap() {
+      const { data } = await supabase.from('matches').select('game_type, split');
+      if (data) {
+        const map: Record<string, Set<string>> = {};
+        data.forEach((d: any) => {
+          if (d.game_type && d.split) {
+            const scope = normalizeTournamentScope(d.game_type);
+            if (!map[scope]) map[scope] = new Set();
+            map[scope].add(d.split);
+          }
+        });
+        const finalMap: Record<string, string[]> = {};
+        for (const k in map) finalMap[k] = Array.from(map[k]);
+        setValidSplitsMap(finalMap);
+      }
+    }
+    loadSplitsMap();
+  }, []);
 
   const fetchTacticalData = useCallback(async () => {
     if (!puuid) return;
     setLoading(true);
     
     try {
-      const [pRes, tRes, allPRes, perfRes, statsRes] = await Promise.all([
+      // 🔥 REMOVIDO: game_type, split, cs_12 e cs_at_12 para não quebrar a consulta. 🔥
+      const [pRes, tRes, allPRes, statsRes] = await Promise.all([
         supabase.from('view_players_with_stats').select('*').eq('puuid', puuid).single(),
         supabase.from('teams').select('*').order('acronym'),
         supabase.from('players').select('puuid, team_acronym, nickname, primary_role'),
-        supabase.from('hub_players_performance').select('match_id, game_type, split').eq('puuid', puuid),
-        supabase.from('player_stats_detailed').select('*').eq('puuid', puuid).order('match_id', { ascending: true })
+        supabase.from('player_stats_detailed').select('match_id, puuid, win, kp, gold_efficiency, champion, lane_rating, impact_rating, conversion_rating, vision_rating, gold_diff_at_12, xp_diff_at_12, gpm, dpm, deaths_at_12, deaths, vspm, side, lane').eq('puuid', puuid).order('match_id', { ascending: true })
       ]);
 
       if (pRes.data && allPRes.data) {
@@ -161,29 +214,36 @@ export default function PlayerProfilePage() {
 
         if (statsRes.data && statsRes.data.length > 0) {
           const matchIds = statsRes.data.map(m => m.match_id);
-          const { data: participants } = await supabase.from('player_stats_detailed').select('match_id, puuid').in('match_id', matchIds);
-          const { data: matchesMeta } = await supabase.from('matches').select('id, game_type, split').in('id', matchIds);
+          
+          // Pegamos os metadados brutos da partida (aqui sim o game_type e o split existem!)
+          const { data: matchesMeta } = await supabase.from('matches').select('id, game_type, split, blue_team_tag, red_team_tag').in('id', matchIds);
           
           const matchMetaMap: Record<string, any> = {};
           matchesMeta?.forEach(m => { matchMetaMap[m.id] = m; });
           
           const enriched = statsRes.data.map(m => {
-            const myTeam = teamLookup[m.puuid] || 'Unknown';
-            const matchParticipants = participants?.filter(p => p.match_id === m.match_id) || [];
-            const opponent = matchParticipants.find(p => { 
-              const t = teamLookup[p.puuid]; 
-              return t && t.toUpperCase() !== myTeam.toUpperCase(); 
-            });
-
             const meta = matchMetaMap[m.match_id] || {};
+            const finalGameType = meta.game_type || 'UNKNOWN';
+            const normalizedScope = normalizeTournamentScope(finalGameType);
+
+            // A lógica ultra rápida para descobrir o inimigo:
+            let oppAcronym = 'MIX';
+            const sSide = String(m.side || '').toLowerCase();
+            
+            if (sSide === 'blue' || sSide === '100') {
+               oppAcronym = meta.red_team_tag || 'MIX';
+            } else if (sSide === 'red' || sSide === '200') {
+               oppAcronym = meta.blue_team_tag || 'MIX';
+            }
             
             return { 
               ...m, 
-              opponent_acronym: opponent ? teamLookup[opponent.puuid] : 'MIX', 
+              opponent_acronym: oppAcronym, 
               is_win: m.win === true || String(m.win).toLowerCase() === 'win' || String(m.win).toLowerCase() === 'true', 
               kp_val: parseFloat(String(m.kp || 0).replace('%', '')),
               eff_val: Number(m.gold_efficiency) || 1,
-              game_type: meta.game_type || 'UNKNOWN',
+              game_type: finalGameType,
+              normalized_scope: normalizedScope,
               split: meta.split || 'UNKNOWN'
             };
           });
@@ -218,14 +278,41 @@ export default function PlayerProfilePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [fetchTacticalData]);
 
+  const dynamicAvailableSplits = useMemo(() => {
+    if (globalTournaments.includes('ALL')) {
+      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    }
+    const splits = new Set<string>();
+    globalTournaments.forEach(t => {
+      if (validSplitsMap[t]) {
+        validSplitsMap[t].forEach(s => splits.add(s));
+      }
+    });
+    const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  }, [globalTournaments, validSplitsMap]);
+
+  useEffect(() => {
+    if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
+      setGlobalSplit('ALL');
+    }
+  }, [dynamicAvailableSplits, globalSplit]);
+
   const filteredMatches = useMemo(() => {
     return allMatchesRaw.filter(m => {
+      const scope = m.normalized_scope || 'OUTRO';
       if (!globalTournaments.includes('ALL')) {
-        if (!globalTournaments.includes(m.game_type?.toUpperCase())) return false;
+        if (!globalTournaments.includes(scope)) return false;
       }
       if (globalSplit !== 'ALL' && m.split?.toUpperCase() !== globalSplit.toUpperCase()) return false;
-      if (sideFilter !== 'ALL' && m.side?.toUpperCase() !== sideFilter) return false;
+      
+      if (sideFilter !== 'ALL') {
+         const matchSide = String(m.side || '').toUpperCase();
+         if (matchSide !== sideFilter && matchSide !== (sideFilter === 'BLUE' ? '100' : '200')) return false;
+      }
+
       if (opponentFilter !== 'ALL' && m.opponent_acronym?.toUpperCase() !== opponentFilter.toUpperCase()) return false;
+      
       return true;
     });
   }, [allMatchesRaw, globalTournaments, globalSplit, sideFilter, opponentFilter]);
@@ -336,7 +423,7 @@ export default function PlayerProfilePage() {
 
         <div className="flex gap-4 items-end bg-transparent animate-fade-in-down">
            <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
-           <SplitSelector value={globalSplit} onChange={setGlobalSplit} />
+           <SplitSelector value={globalSplit} onChange={setGlobalSplit} availableSplits={dynamicAvailableSplits} />
         </div>
       </header>
 
@@ -580,11 +667,11 @@ export default function PlayerProfilePage() {
                    </h3>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {/* O gráfico Farm@12 vs XP Diff foi removido conforme a exclusão da métrica cs_12 do banco */}
                   <RelationalChart title="Mortes@12 vs Mortes Totais" data={filteredMatches} teams={teams} x="deaths_at_12" y="deaths" xN="M@12" yN="Total" />
                   <RelationalChart title="KP% vs Visão por Minuto" data={filteredMatches} teams={teams} x="kp_val" y="vspm" xN="KP%" yN="VPM" />
                   <RelationalChart title="Mortes@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="deaths_at_12" y="xp_diff_at_12" xN="M@12" yN="XP Diff" />
                   <RelationalChart title="KP% vs XP Diff@12" data={filteredMatches} teams={teams} x="kp_val" y="xp_diff_at_12" xN="KP%" yN="XP Diff" />
-                  <RelationalChart title="Farm@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="cs_at_12" y="xp_diff_at_12" xN="CS@12" yN="XP Diff" />
                   <RelationalChart title="Mortes vs Kill Participation" data={filteredMatches} teams={teams} x="deaths" y="kp_val" xN="Mortes" yN="KP%" />
                 </div>
               </div>
@@ -608,20 +695,48 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
     return () => document.removeEventListener("mousedown", click);
   }, []);
 
-  const options = [
-    { id: 'ALL', label: 'TODOS OS CAMPEONATOS' },
-    { id: 'AMERICAS_CUP', label: 'AMERICAS CUP' },
-    { id: 'CBLOL', label: 'CBLOL' },
-    { id: 'CIRCUITO_DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
-    { id: 'EMEA_MASTERS', label: 'EMEA MASTERS' },
-    { id: 'FIRST_STAND', label: 'FIRST STAND' },
-    { id: 'LCK', label: 'LCK' },
-    { id: 'LCS', label: 'LCS' },
-    { id: 'LEC', label: 'LEC' },
-    { id: 'LPL', label: 'LPL' },
-    { id: 'MSI', label: 'MSI' },
-    { id: 'MUNDIAL', label: 'MUNDIAL' },
-    { id: 'SCRIM', label: 'SCRIMS' } 
+  const TOURNAMENT_GROUPS = [
+    {
+      label: "LIGAS TIER 1",
+      options: [
+        { id: 'CBLOL', label: 'CBLOL' },
+        { id: 'LCK', label: 'LCK' },
+        { id: 'LCS', label: 'LCS' },
+        { id: 'LEC', label: 'LEC' },
+        { id: 'LPL', label: 'LPL' }
+      ]
+    },
+    {
+      label: "LIGAS CHALLENGERS",
+      options: [
+        { id: 'CIRCUITO DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
+        { id: 'LCK CHALLENGERS', label: 'LCK CHALLENGERS' },
+        { id: 'LCS CHALLENGERS', label: 'LCS CHALLENGERS' },
+        { id: 'EMEA MASTERS', label: 'EMEA MASTERS' }
+      ]
+    },
+    {
+      label: "TORNEIOS GLOBAIS",
+      options: [
+        { id: 'AMERICAS CUP', label: 'AMERICAS CUP' },
+        { id: 'EWC QUALIFIER', label: 'EWC QUALIFIER' },
+        { id: 'EWC', label: 'ESPORTS WORLD CUP' },
+        { id: 'FIRST STAND', label: 'FIRST STAND' },
+        { id: 'MSI', label: 'MSI' },
+        { id: 'MUNDIAL', label: 'MUNDIAL' },
+        { id: 'WORLD CUP', label: 'WORLD CUP' }
+      ]
+    },
+    {
+      label: "OFF-SEASON",
+      options: [
+        { id: 'CBLOL CUP', label: 'CBLOL CUP' },
+        { id: 'LCK CUP', label: 'LCK CUP' },
+        { id: 'LCS CUP', label: 'LCS CUP' },
+        { id: 'LEC CUP', label: 'LEC CUP' },
+        { id: 'SCRIM', label: 'SCRIMS' }
+      ]
+    }
   ];
 
   const toggleOption = (id: string) => {
@@ -643,37 +758,57 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
   const currentLabel = value.includes('ALL') 
     ? 'TODOS OS CAMPEONATOS' 
     : value.length === 1 
-      ? options.find(o => o.id === value[0])?.label 
-      : `${value.length} CAMPEONATOS`;
+      ? TOURNAMENT_GROUPS.flatMap(g => g.options).find(o => o.id === value[0])?.label 
+      : `${value.length} CAMPEONATOS SEL.`;
 
   return (
     <div className="relative flex flex-col" ref={ref}>
       <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[160px] hover:border-zinc-600 transition-colors text-[10px] text-zinc-300 font-bold uppercase shadow-sm"
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
       >
-        <span className="flex-1 text-left">{currentLabel}</span>
-        <span className={`text-[8px] text-zinc-500 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+        <span className="flex-1 text-left truncate">{currentLabel}</span>
+        <span className={`text-[8px] transition-transform ${isOpen ? 'rotate-180 text-blue-500' : 'text-zinc-500'}`}>▼</span>
       </button>
       
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 min-w-[200px] bg-zinc-900/95 backdrop-blur-md border border-zinc-700/50 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[300px] overflow-y-auto custom-scrollbar animate-fade-in-down origin-top">
-          {options.map((opt) => {
-            const isSelected = value.includes(opt.id);
-            return (
-              <button 
-                key={opt.id} 
-                onClick={() => toggleOption(opt.id)} 
-                className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${isSelected ? 'bg-zinc-800/80 text-white' : 'text-zinc-400'}`}
-              >
-                <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
-                   {isSelected && <span className="text-white text-[9px] font-black">✓</span>}
+        <div className="absolute top-full mt-2 right-0 w-[260px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[400px] flex flex-col">
+          
+          <button 
+            onClick={() => { onChange(['ALL']); setIsOpen(false); }} 
+            className={`w-full flex items-center gap-3 px-4 py-3 transition-colors border-b border-zinc-800 shrink-0 ${value.includes('ALL') ? 'bg-blue-600/10 text-blue-400' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}`}
+          >
+             <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
+             </div>
+             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
+          </button>
+
+          <div className="overflow-y-auto custom-scrollbar">
+            {TOURNAMENT_GROUPS.map((group, gIndex) => (
+              <div key={group.label} className={gIndex > 0 ? "border-t border-zinc-800/50" : ""}>
+                <div className="px-4 py-2 bg-zinc-900/50 sticky top-0 z-10 backdrop-blur-sm">
+                   <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">{group.label}</span>
                 </div>
-                <span className="text-[10px] font-bold uppercase tracking-wide">{opt.label}</span>
-              </button>
-            )
-          })}
+                {group.options.map((opt) => {
+                  const isSelected = value.includes(opt.id);
+                  return (
+                    <button 
+                      key={opt.id} 
+                      onClick={() => toggleOption(opt.id)} 
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors ${isSelected ? 'bg-zinc-800/50 text-white' : 'text-zinc-400'}`}
+                    >
+                      <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
+                         {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
+                      </div>
+                      <span className="text-[10px] font-bold uppercase">{opt.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -720,11 +855,13 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
   );
 }
 
-function SplitSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={[
-    { id: 'ALL', label: 'ANO INTEIRO' }, { id: 'SPLIT 1', label: 'SPLIT 1' }, 
-    { id: 'SPLIT 2', label: 'SPLIT 2' }, { id: 'SPLIT 3', label: 'SPLIT 3' }
-  ]} />
+function SplitSelector({ value, onChange, availableSplits }: { value: string, onChange: (val: string) => void, availableSplits?: string[] }) {
+  const dynamicOptions = [
+    { id: 'ALL', label: 'TODOS OS RECORTES' },
+    ...(availableSplits || ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON']).map(s => ({ id: s, label: s }))
+  ];
+
+  return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={dynamicOptions} />
 }
 
 function RelationalChart({ title, data, teams, x, y, xN, yN }: any) {

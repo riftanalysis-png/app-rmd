@@ -9,6 +9,38 @@ import {
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
+// --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
+function normalizeTournamentScope(rawName: string | null): string {
+  const name = String(rawName || '').toUpperCase();
+  if (name.includes('SCRIM')) return 'SCRIM';
+  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
+  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
+  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
+  
+  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
+  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
+  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
+  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+
+  if (name.includes('CBLOL')) return 'CBLOL';
+  if (name.includes('LCK')) return 'LCK';
+  if (name.includes('LCS')) return 'LCS';
+  if (name.includes('LEC')) return 'LEC';
+  if (name.includes('LPL')) return 'LPL';
+
+  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
+  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
+  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
+  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
+  if (name.includes('FIRST STAND')) return 'FIRST STAND';
+  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
+  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+
+  return 'OUTRO';
+}
+
 // --- TRITURADORES E FORMATADORES ---
 function normalizeChampName(name: string | null): string {
   if (!name) return 'unknown';
@@ -90,6 +122,10 @@ export default function MetaWarRoom() {
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(['ALL']);
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
+  
+  // Dicionário que traduz o Filtro da UI -> Nome Real no Banco
+  const [scopeToRawMap, setScopeToRawMap] = useState<Record<string, string[]>>({});
+  const [isMapLoaded, setIsMapLoaded] = useState(false);
 
   const [viewMode, setViewMode] = useState<'CHAMPIONS' | 'OBJECTIVES'>('CHAMPIONS');
   const [championView, setChampionView] = useState<'TIER_LIST' | 'TRUST_INDEX' | 'META_MATRIX'>('TIER_LIST');
@@ -99,22 +135,37 @@ export default function MetaWarRoom() {
   const [activeLane, setActiveLane] = useState<string>('ALL');
   const [minGames, setMinGames] = useState<number>(5);
 
-  // Carrega mapeamento de Splits válidos
+  // Carrega mapeamento de Splits válidos e Nomes Reais de Torneios
   useEffect(() => {
     async function loadSplitsMap() {
       const { data } = await supabase.from('matches').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
+        const scopeMap: Record<string, Set<string>> = {};
+
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
-            if (!map[d.game_type]) map[d.game_type] = new Set();
-            map[d.game_type].add(d.split);
+            const scope = normalizeTournamentScope(d.game_type);
+            
+            // Mapeia splits dinâmicos
+            if (!map[scope]) map[scope] = new Set();
+            map[scope].add(d.split);
+
+            // Relaciona a UI (ex: CBLOL) com os nomes reais (ex: CBLOL Split 1 2026)
+            if (!scopeMap[scope]) scopeMap[scope] = new Set();
+            scopeMap[scope].add(d.game_type);
           }
         });
+        
         const finalMap: Record<string, string[]> = {};
         for (const k in map) finalMap[k] = Array.from(map[k]);
         setValidSplitsMap(finalMap);
+
+        const finalScopeMap: Record<string, string[]> = {};
+        for (const k in scopeMap) finalScopeMap[k] = Array.from(scopeMap[k]);
+        setScopeToRawMap(finalScopeMap);
       }
+      setIsMapLoaded(true); // Libera o download dos dados pesados
     }
     loadSplitsMap();
   }, []);
@@ -141,14 +192,19 @@ export default function MetaWarRoom() {
     }
   }, [dynamicAvailableSplits, globalSplit]);
 
-
   useEffect(() => {
+    if (!isMapLoaded) return; // Aguarda a tradução de escopos estar pronta
+
     async function fetchData() {
       setLoading(true);
       
       const buildQuery = (viewName: string) => {
-         let q = supabase.from(viewName).select('*').limit(50000); 
-         if (!globalTournaments.includes('ALL')) q = q.in('game_type', globalTournaments);
+         let q = supabase.from(viewName).select('*');
+         if (!globalTournaments.includes('ALL')) {
+             // Traduz [CBLOL] -> ['CBLOL Split 1 2026', 'CBLOL Split 2 2026', ...]
+             const rawTypesToFetch = globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
+             q = q.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
+         }
          if (globalSplit !== 'ALL') q = q.eq('split', globalSplit);
          return q;
       };
@@ -263,7 +319,7 @@ export default function MetaWarRoom() {
       setLoading(false);
     }
     fetchData();
-  }, [globalTournaments, globalSplit]);
+  }, [globalTournaments, globalSplit, isMapLoaded, scopeToRawMap]);
 
   const filteredTiers = useMemo(() => {
     const target = normalizeRole(activeLane);
@@ -622,7 +678,6 @@ export default function MetaWarRoom() {
      };
   }).filter(Boolean).sort((a: any, b: any) => b.win_rate - a.win_rate);
 
-  // A TELA DE CARREGAMENTO FICA AQUI!
   if (loading && data.tiers.length === 0) return (
     <div className="flex flex-col items-center justify-center h-[80vh] gap-4">
       <div className="w-10 h-10 border-4 border-zinc-800 border-t-blue-500 rounded-full animate-spin"></div>

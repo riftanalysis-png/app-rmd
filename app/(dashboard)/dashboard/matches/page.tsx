@@ -6,6 +6,39 @@ import Link from 'next/link';
 
 const DDRAGON_VERSION = '16.5.1';
 
+// --- CLASSIFICADOR DE CAMPEONATOS (ADAPTAÇÃO AO NOVO ETL) ---
+// Transforma "LCK Challengers 2025" -> "LCK CHALLENGERS" para o filtro do dropdown funcionar
+function normalizeTournamentScope(rawName: string | null): string {
+  const name = String(rawName || '').toUpperCase();
+  if (name.includes('SCRIM')) return 'SCRIM';
+  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
+  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
+  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
+  
+  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
+  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
+  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
+  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+
+  if (name.includes('CBLOL')) return 'CBLOL';
+  if (name.includes('LCK')) return 'LCK';
+  if (name.includes('LCS')) return 'LCS';
+  if (name.includes('LEC')) return 'LEC';
+  if (name.includes('LPL')) return 'LPL';
+
+  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
+  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
+  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
+  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
+  if (name.includes('FIRST STAND')) return 'FIRST STAND';
+  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
+  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+
+  return 'OUTRO';
+}
+
 // --- TRITURADOR DE STRINGS ---
 function normalizeChampName(name: string | null): string {
   if (!name) return 'unknown';
@@ -82,8 +115,9 @@ export default function MatchesPage() {
         const map: Record<string, Set<string>> = {};
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
-            if (!map[d.game_type]) map[d.game_type] = new Set();
-            map[d.game_type].add(d.split);
+            const scope = normalizeTournamentScope(d.game_type);
+            if (!map[scope]) map[scope] = new Set();
+            map[scope].add(d.split);
           }
         });
         const finalMap: Record<string, string[]> = {};
@@ -138,10 +172,13 @@ export default function MatchesPage() {
         const enrichedData = viewRes.data.map(v => {
            const mId = v.match_id || v.id;
            const meta = matchMeta[mId] || {};
+           const finalGameType = meta.game_type || v.game_type;
+           
            return {
               ...v,
               game_start_time: meta.game_start_time,
-              game_type: meta.game_type || v.game_type,
+              game_type: finalGameType,
+              normalized_scope: normalizeTournamentScope(finalGameType),
               split: meta.split || v.split,
               series_id: meta.series_id || v.series_id
            };
@@ -219,12 +256,12 @@ export default function MatchesPage() {
 
   const filteredMatches = useMemo(() => {
     return matches.filter(m => {
-      const gameType = String(m.game_type || '').toUpperCase().trim();
-      const isScrim = gameType === 'SCRIM';
+      const scope = m.normalized_scope || 'OUTRO';
+      const isScrim = scope === 'SCRIM';
       
       if (matchType === 'SCRIM' && !isScrim) return false;
       if (matchType === 'OFICIAL' && isScrim) return false;
-      if (!isScrim && globalTournament !== 'ALL' && gameType !== globalTournament.toUpperCase()) return false;
+      if (!isScrim && globalTournament !== 'ALL' && scope !== globalTournament) return false;
       if (globalSplit !== 'ALL' && String(m.split || '').toUpperCase() !== globalSplit.toUpperCase()) return false;
 
       return true;
@@ -241,8 +278,7 @@ export default function MatchesPage() {
       const blueTag = m.blue_team_tag || m.blue_tag || 'BLU';
       const redTag = m.red_team_tag || m.red_tag || 'RED';
 
-      const gameType = String(m.game_type || '').toUpperCase().trim();
-      const isScrim = gameType === 'SCRIM';
+      const isScrim = m.normalized_scope === 'SCRIM';
       
       if (isScrim) {
         let dateRaw = 'unknown-date';
@@ -271,7 +307,7 @@ export default function MatchesPage() {
           id: sId,
           description: desc,
           isScrim: isScrim,
-          tournament: gameType,
+          tournament: m.game_type, // Salvamos o nome original do banco de dados na UI
           logicalDate: m.game_start_time, 
           games: [],
           teamA: { tag: blueTag, logo: m.blue_logo },
@@ -434,7 +470,7 @@ export default function MatchesPage() {
                    
                    <div className="flex flex-col w-full md:w-1/4">
                       <span className="text-[10px] text-zinc-500 font-mono font-bold tracking-widest uppercase">
-                         {series.isScrim ? 'TREINO / SCRIM' : (series.tournament ? series.tournament.replace(/_/g, ' ') : 'OFICIAL')}
+                         {series.isScrim ? 'TREINO / SCRIM' : (series.tournament ? series.tournament : 'OFICIAL')}
                       </span>
                       <span className="text-sm font-bold text-zinc-200 mt-0.5 truncate uppercase tracking-tight">{series.description}</span>
                    </div>
