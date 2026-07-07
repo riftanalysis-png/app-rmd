@@ -6,8 +6,7 @@ import Link from 'next/link';
 
 const DDRAGON_VERSION = '16.5.1';
 
-// --- CLASSIFICADOR DE CAMPEONATOS (ADAPTAÇÃO AO NOVO ETL) ---
-// Transforma "LCK Challengers 2025" -> "LCK CHALLENGERS" para o filtro do dropdown funcionar
+// --- CLASSIFICADOR DE CAMPEONATOS ---
 function normalizeTournamentScope(rawName: string | null): string {
   const name = String(rawName || '').toUpperCase();
   if (name.includes('SCRIM')) return 'SCRIM';
@@ -39,7 +38,6 @@ function normalizeTournamentScope(rawName: string | null): string {
   return 'OUTRO';
 }
 
-// --- TRITURADOR DE STRINGS ---
 function normalizeChampName(name: string | null): string {
   if (!name) return 'unknown';
   let n = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -49,7 +47,6 @@ function normalizeChampName(name: string | null): string {
   return n;
 }
 
-// --- IMAGENS E CORES ---
 function getChampionIconUrl(championName: string | null) {
   if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
     return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png';
@@ -97,27 +94,36 @@ export default function MatchesPage() {
   const [drafts, setDrafts] = useState<Record<string, any[]>>({});
   const [playerStats, setPlayerStats] = useState<Record<string, any[]>>({}); 
   const [globalBans, setGlobalBans] = useState<Record<string, number>>({}); 
-  const [teamsDict, setTeamsDict] = useState<Record<string, string>>({}); // Dicionário de Nomes de Times
+  const [teamsDict, setTeamsDict] = useState<Record<string, string>>({});
   const [loadingDrafts, setLoadingDrafts] = useState<string | null>(null);
 
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Estados de Filtro
+  // Estados de Filtro (Circuito Desafiante como Padrão)
   const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
-  const [globalTournament, setGlobalTournament] = useState("ALL");
+  const [globalTournament, setGlobalTournament] = useState("CIRCUITO DESAFIANTE");
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
 
+  // Paginação
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 20;
+
+  // Resetar página quando os filtros mudam
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [matchType, globalTournament, globalSplit]);
+
   useEffect(() => {
     async function loadSplitsMap() {
-      const { data } = await supabase.from('matches').select('game_type, split');
+      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
             const scope = normalizeTournamentScope(d.game_type);
             if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split);
+            map[scope].add(d.split.trim().toUpperCase());
           }
         });
         const finalMap: Record<string, string[]> = {};
@@ -147,42 +153,27 @@ export default function MatchesPage() {
     }
   }, [dynamicAvailableSplits, globalSplit]);
 
-
   async function fetchMatches() {
     try {
       setLoading(true);
       
-      const [viewRes, matchesRes, bansRes, teamsRes] = await Promise.all([
-        supabase.from('view_matches_with_teams').select('*').limit(50000),
-        supabase.from('matches').select('id, game_start_time, game_type, split, series_id').limit(50000),
-        supabase.from('view_champion_ban_stats').select('*').limit(200),
-        supabase.from('teams').select('acronym, name') // Buscando Nomes Reais
+      const [viewRes, bansRes, teamsRes] = await Promise.all([
+        supabase.from('bff_matches_history').select('*').limit(50000),
+        supabase.from('bff_matches_bans').select('*').limit(200),
+        supabase.from('bff_matches_teams').select('*') 
       ]);
 
       if (teamsRes.data) {
         const tDict: Record<string, string> = {};
-        teamsRes.data.forEach(t => tDict[t.acronym] = t.name || t.acronym);
+        teamsRes.data.forEach((t: any) => tDict[t.acronym] = t.name || t.acronym);
         setTeamsDict(tDict);
       }
       
-      if (viewRes.data && matchesRes.data) {
-        const matchMeta: Record<string, any> = {};
-        matchesRes.data.forEach(m => { matchMeta[m.id] = m; });
-
-        const enrichedData = viewRes.data.map(v => {
-           const mId = v.match_id || v.id;
-           const meta = matchMeta[mId] || {};
-           const finalGameType = meta.game_type || v.game_type;
-           
-           return {
-              ...v,
-              game_start_time: meta.game_start_time,
-              game_type: finalGameType,
-              normalized_scope: normalizeTournamentScope(finalGameType),
-              split: meta.split || v.split,
-              series_id: meta.series_id || v.series_id
-           };
-        });
+      if (viewRes.data) {
+        const enrichedData = viewRes.data.map((v: any) => ({
+           ...v,
+           normalized_scope: normalizeTournamentScope(v.game_type),
+        }));
 
         const sortedData = enrichedData.sort((a, b) => 
           getSafeTimestamp(b.game_start_time) - getSafeTimestamp(a.game_start_time)
@@ -191,9 +182,9 @@ export default function MatchesPage() {
         setMatches(sortedData);
 
         if (bansRes.data) {
-           const totalMatches = matchesRes.data.length || 1;
+           const totalMatches = viewRes.data.length || 1;
            const banMap: Record<string, number> = {};
-           bansRes.data.forEach(b => {
+           bansRes.data.forEach((b: any) => {
               const rate = (Number(b.total_bans) / totalMatches) * 100;
               banMap[normalizeChampName(b.champion)] = Number(rate.toFixed(1));
            });
@@ -216,14 +207,14 @@ export default function MatchesPage() {
 
       const [draftsResponse, statsResponse] = await Promise.all([
          supabase.from('match_drafts').select('*').in('match_id', missingIds).limit(10000),
-         supabase.from('player_stats_detailed').select('match_id, champion, summoner_name, lane_rating, impact_rating, conversion_rating, vision_rating').in('match_id', missingIds).limit(10000)
+         supabase.from('bff_matches_stats_expanded').select('*').in('match_id', missingIds).limit(10000)
       ]);
       
       if (draftsResponse.data) {
         setDrafts(prev => {
           const next = { ...prev };
           missingIds.forEach(id => {
-            next[id] = draftsResponse.data.filter(d => d.match_id === id).sort((a, b) => Number(a.sequence) - Number(b.sequence));
+            next[id] = draftsResponse.data.filter((d: any) => d.match_id === id).sort((a: any, b: any) => Number(a.sequence) - Number(b.sequence));
           });
           return next;
         });
@@ -233,7 +224,7 @@ export default function MatchesPage() {
          setPlayerStats(prev => {
             const next = { ...prev };
             missingIds.forEach(id => {
-               next[id] = statsResponse.data.filter(s => s.match_id === id);
+               next[id] = statsResponse.data.filter((s: any) => s.match_id === id);
             });
             return next;
          });
@@ -250,7 +241,7 @@ export default function MatchesPage() {
       setExpandedSeries(null);
     } else {
       setExpandedSeries(series.id);
-      fetchDraftsAndStatsForMatches(series.games.map((g: any) => g.id || g.match_id));
+      fetchDraftsAndStatsForMatches(series.games.map((g: any) => g.match_id));
     }
   };
 
@@ -299,7 +290,7 @@ export default function MatchesPage() {
         const dateBR = dateRaw !== 'unknown-date' ? dateRaw.split('-').reverse().join('/') : dateRaw;
         desc = `BLOCO DE SCRIMS - ${dateBR}`;
       } else {
-        sId = sId || `solo_${m.id || m.match_id}`;
+        sId = sId || `solo_${m.match_id}`;
       }
 
       if (!groups[sId]) {
@@ -307,7 +298,7 @@ export default function MatchesPage() {
           id: sId,
           description: desc,
           isScrim: isScrim,
-          tournament: m.game_type, // Salvamos o nome original do banco de dados na UI
+          tournament: m.game_type, 
           logicalDate: m.game_start_time, 
           games: [],
           teamA: { tag: blueTag, logo: m.blue_logo },
@@ -355,6 +346,14 @@ export default function MatchesPage() {
     };
   }, [groupedSeries, filteredMatches]);
 
+  // Recorte da paginação
+  const paginatedSeries = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return groupedSeries.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [groupedSeries, currentPage]);
+
+  const totalPages = Math.ceil(groupedSeries.length / ITEMS_PER_PAGE);
+
   const handleProcessAnalytics = async (match_id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setProcessingId(match_id);
@@ -373,7 +372,6 @@ export default function MatchesPage() {
   return (
     <div className="max-w-[1200px] mx-auto p-4 md:p-8 font-sans pb-20 relative">
       
-      {/* Sticky Header Integrado */}
       <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-10 pb-6 pt-4 border-b border-zinc-800/80 sticky top-0 bg-[#0a0a0a]/90 backdrop-blur-xl z-[999] rounded-b-xl shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5)] px-2 -mx-2">
         <div className="flex flex-col gap-5 w-full xl:w-auto">
           <div>
@@ -423,7 +421,7 @@ export default function MatchesPage() {
         </div>
       </header>
 
-      {groupedSeries.length === 0 && (
+      {paginatedSeries.length === 0 && (
          <div className="bg-[#18181b] border border-zinc-800/50 rounded-2xl p-20 flex flex-col items-center justify-center text-center shadow-sm">
            <h3 className="text-xl text-zinc-400 font-bold tracking-tight uppercase">Nenhum dado encontrado</h3>
            <p className="text-xs text-zinc-600 mt-2 max-w-md tracking-widest uppercase">Não há séries registradas para os filtros atuais. Verifique o Split ou Campeonato selecionado.</p>
@@ -431,7 +429,7 @@ export default function MatchesPage() {
       )}
 
       <div className="flex flex-col gap-3">
-        {groupedSeries.map((series: any) => {
+        {paginatedSeries.map((series: any) => {
           const isTeamAWin = series.scoreA > series.scoreB;
           const isTeamBWin = series.scoreB > series.scoreA;
           
@@ -455,7 +453,6 @@ export default function MatchesPage() {
              barTitle = `Red Side Dominante (${redSideWins} vitórias)`;
           }
 
-          // Pegamos os nomes reais pelo dicionário mapeado, ou o fallback
           const teamAName = teamsDict[series.teamA.tag] || series.teamA.tag;
           const teamBName = teamsDict[series.teamB.tag] || series.teamB.tag;
 
@@ -477,7 +474,6 @@ export default function MatchesPage() {
 
                    <div className="flex items-center gap-4 justify-center flex-1 min-w-0">
                       
-                      {/* === TEAM A HEADER === */}
                       <div className="flex items-center gap-4 justify-end flex-1 min-w-0">
                         <span className={`text-sm font-black uppercase truncate text-right ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`} title={teamAName}>
                           {teamAName}
@@ -489,14 +485,12 @@ export default function MatchesPage() {
                         )}
                       </div>
 
-                      {/* === SCORE === */}
                       <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900 rounded-md border border-zinc-800 shadow-inner shrink-0">
                         <span className={`text-xl font-black ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreA}</span>
                         <span className="text-zinc-600 text-xs font-bold">-</span>
                         <span className={`text-xl font-black ${isTeamBWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreB}</span>
                       </div>
 
-                      {/* === TEAM B HEADER === */}
                       <div className="flex items-center gap-4 justify-start flex-1 min-w-0">
                         {series.teamB.logo ? (
                           <img src={series.teamB.logo} className="w-12 h-12 object-contain shrink-0" alt="" />
@@ -532,32 +526,31 @@ export default function MatchesPage() {
                 </div>
               </div>
 
-              {/* DRAFTS EXPANDIDOS */}
               {expandedSeries === series.id && (
                 <div className="bg-zinc-950 border-t border-zinc-800 p-4 md:p-6 flex flex-col gap-4 shadow-inner">
                   {[...series.games]
                     .sort((a:any, b:any) => getSafeTimestamp(a.game_start_time) - getSafeTimestamp(b.game_start_time))
                     .map((game: any, idx: number) => {
                       
-                      const matchId = game.id || game.match_id;
+                      const matchId = game.match_id;
                       const gameDrafts = drafts[matchId] || [];
                       const gameStats = playerStats[matchId] || []; 
                       const gameNum = idx + 1;
                       
-                      const picksOnly = [...gameDrafts].filter(d => String(d.tipo).toUpperCase() === 'PICK').sort((a, b) => Number(a.sequence) - Number(b.sequence));
+                      const picksOnly = [...gameDrafts].filter(d => String(d.tipo || d.action_type).toUpperCase() === 'PICK').sort((a, b) => Number(a.sequence) - Number(b.sequence));
                       const firstPickSide = picksOnly.length > 0 ? picksOnly[0].side?.toLowerCase() : null;
                       const lastPickSide = firstPickSide === 'blue' ? 'red' : firstPickSide === 'red' ? 'blue' : null;
 
-                      const bluePicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
-                      const blueBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
-                      const redPicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
-                      const redBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
+                      const bluePicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo || d.action_type).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
+                      const blueBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'blue' && String(d.tipo || d.action_type).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
+                      const redPicks = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo || d.action_type).toUpperCase() === 'PICK').sort((a,b) => a.sequence - b.sequence);
+                      const redBans = gameDrafts.filter(d => d.side?.toLowerCase() === 'red' && String(d.tipo || d.action_type).toUpperCase() === 'BAN').sort((a,b) => a.sequence - b.sequence);
 
                       const rWin = String(game.winner_side || '').toLowerCase().trim();
                       const gameIsBlueWin = rWin === 'blue' || rWin === '100';
                       
-                      const gameBlueName = teamsDict[game.blue_team_tag || game.blue_tag] || game.blue_team_tag || game.blue_tag || 'BLUE TEAM';
-                      const gameRedName  = teamsDict[game.red_team_tag || game.red_tag]   || game.red_team_tag || game.red_tag   || 'RED TEAM';
+                      const gameBlueName = game.blue_name || teamsDict[game.blue_team_tag || game.blue_tag] || game.blue_team_tag || game.blue_tag || 'BLUE TEAM';
+                      const gameRedName  = game.red_name || teamsDict[game.red_team_tag || game.red_tag]   || game.red_team_tag || game.red_tag   || 'RED TEAM';
 
                       return (
                         <div key={matchId} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 relative shadow-sm">
@@ -625,7 +618,7 @@ export default function MatchesPage() {
                                   </div>
                                   <div className="flex gap-1.5 justify-start">
                                      {bluePicks.map((p, i) => {
-                                        const pStat = gameStats.find(s => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
+                                        const pStat = gameStats.find((s: any) => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
                                         const pName = pStat.summoner_name || 'UNKNOWN';
                                         const ratLane = Number(pStat.lane_rating || 0).toFixed(1);
                                         const ratImp = Number(pStat.impact_rating || 0).toFixed(1);
@@ -689,7 +682,7 @@ export default function MatchesPage() {
                                   </div>
                                   <div className="flex gap-1.5 justify-end">
                                      {redPicks.map((p, i) => {
-                                        const pStat = gameStats.find(s => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
+                                        const pStat = gameStats.find((s: any) => normalizeChampName(s.champion) === normalizeChampName(p.champion)) || {};
                                         const pName = pStat.summoner_name || 'UNKNOWN';
                                         const ratLane = Number(pStat.lane_rating || 0).toFixed(1);
                                         const ratImp = Number(pStat.impact_rating || 0).toFixed(1);
@@ -734,6 +727,32 @@ export default function MatchesPage() {
           );
         })}
       </div>
+
+      {/* Controles de Paginação */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-8">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-md text-[10px] font-bold text-zinc-400 uppercase tracking-widest hover:bg-zinc-800 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Anterior
+          </button>
+          
+          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest font-mono">
+            Página {currentPage} / {totalPages}
+          </span>
+          
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-md text-[10px] font-bold text-zinc-400 uppercase tracking-widest hover:bg-zinc-800 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Próxima
+          </button>
+        </div>
+      )}
+
     </div>
   );
 }

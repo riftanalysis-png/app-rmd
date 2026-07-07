@@ -17,7 +17,7 @@ export default function UsersAdminPage() {
     fetchUsers();
     const interval = setInterval(fetchUsers, 30000);
 
-    // HEARTBEAT DA LUZINHA VERDE ONLINE MANTIDO AQUI
+    // HEARTBEAT DA LUZINHA VERDE ONLINE
     const updateMyPresence = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
@@ -36,7 +36,6 @@ export default function UsersAdminPage() {
   async function fetchUsers() {
     const { data, error } = await supabase
       .from('profiles')
-      // Puxando o account_status novo do banco
       .select('id, full_name, role, is_approved, puuid, last_seen, account_status')
       .order('last_seen', { ascending: false });
 

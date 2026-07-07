@@ -169,7 +169,6 @@ export default function PlayersHubPage() {
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
   
-  // Dicionário que traduz o Filtro da UI -> Nome Real no Banco
   const [scopeToRawMap, setScopeToRawMap] = useState<Record<string, string[]>>({});
   const [isMapLoaded, setIsMapLoaded] = useState(false);
 
@@ -188,7 +187,6 @@ export default function PlayersHubPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState({ puuid: '', nickname: '', photo_url: '', primary_role: '' });
   
-  const [missionsRaw, setMissionsRaw] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
   const [statsDetailed, setStatsDetailed] = useState<any[]>([]);
   const [myTeamTag, setMyTeamTag] = useState('RMD');
@@ -197,7 +195,8 @@ export default function PlayersHubPage() {
   
   useEffect(() => {
     async function loadSplitsMap() {
-      const { data } = await supabase.from('matches').select('game_type, split');
+      // Usa a BFF View de Matches History para pegar os escopos reais
+      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
         const scopeMap: Record<string, Set<string>> = {};
@@ -207,7 +206,7 @@ export default function PlayersHubPage() {
             const scope = normalizeTournamentScope(d.game_type);
             
             if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split);
+            map[scope].add(d.split.trim().toUpperCase());
             
             if (!scopeMap[scope]) scopeMap[scope] = new Set();
             scopeMap[scope].add(d.game_type);
@@ -266,36 +265,54 @@ export default function PlayersHubPage() {
   async function fetchInitialData() {
     setLoading(true);
     
+    // Fallback safe para Squad Config 
     const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
     if (configData && configData.my_team_tag) setMyTeamTag(configData.my_team_tag.toUpperCase());
 
-    const { data: t } = await supabase.from('teams').select('*').order('acronym');
+    const { data: t } = await supabase.from('bff_matches_teams').select('*').order('acronym');
     
-    // Preparar os Raw Types Traduzidos
     const rawTypesToFetch = globalTournaments.includes('ALL') 
       ? [] 
       : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
 
-    let query = supabase.from('hub_players_roster').select('*');
+    let query = supabase.from('bff_hub_players_roster').select('*');
     if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
     const { data: p } = await query;
     
-    let banQuery = supabase.from('view_champion_ban_stats').select('*').limit(200);
+    let banQuery = supabase.from('bff_matches_bans').select('*').limit(200);
     if (!globalTournaments.includes('ALL')) banQuery = banQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') banQuery = banQuery.eq('split', globalSplit);
     
     const [bansRes, matchCountRes] = await Promise.all([
       banQuery,
-      supabase.from('matches').select('id', { count: 'exact', head: true })
+      supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true })
     ]);
 
     if (t && p) {
+      // --- DEDUPLICAÇÃO DE TIMES ---
+      const uniqueTeamsMap = new Map();
+      t.forEach((team: any) => {
+        const upperAcr = String(team.acronym || '').toUpperCase().trim();
+        if (!upperAcr) return;
+        
+        // Se a sigla ainda não existe no mapa, adiciona.
+        // Se já existe, mas a atual tem logo e a salva não tem, substitui.
+        if (!uniqueTeamsMap.has(upperAcr)) {
+          uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
+        } else if (team.logo_url && !uniqueTeamsMap.get(upperAcr).logo_url) {
+          uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
+        }
+      });
+      const allUniqueTeams = Array.from(uniqueTeamsMap.values());
+      // ---------------------------------------
+
       const groupedPlayersMap = new Map();
       p.forEach((curr: any) => {
+        const safeAcr = String(curr.team_acronym || '').toUpperCase().trim();
         if (!groupedPlayersMap.has(curr.puuid)) {
-          groupedPlayersMap.set(curr.puuid, { ...curr, count: 1 });
+          groupedPlayersMap.set(curr.puuid, { ...curr, team_acronym: safeAcr, count: 1 });
         } else {
           const acc = groupedPlayersMap.get(curr.puuid);
           const totalGames = acc.games_played + curr.games_played;
@@ -326,9 +343,12 @@ export default function PlayersHubPage() {
       setPlayers(aggregatedPlayers);
 
       const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
-      const filteredTeams = t.filter(team => activeTeamTags.has(team.acronym));
+      
+      // Filtrar usando a nossa lista limpa sem duplicatas
+      const filteredTeams = allUniqueTeams.filter((team: any) => activeTeamTags.has(team.acronym));
+      
       setTeams(filteredTeams);
-      setTeamsList(t);
+      setTeamsList(allUniqueTeams);
 
       setFilterTeam(prev => {
         if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS";
@@ -339,14 +359,14 @@ export default function PlayersHubPage() {
     if (bansRes.data) {
        const totalMatches = matchCountRes.count || 1;
        const banMap: Record<string, number> = {};
-       bansRes.data.forEach(b => {
+       bansRes.data.forEach((b: any) => {
           const rate = (Number(b.total_bans) / totalMatches) * 100;
           banMap[normalizeChampName(b.champion)] = Number(rate.toFixed(1));
        });
        setGlobalBans(banMap);
     }
 
-    const { data: sDetailed } = await supabase.from('player_stats_detailed').select('champion, team_acronym, lane').limit(20000);
+    const { data: sDetailed } = await supabase.from('core_player_stats').select('champion, team_tag, lane, role').limit(20000);
     if (sDetailed) setStatsDetailed(sDetailed);
 
     setLoading(false);
@@ -355,7 +375,7 @@ export default function PlayersHubPage() {
   async function fetchPerformanceData(team: string) {
     const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
 
-    let query = supabase.from('hub_players_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
+    let query = supabase.from('bff_hub_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
     if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
     if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
 
@@ -366,8 +386,8 @@ export default function PlayersHubPage() {
   async function fetchAnalysisData(team: string) {
     const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
 
-    let objQuery = supabase.from('hub_players_objectives').select('*').eq('team_acronym', team).limit(10000);
-    let draftQuery = supabase.from('hub_players_draft').select('*').eq('team_acronym', team).limit(10000);
+    let objQuery = supabase.from('bff_hub_objectives').select('*').eq('team_acronym', team).limit(10000);
+    let draftQuery = supabase.from('bff_hub_draft').select('*').eq('team_acronym', team).limit(10000);
 
     if (!globalTournaments.includes('ALL')) {
       objQuery = objQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
@@ -428,7 +448,7 @@ export default function PlayersHubPage() {
 
     while (fetchMore) {
       let wardsQuery = supabase
-        .from('hub_players_vision')
+        .from('bff_hub_vision')
         .select('*')
         .eq('team_acronym', team)
         .range(from, from + step - 1);
@@ -527,11 +547,11 @@ export default function PlayersHubPage() {
           records.forEach(r => {
              let rawRole = r.role || r.lane;
              if (!rawRole) {
-                const champStats = statsDetailed.find(s => 
+                const champStats = statsDetailed.find((s: any) => 
                    normalizeChampName(s.champion) === normalizeChampName(r.champion) && 
-                   String(s.team_acronym).toUpperCase() === myTeamTag
+                   String(s.team_tag).toUpperCase() === myTeamTag
                 );
-                if (champStats) rawRole = champStats.lane || champStats.role || champStats.primary_role;
+                if (champStats) rawRole = champStats.role || champStats.lane;
              }
              
              const rKey = normalizeRole(rawRole); 
@@ -615,11 +635,12 @@ export default function PlayersHubPage() {
     setSaving(true);
     
     try {
-      await supabase.from('players').update({ 
+      await supabase.from('players').upsert({ 
+        puuid: editForm.puuid,
         nickname: editForm.nickname, 
         photo_url: editForm.photo_url, 
         primary_role: editForm.primary_role 
-      }).eq('puuid', editForm.puuid);
+      });
 
       setIsEditModalOpen(false); 
       fetchInitialData();
@@ -629,7 +650,7 @@ export default function PlayersHubPage() {
   };
 
   const handleDeletePlayer = async (puuid: string) => {
-    if (!confirm("Confirmar exclusão definitiva do perfil do jogador? Isso apagará todos os vínculos dele.")) return;
+    if (!confirm("Remover as personalizações deste jogador? (Isso restaurará a foto e nome originais da API)")) return;
     
     await supabase.from('players').delete().eq('puuid', puuid); 
     setIsEditModalOpen(false); 
@@ -1001,7 +1022,7 @@ export default function PlayersHubPage() {
             </div>
 
             <div className="flex gap-3 pt-4 border-t border-zinc-800">
-              <button type="button" onClick={() => handleDeletePlayer(editForm.puuid)} className="px-5 py-3 bg-red-500/10 text-red-500 rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-red-500 hover:text-white transition-colors border border-red-500/20">Delete</button>
+              <button type="button" onClick={() => handleDeletePlayer(editForm.puuid)} className="px-5 py-3 bg-red-500/10 text-red-500 rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-red-500 hover:text-white transition-colors border border-red-500/20">Reset</button>
               <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-5 py-3 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 rounded-lg font-bold text-[10px] uppercase tracking-widest transition-colors border border-zinc-800 ml-auto">Cancel</button>
               <button type="submit" disabled={saving} className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold text-[10px] uppercase tracking-widest hover:bg-blue-500 transition-colors disabled:opacity-50">{saving ? "Saving..." : "Save"}</button>
             </div>
@@ -1250,7 +1271,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
       ]
     },
     {
-      label: "OFF-SEASON E TREINOS",
+      label: "OFF-SEASON",
       options: [
         { id: 'CBLOL CUP', label: 'CBLOL CUP' },
         { id: 'LCK CUP', label: 'LCK CUP' },
@@ -1285,7 +1306,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">ESCOPO DE ANÁLISE</label>
+      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">ESCOPO DE LIGA</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
         className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
@@ -1304,7 +1325,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
              <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
                 {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
              </div>
-             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
+             <span className="text-[10px] font-black uppercase tracking-widest">TODAS AS LIGAS</span>
           </button>
 
           <div className="overflow-y-auto custom-scrollbar">

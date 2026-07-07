@@ -1,13 +1,56 @@
 "use client";
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  ScatterChart, Scatter, ZAxis, Cell, AreaChart, Area, Legend, ComposedChart, Bar
+  BarChart, Bar
 } from 'recharts';
 
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
+
+// ==========================================
+// 1. ADICIONE ESTE BLOCO AQUI
+// ==========================================
+const BASE_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons";
+const BASE_ANNOUNCE_URL = "https://raw.communitydragon.org/latest/game/assets/ux/announcements";
+
+const OBJECTIVE_LABELS: Record<string, string> = {
+  'lvl1': '🔥 LEVEL 1 (0-1:59)',
+  'dragon1': 'Dragão 1', 'horde': 'Vastilarvas', 'dragon2': 'Dragão 2', 'riftherald': 'Arauto',
+  'dragon3': 'Dragão 3', 'dragon4': 'Dragão 4', 'BARON_NASHOR': 'Barão Nashor', 'dragon5': 'Ancião/D5'
+};
+
+const OBJECTIVE_ASSETS: Record<string, { icon: string, hover: string }> = {
+  'lvl1': { icon: `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/item/3340.png`, hover: '' },
+  'dragon1': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
+  'dragon2': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
+  'dragon3': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
+  'dragon4': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/dragon_circle.png` },
+  'dragon5': { icon: `${BASE_ICON_URL}/dragon.png`, hover: `${BASE_ANNOUNCE_URL}/elder_circle.png` },
+  'horde': { icon: `${BASE_ICON_URL}/grub.png`, hover: `${BASE_ANNOUNCE_URL}/sru_voidgrub_circle.png` },
+  'riftherald': { icon: `${BASE_ICON_URL}/riftherald.png`, hover: `${BASE_ANNOUNCE_URL}/sruriftherald_circle.png` },
+  'BARON_NASHOR': { icon: `${BASE_ICON_URL}/baron.png`, hover: `${BASE_ANNOUNCE_URL}/baron_circle.png` },
+};
+
+const ORDERED_OBJECTIVES = ['lvl1', 'dragon1', 'horde', 'dragon2', 'riftherald', 'dragon3', 'dragon4', 'BARON_NASHOR', 'dragon5'];
+
+function formatTime(decimal: number) {
+  if (isNaN(decimal) || decimal === null) return "00:00";
+  const mins = Math.floor(decimal);
+  const secs = Math.round((decimal - mins) * 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getScoreColor(score: any) {
+  const s = Number(score);
+  if (!s || s === 0) return "text-zinc-600";
+  if (s >= 90) return "text-purple-400 drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]"; 
+  if (s >= 80) return "text-blue-400 drop-shadow-[0_0_8px_rgba(59,130,246,0.5)]";     
+  if (s >= 70) return "text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]"; 
+  if (s >= 60) return "text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]";  
+  return "text-red-400 drop-shadow-[0_0_8px_rgba(248,113,113,0.5)]";                                 
+}
 
 // --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
 function normalizeTournamentScope(rawName: string | null): string {
@@ -104,6 +147,16 @@ const getObjectiveIcon = (key: string) => {
   return `${base}dragon_circle.png`; 
 };
 
+function getScoreColorText(score: any) {
+  const s = Number(score);
+  if (!s || s === 0) return "text-zinc-600";
+  if (s >= 90) return "text-purple-400"; 
+  if (s >= 80) return "text-blue-400";     
+  if (s >= 70) return "text-emerald-400"; 
+  if (s >= 60) return "text-amber-400";  
+  return "text-red-400";
+}
+
 interface SelectedChampProps { name: string; lane: string; }
 
 const MathSafe = (val: any) => Number(val) || 0;
@@ -123,7 +176,6 @@ export default function MetaWarRoom() {
   const [globalSplit, setGlobalSplit] = useState("ALL");
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
   
-  // Dicionário que traduz o Filtro da UI -> Nome Real no Banco
   const [scopeToRawMap, setScopeToRawMap] = useState<Record<string, string[]>>({});
   const [isMapLoaded, setIsMapLoaded] = useState(false);
 
@@ -135,10 +187,9 @@ export default function MetaWarRoom() {
   const [activeLane, setActiveLane] = useState<string>('ALL');
   const [minGames, setMinGames] = useState<number>(5);
 
-  // Carrega mapeamento de Splits válidos e Nomes Reais de Torneios
   useEffect(() => {
     async function loadSplitsMap() {
-      const { data } = await supabase.from('matches').select('game_type, split');
+      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
         const scopeMap: Record<string, Set<string>> = {};
@@ -147,11 +198,9 @@ export default function MetaWarRoom() {
           if (d.game_type && d.split) {
             const scope = normalizeTournamentScope(d.game_type);
             
-            // Mapeia splits dinâmicos
             if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split);
+            map[scope].add(d.split.trim().toUpperCase());
 
-            // Relaciona a UI (ex: CBLOL) com os nomes reais (ex: CBLOL Split 1 2026)
             if (!scopeMap[scope]) scopeMap[scope] = new Set();
             scopeMap[scope].add(d.game_type);
           }
@@ -165,12 +214,11 @@ export default function MetaWarRoom() {
         for (const k in scopeMap) finalScopeMap[k] = Array.from(scopeMap[k]);
         setScopeToRawMap(finalScopeMap);
       }
-      setIsMapLoaded(true); // Libera o download dos dados pesados
+      setIsMapLoaded(true); 
     }
     loadSplitsMap();
   }, []);
 
-  // Recálculo Inteligente dos Splits
   const dynamicAvailableSplits = useMemo(() => {
     if (globalTournaments.includes('ALL')) {
       return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
@@ -185,7 +233,6 @@ export default function MetaWarRoom() {
     return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   }, [globalTournaments, validSplitsMap]);
 
-  // Auto-Reset de Split
   useEffect(() => {
     if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
       setGlobalSplit('ALL');
@@ -193,7 +240,7 @@ export default function MetaWarRoom() {
   }, [dynamicAvailableSplits, globalSplit]);
 
   useEffect(() => {
-    if (!isMapLoaded) return; // Aguarda a tradução de escopos estar pronta
+    if (!isMapLoaded) return; 
 
     async function fetchData() {
       setLoading(true);
@@ -201,7 +248,6 @@ export default function MetaWarRoom() {
       const buildQuery = (viewName: string) => {
          let q = supabase.from(viewName).select('*');
          if (!globalTournaments.includes('ALL')) {
-             // Traduz [CBLOL] -> ['CBLOL Split 1 2026', 'CBLOL Split 2 2026', ...]
              const rawTypesToFetch = globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
              q = q.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
          }
@@ -209,15 +255,17 @@ export default function MetaWarRoom() {
          return q;
       };
 
-      const [t, m, d, b, s, gobj, gold] = await Promise.all([
-        buildQuery('view_champion_tier_list_by_lane').order('power_score', { ascending: false }),
-        buildQuery('view_champion_matchups_detailed'),
-        buildQuery('view_meta_global_draft'),
-        buildQuery('view_champion_ban_stats'),
-        buildQuery('view_champion_synergies'),
-        buildQuery('view_global_objective_impact'),
+      const [t, m, d, b, s, gobj, goldRes] = await Promise.all([
+        buildQuery('bff_meta_tier_list').order('power_score', { ascending: false }),
+        buildQuery('bff_meta_matchups'),
+        buildQuery('bff_meta_draft'),
+        buildQuery('bff_meta_bans'),
+        buildQuery('bff_meta_synergies'),
+        buildQuery('bff_meta_objectives'),
         supabase.from('objective_gold_efficiency').select('*') 
       ]);
+
+      const goldData = goldRes?.data || [];
 
       const aggTiers = Array.from((t.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
@@ -296,7 +344,8 @@ export default function MetaWarRoom() {
       const aggObjectives = Array.from((gobj.data || []).reduce((acc, curr) => {
           const type = String(curr.objective_type || '').trim().toUpperCase();
           const sub = String(curr.subtype || '').trim().toUpperCase();
-          const key = `${type}_${sub}`; 
+          const rawSub = String(curr.raw_subtype || '').trim().toUpperCase();
+          const key = `${type}_${sub}_${rawSub}`; 
           
           if (!acc.has(key)) acc.set(key, { ...curr, win_rate: MathSafe(curr.win_rate), times_achieved: MathSafe(curr.times_achieved) });
           else {
@@ -314,7 +363,7 @@ export default function MetaWarRoom() {
         bans: aggBans as any, 
         synergies: aggSynergies as any, 
         globalObjectives: aggObjectives as any,
-        goldStats: gold.data || []
+        goldStats: goldData as any
       });
       setLoading(false);
     }
@@ -499,6 +548,9 @@ export default function MetaWarRoom() {
       { key: 'grubs_1', terms: ['grub', 'larva', 'horde'], stacks: 1 },
       { key: 'grubs_2', terms: ['grub', 'larva', 'horde'], stacks: 2 },
       { key: 'grubs_3', terms: ['grub', 'larva', 'horde'], stacks: 3 },
+      { key: 'grubs_4', terms: ['grub', 'larva', 'horde'], stacks: 4 },
+      { key: 'grubs_5', terms: ['grub', 'larva', 'horde'], stacks: 5 },
+      { key: 'grubs_6', terms: ['grub', 'larva', 'horde'], stacks: 6 },
       { key: 'fire', terms: ['infernal', 'fire', 'fogo'], stacks: 1 },
       { key: 'water', terms: ['ocean', 'water', 'água'], stacks: 1 },
       { key: 'earth', terms: ['mountain', 'earth', 'terra'], stacks: 1 },
@@ -527,7 +579,7 @@ export default function MetaWarRoom() {
   const getObjSafe = (keywords: string[], excludeKeyword?: string) => {
     const obj = data.globalObjectives.find((row: any) => {
        const t = String(row.objective_type || row.objective_name || '').toLowerCase();
-       const s = String(row.subtype || row.icon_key || '').toLowerCase();
+       const s = String(row.raw_subtype || row.subtype || '').toLowerCase();
        const combined = `${t} ${s}`;
        
        if (excludeKeyword && combined.includes(excludeKeyword.toLowerCase())) return false;
@@ -566,16 +618,16 @@ export default function MetaWarRoom() {
   const firstDragonData = fDrakeBase ? {
      ...fDrakeBase,
      elements: [
-       { key: 'fire', label: 'Fogo', color: 'text-red-400' },
-       { key: 'water', label: 'Água', color: 'text-blue-400' },
-       { key: 'earth', label: 'Montanha', color: 'text-amber-600' },
-       { key: 'air', label: 'Nuvens', color: 'text-cyan-200' },
-       { key: 'hextech', label: 'Hextech', color: 'text-purple-400' },
-       { key: 'chemtech', label: 'Quimtec', color: 'text-emerald-400' }
+       { key: 'fire', terms: ['fire', 'infernal'], label: 'Fogo', color: 'text-red-400' },
+       { key: 'water', terms: ['water', 'ocean'], label: 'Água', color: 'text-blue-400' },
+       { key: 'earth', terms: ['earth', 'mountain'], label: 'Montanha', color: 'text-amber-600' },
+       { key: 'air', terms: ['air', 'cloud'], label: 'Nuvens', color: 'text-cyan-200' },
+       { key: 'hextech', terms: ['hextech'], label: 'Hextech', color: 'text-purple-400' },
+       { key: 'chemtech', terms: ['chemtech', 'quimtec'], label: 'Quimtec', color: 'text-emerald-400' }
      ].map(el => {
         const obj = data.globalObjectives.find((row: any) => 
            String(row.objective_type).toUpperCase() === 'FIRST_DRAGON_ELEMENT' &&
-           (String(row.subtype).toLowerCase().includes(el.key) || String(row.subtype).toLowerCase().includes(el.label.toLowerCase()) || String(row.subtype).toLowerCase().includes('infernal') || String(row.subtype).toLowerCase().includes('ocean'))
+           el.terms.some(term => String(row.raw_subtype || row.subtype).toLowerCase().includes(term))
         );
         if (!obj) return null;
         return { ...el, win_rate: MathSafe(obj.win_rate), count: MathSafe(obj.times_achieved) };
@@ -598,7 +650,7 @@ export default function MetaWarRoom() {
   const getGenericSoul = () => {
      const allSouls = data.globalObjectives.filter((row: any) => {
          const t = String(row.objective_type || row.objective_name || '').toLowerCase();
-         const s = String(row.subtype || row.icon_key || '').toLowerCase();
+         const s = String(row.raw_subtype || row.subtype || '').toLowerCase();
          return t.includes('soul') || s.includes('soul') || t.includes('alma') || s.includes('alma');
      });
      
@@ -631,7 +683,7 @@ export default function MetaWarRoom() {
      
      const baseDrake = data.globalObjectives.find((row: any) => {
         const t = String(row.objective_type || row.objective_name || '').toLowerCase();
-        const s = String(row.subtype || row.icon_key || '').toLowerCase();
+        const s = String(row.raw_subtype || row.subtype || '').toLowerCase();
         const combined = `${t} ${s}`;
         
         const isDragon = combined.includes('dragon') || combined.includes('dragão');
@@ -645,7 +697,7 @@ export default function MetaWarRoom() {
      
      const soulDrakObj = data.globalObjectives.find((row: any) => {
         const t = String(row.objective_type || row.objective_name || '').toLowerCase();
-        const s = String(row.subtype || row.icon_key || '').toLowerCase();
+        const s = String(row.raw_subtype || row.subtype || '').toLowerCase();
         const combined = `${t} ${s}`;
         
         const isSoul = combined.includes('soul') || combined.includes('alma');
@@ -1394,7 +1446,10 @@ function MatchupStat({ label, val, isDiff = false, color = "text-white", isBadHi
   );
 }
 
-// NOVO SELETOR MÚLTIPLO PARA CAMPEONATOS
+// -----------------------------------------------------
+// COMPONENTES DOS DROPDOWNS INTELIGENTES
+// -----------------------------------------------------
+
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1473,7 +1528,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
 
   return (
     <div className="relative flex flex-col" ref={ref}>
-      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
+      <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">ESCOPO DE LIGA</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
         className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
@@ -1492,7 +1547,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
              <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
                 {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
              </div>
-             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
+             <span className="text-[10px] font-black uppercase tracking-widest">TODAS AS LIGAS</span>
           </button>
 
           <div className="overflow-y-auto custom-scrollbar">
@@ -1538,11 +1593,11 @@ function CockpitDropdown({ label, value, onChange, options, isHighlighted = fals
   const currentLabel = options.find((o:any) => o.id === value)?.label || value;
 
   return (
-    <div className="relative flex flex-col z-[9999]" ref={ref}>
+    <div className="relative flex flex-col" ref={ref}>
       {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className={`bg-zinc-900 border px-4 py-2.5 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
       >
         <span className="flex-1 text-left truncate">{currentLabel}</span>
         <span className={`text-[8px] transition-transform ${isOpen ? (isHighlighted ? 'rotate-180 text-amber-500' : 'rotate-180 text-blue-500') : 'text-zinc-500'}`}>▼</span>
@@ -1592,3 +1647,154 @@ function SplitSelector({ value, onChange, availableSplits }: { value: string, on
     />
   );
 }
+
+function ObjectiveSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); 
+    return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[140px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
+        <img src={OBJECTIVE_ASSETS[value]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
+        <span className="flex-1 text-left">{OBJECTIVE_LABELS[value]}</span>
+        <span className="text-[8px] text-zinc-500">▼</span>
+      </button>
+      {isOpen && (
+        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[140px]">
+          {ORDERED_OBJECTIVES.map(objKey => (
+            <button key={objKey} onClick={() => { onChange(objKey); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === objKey ? 'bg-zinc-800' : ''}`}>
+              <img src={OBJECTIVE_ASSETS[objKey]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
+              <span className={`text-[9px] font-bold uppercase ${value === objKey ? 'text-blue-400' : 'text-zinc-400'}`}>{OBJECTIVE_LABELS[objKey]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SideSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
+    document.addEventListener("mousedown", click); return () => document.removeEventListener("mousedown", click);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[100px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
+        <div className={`w-1.5 h-2.5 rounded-sm ${value === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+        <span className="flex-1 text-left">{value} Side</span>
+        <span className="text-[8px] text-zinc-500">▼</span>
+      </button>
+      {isOpen && (
+        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[100px]">
+          {['Blue', 'Red'].map(side => (
+            <button key={side} onClick={() => { onChange(side); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === side ? 'bg-zinc-800' : ''}`}>
+              <div className={`w-1.5 h-2.5 rounded-sm ${side === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+              <span className={`text-[9px] font-bold uppercase ${value === side ? 'text-white' : 'text-zinc-400'}`}>{side} Side</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- GRÁFICOS (TOOLTIPS & TICKS FLAT) ---
+
+const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
+  const match = teamChartData?.find((d: any) => d.match_id === payload.value);
+  return (
+    <g transform={`translate(${x},${y})`}>
+      {match?.opponent_logo ? (
+        <image href={match.opponent_logo} x={-8} y={5} width="16" height="16" />
+      ) : (
+        <text x={0} y={15} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {String(match?.opponent_acronym || '?').toUpperCase()}</text>
+      )}
+    </g>
+  );
+};
+
+const CustomChartTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
+        <div className="space-y-1.5">
+          {payload.map((p: any) => (
+            <div key={p.dataKey} className="flex justify-between items-center gap-3 text-[9px] font-bold text-white">
+              <div className="flex items-center gap-1.5">
+                 <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: p.color }} />
+                 <span className="text-zinc-400">{p.name}</span>
+              </div>
+              <span className="font-black">{p.value.toFixed(1)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomPieTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
+        <div className="flex items-center gap-2 mb-2 border-b border-zinc-800 pb-2">
+           <div className={`w-1 h-3 rounded-sm ${data.name === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
+           <span className="text-white text-[9px] font-bold">{data.name} PERFORMANCE</span>
+        </div>
+        <div className="space-y-1.5 font-bold">
+           {Object.keys(data.ratings).map(key => (
+             <div key={key} className="flex justify-between items-center text-[9px]">
+               <span className="text-zinc-500">{key}</span>
+               <span className={`${getScoreColor(data.ratings[key])}`}>{data.ratings[key].toFixed(1)}</span>
+             </div>
+           ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomObjectiveTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length && payload[0].payload.window) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-lg shadow-xl uppercase min-w-[180px]">
+        <div className="flex items-center gap-3 mb-3 border-b border-zinc-800 pb-2">
+          <img src={data.hoverImg} className="w-8 h-8 object-contain" alt="" />
+          <div>
+             <p className="text-white text-[10px] font-black">{data.name}</p>
+             <span className="text-[7px] text-zinc-500 font-bold tracking-widest">TIMING DATA</span>
+          </div>
+        </div>
+        <div className="space-y-2 font-bold">
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">MÉDIA TÁTICA</span><span className="text-blue-400 text-[10px] font-black">{formatTime(data.avg)}</span></div>
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÍNIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[0])}</span></div>
+           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÁXIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[1])}</span></div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const ObjectiveAxisTick = ({ x, y, payload }: any) => {
+  const assets = OBJECTIVE_ASSETS[payload.value];
+  return (
+    <g transform={`translate(${x},${y})`}>
+      {assets && <image href={assets.icon} x={-8} y={5} width="16" height="16" />}
+    </g>
+  );
+};

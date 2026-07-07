@@ -14,6 +14,8 @@ export default function DashboardLayout({
   const [isLoading, setIsLoading] = useState(true);
   const [userName, setUserName] = useState("");
   const [userRole, setUserRole] = useState("");
+  const [userPhoto, setUserPhoto] = useState("");
+  const [teamLogo, setTeamLogo] = useState("https://static.wikia.nocookie.net/lolesports_gamepedia_en/images/9/90/RMD_Gaminglogo_square.png");
   
   // Estados de Controle da Sidebar e Telas
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -30,20 +32,22 @@ export default function DashboardLayout({
   }, []);
 
   useEffect(() => {
-    async function fetchActiveUser() {
+    async function fetchAppLayoutData() {
       try {
+        // 1. Busca os dados do usuário autenticado
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session?.user) {
           const { data: profile } = await supabase
             .from('profiles')
-            .select('full_name, role')
+            .select('full_name, role, photo_url')
             .eq('id', session.user.id)
             .single();
             
           if (profile) {
             setUserName(profile.full_name || "JOGADOR DESCONHECIDO");
             setUserRole(profile.role || "JOGADOR");
+            setUserPhoto(profile.photo_url || "");
           } else {
             setUserName(session.user.user_metadata?.full_name || "JOGADOR DESCONHECIDO");
             setUserRole(session.user.user_metadata?.role || "JOGADOR");
@@ -52,14 +56,24 @@ export default function DashboardLayout({
           setUserName("MODO DESENVOLVEDOR");
           setUserRole("ANALISTA");
         }
+
+        // 2. Busca a logo do time dinamicamente com base nas configurações
+        const { data: config } = await supabase.from('squad_config').select('my_team_tag').limit(1).maybeSingle();
+        if (config && config.my_team_tag) {
+           const { data: teamData } = await supabase.from('teams').select('logo_url').eq('acronym', config.my_team_tag.toUpperCase()).maybeSingle();
+           if (teamData && teamData.logo_url) {
+              setTeamLogo(teamData.logo_url);
+           }
+        }
+
       } catch (error) {
-        console.error("Erro ao buscar usuário:", error);
+        console.error("Erro ao carregar dados da Sidebar:", error);
       } finally {
         setIsLoading(false);
       }
     }
     
-    fetchActiveUser();
+    fetchAppLayoutData();
   }, []);
 
   // Controla o clique salvando a escolha no cache
@@ -77,7 +91,7 @@ export default function DashboardLayout({
   }, [pathname]);
 
   return (
-    <div className="flex w-full h-screen p-2 gap-2 bg-zinc-950 overflow-hidden relative">
+    <div className="flex w-full h-screen p-2 gap-2 bg-zinc-950 overflow-hidden relative font-sans">
       
       {/* SCRIPT OVERLAY: Fundo escuro quando o menu mobile está aberto */}
       {isMobileMenuOpen && (
@@ -109,11 +123,11 @@ export default function DashboardLayout({
         <nav className="bg-zinc-900 border border-zinc-800/50 rounded-xl p-4 flex flex-col gap-4 relative shadow-sm shrink-0 items-center w-full">
           
           <Link href="/dashboard" className="flex items-center justify-center mb-4 mt-2 relative group cursor-pointer w-full">
-            <div className={`absolute bg-purple-600/10 rounded-full blur-2xl group-hover:bg-purple-500/20 transition-all duration-500 ${(isSidebarOpen || isMobileMenuOpen) ? 'w-24 h-24' : 'w-12 h-12'}`}></div>
+            <div className={`absolute bg-blue-600/10 rounded-full blur-2xl group-hover:bg-blue-500/20 transition-all duration-500 ${(isSidebarOpen || isMobileMenuOpen) ? 'w-24 h-24' : 'w-12 h-12'}`}></div>
             <img 
-              src="https://static.wikia.nocookie.net/lolesports_gamepedia_en/images/9/90/RMD_Gaminglogo_square.png" 
-              alt="RMD Gaming Logo" 
-              className={`object-contain shrink-0 relative z-10 drop-shadow-[0_0_15px_rgba(168,85,247,0.2)] group-hover:scale-105 transition-all duration-500 ${(isSidebarOpen || isMobileMenuOpen) ? 'w-20 h-20 xl:w-24 xl:h-24' : 'w-10 h-10'}`}
+              src={teamLogo} 
+              alt="Team Logo" 
+              className={`object-contain shrink-0 relative z-10 drop-shadow-[0_0_15px_rgba(59,130,246,0.2)] group-hover:scale-105 transition-all duration-500 ${(isSidebarOpen || isMobileMenuOpen) ? 'w-20 h-20 xl:w-24 xl:h-24' : 'w-10 h-10'}`}
             />
           </Link>
 
@@ -130,15 +144,15 @@ export default function DashboardLayout({
               const showText = isSidebarOpen || isMobileMenuOpen;
               return (
                 <li key={item.href} className="relative">
-                  {/* TRILHO INDICADOR ESTILO DISCORD */}
-                  <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-purple-500 rounded-r-md transition-all duration-300 ${isActive ? 'h-3/4 opacity-100' : 'h-0 opacity-0 group-hover:h-1/2 group-hover:opacity-50'}`}></div>
+                  {/* TRILHO INDICADOR */}
+                  <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-blue-500 rounded-r-md transition-all duration-300 ${isActive ? 'h-3/4 opacity-100' : 'h-0 opacity-0 group-hover:h-1/2 group-hover:opacity-50'}`}></div>
                   
                   <Link 
                     href={item.href} 
                     title={!showText ? item.label : undefined} 
                     className={`flex items-center rounded-lg transition-all group ${showText ? 'px-4 py-3 justify-start' : 'p-3 justify-center'} ${isActive ? 'bg-zinc-800/80 text-white shadow-sm' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40'}`}
                   >
-                    <item.icon className={`w-5 h-5 shrink-0 group-hover:scale-105 transition-transform ${isActive ? 'text-purple-400' : ''}`} />
+                    <item.icon className={`w-5 h-5 shrink-0 group-hover:scale-105 transition-transform ${isActive ? 'text-blue-400' : ''}`} />
                     <span className={`font-bold text-xs tracking-widest uppercase overflow-hidden whitespace-nowrap transition-all duration-300 ${showText ? 'w-auto opacity-100 ml-4' : 'w-0 opacity-0 ml-0'}`}>{item.label}</span>
                   </Link>
                 </li>
@@ -202,16 +216,29 @@ export default function DashboardLayout({
               </div>
             ) : (
               (isSidebarOpen || isMobileMenuOpen) ? (
-                <div className="animate-fade-in-up overflow-hidden">
-                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-black truncate">{userName}</p>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-[0_0_5px_rgba(168,85,247,0.5)] shrink-0"></span>
-                    <p className="text-[9px] text-purple-400 font-bold uppercase tracking-wider truncate">{userRole}</p>
+                <div className="animate-fade-in-up overflow-hidden flex items-center gap-3 w-full">
+                  {userPhoto ? (
+                     <img src={userPhoto} alt={userName} className="w-9 h-9 rounded-lg object-cover border border-zinc-700 shrink-0" />
+                  ) : (
+                     <div className="w-9 h-9 shrink-0 rounded-lg bg-blue-500/10 flex items-center justify-center border border-blue-500/30">
+                        <span className="text-xs font-black text-blue-400">{userName.charAt(0).toUpperCase()}</span>
+                     </div>
+                  )}
+                  <div className="flex flex-col min-w-0">
+                     <p className="text-[10px] text-zinc-300 uppercase tracking-widest font-black truncate">{userName}</p>
+                     <div className="flex items-center gap-1.5 mt-0.5">
+                       <span className="w-1 h-1 rounded-full bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.5)] shrink-0"></span>
+                       <p className="text-[8px] text-blue-400 font-bold uppercase tracking-wider truncate">{userRole}</p>
+                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="w-10 h-10 shrink-0 rounded-xl bg-purple-500/10 flex items-center justify-center border border-purple-500/30 animate-fade-in-up group relative cursor-help">
-                  <span className="text-xs font-black text-purple-400">{userName.charAt(0).toUpperCase()}</span>
+                <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/30 animate-fade-in-up group relative cursor-help overflow-hidden">
+                  {userPhoto ? (
+                     <img src={userPhoto} alt={userName} className="w-full h-full object-cover" />
+                  ) : (
+                     <span className="text-xs font-black text-blue-400">{userName.charAt(0).toUpperCase()}</span>
+                  )}
                   <div className="absolute left-full ml-3 bg-zinc-900 text-white text-[10px] font-bold px-3 py-1.5 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl border border-zinc-700">
                     {userName} ({userRole})
                   </div>
@@ -237,18 +264,22 @@ export default function DashboardLayout({
             <MenuIcon className="w-6 h-6" />
           </button>
           <img 
-            src="https://static.wikia.nocookie.net/lolesports_gamepedia_en/images/9/90/RMD_Gaminglogo_square.png" 
+            src={teamLogo} 
             alt="Logo" 
             className="w-8 h-8 object-contain"
           />
-          <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center border border-purple-500/20">
-            <span className="text-xs font-black text-purple-400">{userName.charAt(0).toUpperCase()}</span>
+          <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center border border-blue-500/20 overflow-hidden">
+             {userPhoto ? (
+                <img src={userPhoto} alt={userName} className="w-full h-full object-cover" />
+             ) : (
+                <span className="text-xs font-black text-blue-400">{userName.charAt(0).toUpperCase()}</span>
+             )}
           </div>
         </header>
 
         {/* CONTAINER DO DASHBOARD */}
         <main className="flex-1 bg-zinc-950 rounded-xl overflow-y-auto custom-scrollbar relative border border-zinc-800/50 z-10 shadow-lg h-full">
-          <div className="absolute inset-0 bg-gradient-to-b from-purple-900/5 to-transparent pointer-events-none h-64 z-0"></div>
+          <div className="absolute inset-0 bg-gradient-to-b from-blue-900/5 to-transparent pointer-events-none h-64 z-0"></div>
           <div className="relative z-10 w-full min-h-full">
              {children}
           </div>
@@ -268,13 +299,13 @@ function SidebarItem({ title, subtitle, isAction = false, href, isActive = false
     <div className={`relative flex items-center p-2 rounded-lg cursor-pointer transition-all group ${isActive ? 'bg-zinc-800/80 shadow-sm' : 'hover:bg-zinc-800/40'} ${isOpen ? 'gap-3 justify-start' : 'justify-center'}`} title={!isOpen ? title : undefined}>
       
       {/* TRILHO INDICADOR DAS ARRUMADORES */}
-      <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-purple-500 rounded-r-md transition-all duration-300 ${isActive ? 'h-3/4 opacity-100' : 'h-0 opacity-0 group-hover:h-1/2 group-hover:opacity-50'}`}></div>
+      <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-blue-500 rounded-r-md transition-all duration-300 ${isActive ? 'h-3/4 opacity-100' : 'h-0 opacity-0 group-hover:h-1/2 group-hover:opacity-50'}`}></div>
 
-      <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 border transition-colors ${isActive ? 'bg-zinc-900 border-purple-500/50' : 'bg-zinc-900 border-zinc-800'}`}>
-        <Icon className={`w-4 h-4 transition-colors ${isActive ? 'text-purple-400' : isAction ? 'text-zinc-500 group-hover:text-purple-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
+      <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 border transition-colors ${isActive ? 'bg-zinc-900 border-blue-500/50' : 'bg-zinc-900 border-zinc-800'}`}>
+        <Icon className={`w-4 h-4 transition-colors ${isActive ? 'text-blue-400' : isAction ? 'text-zinc-500 group-hover:text-blue-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
       </div>
       <div className={`flex flex-col truncate transition-all duration-300 overflow-hidden whitespace-nowrap ${isOpen ? 'w-auto opacity-100 ml-1' : 'w-0 opacity-0 ml-0'}`}>
-        <p className={`text-[10px] font-black uppercase truncate transition-colors tracking-wide ${isActive ? 'text-white' : isAction ? 'text-zinc-400 group-hover:text-purple-300' : 'text-zinc-400 group-hover:text-white'}`}>{title}</p>
+        <p className={`text-[10px] font-black uppercase truncate transition-colors tracking-wide ${isActive ? 'text-white' : isAction ? 'text-zinc-400 group-hover:text-blue-300' : 'text-zinc-400 group-hover:text-white'}`}>{title}</p>
         <p className="text-[8px] text-zinc-500 font-bold uppercase tracking-widest truncate mt-0.5">{subtitle}</p>
       </div>
     </div>

@@ -3,16 +3,25 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // Feedback Visual Integrado
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+  
+  const router = useRouter();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMsg('');
+    setSuccessMsg('');
 
     // Cria o usuário no sistema de Autenticação
     const { data, error } = await supabase.auth.signUp({
@@ -22,70 +31,110 @@ export default function RegisterPage() {
         data: {
           full_name: fullName,
         },
-        // Redireciona para o Login após confirmar (se houver confirmação de email)
+        // Redireciona para o Login após confirmar (se houver confirmação de email habilitada)
         emailRedirectTo: `${window.location.origin}/Login`,
       }
     });
 
     if (error) {
-      alert("Erro no cadastro: " + error.message);
+      setErrorMsg("Erro no cadastro: " + error.message);
+      setLoading(false);
     } else {
-      alert("Solicitação enviada! Agora você precisa ser aprovado pelo Analista no banco de dados.");
-      window.location.href = '/Login';
+      setSuccessMsg("Solicitação enviada! Redirecionando...");
+      // Redireciona suavemente após 2 segundos
+      setTimeout(() => {
+         router.push('/Login');
+      }, 2000);
     }
-    setLoading(false);
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-slate-900 text-white p-4">
-      <div className="p-8 bg-slate-800 rounded-lg shadow-xl w-full max-w-md border border-slate-700">
-        <h1 className="text-3xl font-bold mb-2 text-center text-blue-400">LoL Hub</h1>
-        <p className="text-slate-400 text-center mb-8 text-sm">Solicite seu acesso ao painel tático.</p>
+    <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 font-sans flex items-center justify-center p-4 relative overflow-hidden">
+      
+      {/* Background Ambiental de Fundo (Glow) */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-600/10 blur-[120px] rounded-full pointer-events-none"></div>
+
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+      `}} />
+
+      <div className="w-full max-w-md bg-[#121214] border border-zinc-800/80 rounded-[32px] p-8 md:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] relative animate-[fadeInUp_0.4s_cubic-bezier(0.16,1,0.3,1)_forwards]">
         
-        <form onSubmit={handleRegister} className="space-y-4">
+        {/* Barra superior de destaque */}
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-900 to-blue-500"></div>
+
+        <div className="text-center mb-10 mt-2">
+          <h1 className="text-4xl font-black text-white uppercase tracking-tight leading-none mb-2">
+            SCOUTING <span className="text-blue-500 drop-shadow-[0_0_15px_rgba(59,130,246,0.4)]">HUB</span>
+          </h1>
+          <p className="text-[10px] text-zinc-500 font-bold tracking-[0.2em] uppercase mt-3">
+            Solicitação de Credenciais
+          </p>
+        </div>
+
+        <form onSubmit={handleRegister} className="space-y-5 relative z-10">
+          
+          {/* Mensagens de Feedback */}
+          {errorMsg && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-[9px] font-black uppercase tracking-widest p-3.5 rounded-xl text-center shadow-inner">
+              {errorMsg}
+            </div>
+          )}
+          {successMsg && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] font-black uppercase tracking-widest p-3.5 rounded-xl text-center shadow-inner">
+              {successMsg}
+            </div>
+          )}
+
           <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Nome Completo</label>
+            <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Nome de Operativo</label>
             <input 
               required
               type="text" 
               placeholder="Ex: Pedro Silva"
-              className="w-full p-3 bg-slate-900 rounded border border-slate-700 focus:border-blue-500 outline-none transition text-white"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-white font-bold outline-none focus:border-blue-500 transition-colors shadow-inner uppercase text-xs"
               onChange={(e) => setFullName(e.target.value)}
             />
           </div>
+
           <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email</label>
+            <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">E-mail Operacional</label>
             <input 
               required
               type="email" 
-              placeholder="seu@email.com"
-              className="w-full p-3 bg-slate-900 rounded border border-slate-700 focus:border-blue-500 outline-none transition text-white"
+              placeholder="id@squad.com"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-white font-bold outline-none focus:border-blue-500 transition-colors shadow-inner uppercase text-xs"
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
+
           <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Senha</label>
+            <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Código de Segurança (Senha)</label>
             <input 
               required
               type="password" 
               placeholder="••••••••"
-              className="w-full p-3 bg-slate-900 rounded border border-slate-700 focus:border-blue-500 outline-none transition text-white"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-white font-bold outline-none focus:border-blue-500 transition-colors shadow-inner text-sm tracking-widest"
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
           
-          <button 
-            disabled={loading}
-            type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-500 p-3 rounded font-bold transition mt-4 disabled:opacity-50 text-white"
-          >
-            {loading ? "Enviando..." : "Criar Conta"}
-          </button>
+          <div className="pt-4">
+            <button 
+              disabled={loading || !!successMsg}
+              type="submit"
+              className="w-full px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-blue-500 transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0"
+            >
+              {loading ? "Processando Cadastro..." : "Solicitar Acesso"}
+            </button>
+          </div>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-500">
-          Já tem uma conta? <Link href="/Login" className="text-blue-400 hover:underline">Entrar</Link>
-        </p>
+        <div className="mt-8 text-center border-t border-zinc-800/60 pt-6">
+          <p className="text-[9px] font-bold text-zinc-500 tracking-widest uppercase">
+            Já possui acesso? <Link href="/Login" className="text-blue-400 hover:text-blue-300 transition-colors">Iniciar Sessão</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

@@ -66,6 +66,38 @@ const getCurrentSplit = () => {
   return { id: `OFF-SEASON ${year}`, start: `${year}-12-01`, end: `${year}-12-31` };
 };
 
+// --- CLASSIFICADOR DE CAMPEONATOS ---
+function normalizeTournamentScope(rawName: string | null): string {
+  const name = String(rawName || '').toUpperCase();
+  if (name.includes('SCRIM')) return 'SCRIM';
+  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
+  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
+  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
+  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
+  
+  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
+  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
+  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
+  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+
+  if (name.includes('CBLOL')) return 'CBLOL';
+  if (name.includes('LCK')) return 'LCK';
+  if (name.includes('LCS')) return 'LCS';
+  if (name.includes('LEC')) return 'LEC';
+  if (name.includes('LPL')) return 'LPL';
+
+  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
+  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
+  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
+  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
+  if (name.includes('FIRST STAND')) return 'FIRST STAND';
+  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
+  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+
+  return 'OUTRO';
+}
+
 export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState({ id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' });
   const isStaff = ['analista', 'treinador', 'diretor'].includes(String(currentUser.role || '').toLowerCase());
@@ -87,7 +119,8 @@ export default function DashboardPage() {
   const LOGS_PER_PAGE = 20;
   
   const [matchesRaw, setMatchesRaw] = useState<any[]>([]);
-  const [statsDetailed, setStatsDetailed] = useState<any[]>([]);
+  const [teamStatsRaw, setTeamStatsRaw] = useState<any[]>([]);
+  const [myPlayerStatsRaw, setMyPlayerStatsRaw] = useState<any[]>([]);
   const [missionsRaw, setMissionsRaw] = useState<any[]>([]);
   const [scrimReportsManual, setScrimReportsManual] = useState<any[]>([]);
   const [allPlayersList, setAllPlayersList] = useState<any[]>([]);
@@ -95,6 +128,7 @@ export default function DashboardPage() {
   const [teamWellness, setTeamWellness] = useState<any[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]); 
   const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [], date: null });
+  const [squadConfigState, setSquadConfigState] = useState<any>({});
   
   // UI STATE
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -166,13 +200,14 @@ export default function DashboardPage() {
 
       const myTeam = configRes.data?.my_team_tag?.toUpperCase() || 'RMD';
       setMyTeamTag(myTeam);
+      if (configRes.data) setSquadConfigState(configRes.data);
 
-      const [rosterRes, teamsRes, matchesRes, viewRes, statsRes, missionsRes, scrimsRes] = await Promise.all([
-        supabase.from('players').select('*'),
-        supabase.from('teams').select('*'),
-        supabase.from('matches').select('id, match_id, game_start_time, game_type, patch').order('game_start_time', { ascending: false }).limit(10000),
-        supabase.from('view_matches_with_teams').select('*').limit(10000),
-        supabase.from('player_stats_detailed').select('match_id, puuid, team_acronym, lane_rating, impact_rating, conversion_rating, vision_rating, gold_diff_at_12, win, side, lane, patch').order('game_start_time', { ascending: false }).limit(15000),
+      const [rosterRes, teamsRes, historyRes, teamStatsRes, myStatsRes, missionsRes, scrimsRes] = await Promise.all([
+        supabase.from('bff_admin_players').select('*'), // ← Bff view contendo todos os jogadores (ETL + Manual)
+        supabase.from('bff_matches_teams').select('*'),
+        supabase.from('bff_matches_history').select('*').limit(15000),
+        supabase.from('bff_dashboard_team_stats').select('*').limit(15000),
+        supabase.from('bff_player_matches').select('*').eq('puuid', loggedUser.puuid).limit(5000),
         supabase.from('missions').select('*'),
         supabase.from('scrim_reports').select('*')
       ]);
@@ -191,7 +226,8 @@ export default function DashboardPage() {
       setCurrentUser(loggedUser);
 
       if (teamsRes.data) setTeamsList(teamsRes.data);
-      if (statsRes.data) setStatsDetailed(statsRes.data);
+      if (teamStatsRes.data) setTeamStatsRaw(teamStatsRes.data);
+      if (myStatsRes.data) setMyPlayerStatsRaw(myStatsRes.data);
       
       const safeMissions = (missionsRes.data || []).filter(m => String(m.team_acronym || '').toUpperCase().includes(myTeam));
       setMissionsRaw(safeMissions);
@@ -199,20 +235,12 @@ export default function DashboardPage() {
       const safeScrims = (scrimsRes.data || []).filter(s => String(s.team_acronym || '').toUpperCase().includes(myTeam));
       setScrimReportsManual(safeScrims);
 
-      if (viewRes.data) {
-        const matchMeta: Record<string, any> = {};
-        if (matchesRes.data) {
-            matchesRes.data.forEach(m => { matchMeta[m.id || m.match_id] = m; });
-        }
-        const enriched = viewRes.data
+      if (historyRes.data) {
+        const enriched = historyRes.data
           .filter(v => {
-             const b = String(v.blue_team_tag || v.blue_tag || '').toUpperCase();
-             const r = String(v.red_team_tag || v.red_tag || '').toUpperCase();
+             const b = String(v.blue_team_tag || '').toUpperCase();
+             const r = String(v.red_team_tag || '').toUpperCase();
              return b.includes(myTeam) || r.includes(myTeam);
-          })
-          .map(v => {
-             const meta = matchMeta[v.match_id || v.id] || {};
-             return { ...v, game_start_time: meta.game_start_time || v.game_start_time, game_type: meta.game_type || v.game_type, patch: meta.patch || v.patch };
           });
         setMatchesRaw(enriched.sort((a,b) => getSafeTimestamp(b.game_start_time) - getSafeTimestamp(a.game_start_time)));
       }
@@ -235,10 +263,10 @@ export default function DashboardPage() {
 
       if (targetMission) {
          const nextOp = targetMission.opponent_acronym;
-         fetchPromises.push(supabase.from('hub_players_draft').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('hub_players_performance').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('hub_players_roster').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('hub_players_objectives').select('*').eq('team_acronym', nextOp));
+         fetchPromises.push(supabase.from('bff_hub_draft').select('*').eq('team_acronym', nextOp));
+         fetchPromises.push(supabase.from('bff_hub_performance').select('*').eq('team_acronym', nextOp));
+         fetchPromises.push(supabase.from('bff_hub_players_roster').select('*').eq('team_acronym', nextOp));
+         fetchPromises.push(supabase.from('bff_hub_objectives').select('*').eq('team_acronym', nextOp));
       }
 
       const [wellnessDataRes, draftRes, perfRes, hubRosterRes, objRes] = await Promise.all(fetchPromises);
@@ -255,8 +283,8 @@ export default function DashboardPage() {
              picksRaw.forEach((p: any) => {
                  if (!champGroups[p.champion]) champGroups[p.champion] = { roles: new Set(), total: 0, wins: 0, minSeq: 99 };
                  champGroups[p.champion].roles.add(p.role);
-                 champGroups[p.champion].total += Number(p.total_count) || 0;
-                 champGroups[p.champion].wins += (Number(p.total_count) || 0) * ((Number(p.win_rate) || 0) / 100);
+                 champGroups[p.champion].total += Number(p.total_picks) || 0;
+                 champGroups[p.champion].wins += (Number(p.total_picks) || 0) * ((Number(p.win_rate) || 0) / 100);
                  if (p.sequence < champGroups[p.champion].minSeq) champGroups[p.champion].minSeq = p.sequence;
              });
 
@@ -271,7 +299,7 @@ export default function DashboardPage() {
                      isBlind: data.minSeq <= 3 
                  }));
              
-             const bans = draftRes.data.filter((d: any) => String(d.type||'').toLowerCase() === 'ban').sort((a: any, b: any) => b.total_count - a.total_count);
+             const bans = draftRes.data.filter((d: any) => String(d.type||'').toLowerCase() === 'ban').sort((a: any, b: any) => b.total_picks - a.total_picks);
              topBans = bans.slice(0, 3).map((b: any) => ({ name: b.champion }));
          }
          
@@ -282,7 +310,7 @@ export default function DashboardPage() {
              perfRes.data.forEach((m: any) => {
                 const side = String(m.side).toLowerCase();
                 const wStatus = String(m.win_status).toLowerCase();
-                const isWin = wStatus === 'win' || wStatus === 'vitória' || wStatus === 'vitoria' || wStatus === '1' || wStatus === 'true';
+                const isWin = wStatus === 'w' || wStatus === 'win';
                 if (side.includes('blue') || side === '100') { bT++; if(isWin) bW++; }
                 else if (side.includes('red') || side === '200') { rT++; if(isWin) rW++; }
              });
@@ -351,7 +379,10 @@ export default function DashboardPage() {
   }, [refreshTrigger]);
 
   const squadConfig = useMemo(() => {
-    let intensity = 70; let load = 'NORMAL'; let directive = 'FUNDAMENTALS & SCRIMS'; let daysToMatch = -1;
+    let intensity = squadConfigState.intensity_score || 70; 
+    let load = squadConfigState.cognitive_load || 'NORMAL'; 
+    let directive = squadConfigState.tactical_directive || 'FUNDAMENTALS & SCRIMS'; 
+    let daysToMatch = -1;
 
     if (nextTargetIntel.date) {
         const today = new Date();
@@ -362,7 +393,6 @@ export default function DashboardPage() {
         if (daysToMatch === 0) { intensity = 100; load = 'MAXIMUM'; directive = 'MATCH DAY - EXECUTION'; }
         else if (daysToMatch === 1) { intensity = 60; load = 'MODERATE'; directive = 'TACTICAL REFINEMENT & VODS'; }
         else if (daysToMatch <= 3) { intensity = 95; load = 'HIGH'; directive = 'HEAVY SCRIM BLOCKS'; }
-        else { intensity = 80; load = 'HIGH'; directive = 'FUNDAMENTALS & DRAFT PREP'; }
     } else {
         const day = new Date().getDay(); 
         if (day === 4) { intensity = 0; load = 'RECOVERY'; directive = 'REST & RECOVERY'; } 
@@ -371,7 +401,7 @@ export default function DashboardPage() {
     }
     
     return { directive, load, intensity, daysToMatch };
-  }, [nextTargetIntel.date]);
+  }, [nextTargetIntel.date, squadConfigState]);
 
   // BASE PURA: APENAS FILTRA TIPO E PATCH (Ignora a data para alimentar o Calendário)
   const calendarMatches = useMemo(() => {
@@ -384,7 +414,7 @@ export default function DashboardPage() {
     });
   }, [matchesRaw, matchType, filterPatch]);
 
- // FILTRAGEM GLOBAL: Afeta Radares, Win Rates e Logs
+  // FILTRAGEM GLOBAL: Afeta Radares, Win Rates e Logs
   const filteredMatches = useMemo(() => {
     return calendarMatches.filter(m => {
       if (filterStartDate || filterEndDate) {
@@ -408,8 +438,8 @@ export default function DashboardPage() {
     const groups: { [key: string]: any } = {};
     calendarMatches.forEach(m => {
       const isScrim = String(m.game_type || '').toUpperCase().includes('SCRIM');
-      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
-      const opp = weAreBlue ? (m.red_team_tag || m.red_tag) : (m.blue_team_tag || m.blue_tag);
+      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? m.red_team_tag : m.blue_team_tag;
       
       let dateRaw = 'unknown-date'; let timeRaw = '00:00';
       
@@ -436,8 +466,8 @@ export default function DashboardPage() {
   const opponentStatsData = useMemo(() => {
     const stats: Record<string, { opponent: string, wins: number, losses: number, total: number }> = {};
     filteredMatches.forEach(m => {
-      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
-      const opp = weAreBlue ? String(m.red_team_tag || m.red_tag) : String(m.blue_team_tag || m.blue_tag);
+      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? String(m.red_team_tag) : String(m.blue_team_tag);
       const oppKey = opp.toUpperCase() || 'UNKNOWN';
 
       if (!stats[oppKey]) stats[oppKey] = { opponent: oppKey, wins: 0, losses: 0, total: 0 };
@@ -458,8 +488,8 @@ export default function DashboardPage() {
   const championshipStatsData = useMemo(() => {
     const stats: Record<string, number> = {};
     filteredMatches.forEach(m => {
-      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
-      const opp = weAreBlue ? String(m.red_team_tag || m.red_tag) : String(m.blue_team_tag || m.blue_tag);
+      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? String(m.red_team_tag) : String(m.blue_team_tag);
       const oppKey = opp.toUpperCase() || 'UNKNOWN';
 
       const teamObj = teamsList.find(t => String(t.acronym).toUpperCase() === oppKey);
@@ -522,45 +552,17 @@ export default function DashboardPage() {
     return grid;
   }, [currentDate, groupedSeries, missionsRaw, scrimReportsManual, teamsList]);
 
-  const stats = useMemo(() => {
-    const total = filteredMatches.length;
-    let blueTotal = 0; let blueWins = 0; let redTotal = 0; let redWins = 0;
-    
-    filteredMatches.forEach(m => {
-      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
-      const weAreRed = String(m.red_team_tag || m.red_tag || '').toUpperCase().includes(myTeamTag);
-      const rawWinner = String(m.winner_side || '').toLowerCase().trim();
-
-      if (weAreBlue) { blueTotal++; if (rawWinner === 'blue' || rawWinner === '100') blueWins++; } 
-      else if (weAreRed) { redTotal++; if (rawWinner === 'red' || rawWinner === '200') redWins++; }
-    });
-
-    const activeMatchIds = new Set<string>(
-      filteredMatches.reduce((acc: string[], m: any) => {
-        if (m.id) acc.push(String(m.id));
-        if (m.match_id) acc.push(String(m.match_id));
-        return acc;
-      }, [])
-    );
-    
-    const teamStatsFiltered = statsDetailed.filter(s => activeMatchIds.has(String(s.match_id)) && String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag));
-    const avgGold12 = teamStatsFiltered.length > 0 ? Math.round(teamStatsFiltered.reduce((acc, curr) => acc + (Number(curr.gold_diff_at_12) || 0), 0) / teamStatsFiltered.length) : 0;
-
-    return { totalGames: total, blueWR: blueTotal ? Math.round((blueWins / blueTotal) * 100) : 0, redWR: redTotal ? Math.round((redWins / redTotal) * 100) : 0, blueWins, blueTotal, redWins, redTotal, avgDuration: 0, avgGold12 };
-  }, [filteredMatches, statsDetailed, myTeamTag]);
-
   const myStats = useMemo(() => {
      let temp = { lane: 0, impact: 0, conversion: 0, vision: 0 };
      
      const activeMatchIds = new Set<string>(
        filteredMatches.reduce((acc: string[], m: any) => {
-         if (m.id) acc.push(String(m.id));
-         if (m.match_id) acc.push(String(m.match_id));
+         acc.push(String(m.match_id || m.id));
          return acc;
        }, [])
      );
 
-     const myGames = statsDetailed.filter(s => activeMatchIds.has(String(s.match_id)) && s.puuid === currentUser.puuid);
+     const myGames = myPlayerStatsRaw.filter(s => activeMatchIds.has(String(s.match_id)));
      
      if (myGames.length > 0) {
         const getMed = (arr: number[]) => { const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
@@ -570,19 +572,19 @@ export default function DashboardPage() {
         temp.vision = Math.round(getMed(myGames.map(s => Number(s.vision_rating) || 0)));
      }
      return temp;
-  }, [statsDetailed, filteredMatches, currentUser.puuid]);
+  }, [myPlayerStatsRaw, filteredMatches]);
 
   const earlyGameSnowball = useMemo(() => {
     const recentMatches = [...filteredMatches].slice(0, 10).reverse();
     
     return recentMatches.map((m, index) => {
-      const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
-      const opp = weAreBlue ? (m.red_team_tag || m.red_tag) : (m.blue_team_tag || m.blue_tag);
+      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? m.red_team_tag : m.blue_team_tag;
       const fullOpp = opp ? String(opp).toUpperCase() : 'UNKNOWN';
       const oppKey = fullOpp.substring(0, 4);
 
-      const teamStats = statsDetailed.filter(s => (s.match_id === m.id || s.match_id === m.match_id) && String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag));
-      const totalGD12 = teamStats.reduce((acc, curr) => acc + (Number(curr.gold_diff_at_12) || 0), 0);
+      const tStat = teamStatsRaw.find(s => String(s.match_id) === String(m.match_id || m.id) && String(s.team_acronym).toUpperCase().includes(myTeamTag));
+      const goldDiff = tStat ? (Number(tStat.gold_diff_at_12) || 0) : 0;
 
       const rawWinner = String(m.winner_side || '').toLowerCase();
       const isOurWin = (weAreBlue && (rawWinner === 'blue' || rawWinner === '100')) || (!weAreBlue && (rawWinner === 'red' || rawWinner === '200'));
@@ -600,38 +602,30 @@ export default function DashboardPage() {
          match: oppKey,
          fullOpponent: fullOpp,
          date: dateFormatted,
-         goldDiff: totalGD12,
+         goldDiff: goldDiff,
          isWin: isOurWin
       };
     });
-  }, [filteredMatches, statsDetailed, myTeamTag]);
+  }, [filteredMatches, teamStatsRaw, myTeamTag]);
 
   const radarData = useMemo<any[]>(() => {
     const calcAvg = (matchesSet: Set<string>, getOp: boolean = false) => {
-       const relevantStats = statsDetailed.filter(s => matchesSet.has(String(s.match_id)));
-       const filtered = relevantStats.filter(s => { const isUs = String(s.team_acronym || s.team || '').toUpperCase().includes(myTeamTag); return getOp ? !isUs : isUs; });
+       const filtered = teamStatsRaw.filter(s => matchesSet.has(String(s.match_id)) && (getOp ? !String(s.team_acronym).toUpperCase().includes(myTeamTag) : String(s.team_acronym).toUpperCase().includes(myTeamTag)));
        if (!filtered.length) return { l: 0, i: 0, c: 0, v: 0, o: 0 };
-       const l = filtered.reduce((a,b)=>a+(Number(b.lane_rating)||0),0)/filtered.length;
-       const i = filtered.reduce((a,b)=>a+(Number(b.impact_rating)||0),0)/filtered.length;
-       const c = filtered.reduce((a,b)=>a+(Number(b.conversion_rating)||0),0)/filtered.length;
-       const v = filtered.reduce((a,b)=>a+(Number(b.vision_rating)||0),0)/filtered.length;
+       
+       const l = filtered.reduce((a,b)=>a+(Number(b.avg_lane)||0),0)/filtered.length;
+       const i = filtered.reduce((a,b)=>a+(Number(b.avg_impact)||0),0)/filtered.length;
+       const c = filtered.reduce((a,b)=>a+(Number(b.avg_conversion)||0),0)/filtered.length;
+       const v = filtered.reduce((a,b)=>a+(Number(b.avg_vision)||0),0)/filtered.length;
        return { l: Math.round(l), i: Math.round(i), c: Math.round(c), v: Math.round(v), o: Math.round((l+i+c+v)/4) };
     };
 
     if (radarCompareMode === 'OFFICIAL_VS_SCRIM') {
        const offIds = new Set<string>(
-           filteredMatches.filter(m => !String(m.game_type || '').toUpperCase().includes('SCRIM')).reduce((acc: string[], m: any) => {
-             if (m.id) acc.push(String(m.id));
-             if (m.match_id) acc.push(String(m.match_id));
-             return acc;
-           }, [])
+           filteredMatches.filter(m => !String(m.game_type || '').toUpperCase().includes('SCRIM')).map((m: any) => String(m.match_id || m.id))
        );
        const scrimIds = new Set<string>(
-           filteredMatches.filter(m => String(m.game_type || '').toUpperCase().includes('SCRIM')).reduce((acc: string[], m: any) => {
-             if (m.id) acc.push(String(m.id));
-             if (m.match_id) acc.push(String(m.match_id));
-             return acc;
-           }, [])
+           filteredMatches.filter(m => String(m.game_type || '').toUpperCase().includes('SCRIM')).map((m: any) => String(m.match_id || m.id))
        );
        const offStats = calcAvg(offIds, false); const scrimStats = calcAvg(scrimIds, false);
        return [
@@ -643,11 +637,7 @@ export default function DashboardPage() {
        ];
     } else {
        const activeIds = new Set<string>(
-           filteredMatches.reduce((acc: string[], m: any) => {
-             if (m.id) acc.push(String(m.id));
-             if (m.match_id) acc.push(String(m.match_id));
-             return acc;
-           }, [])
+           filteredMatches.map((m: any) => String(m.match_id || m.id))
        );
        const usStats = calcAvg(activeIds, false); const oppStats = calcAvg(activeIds, true);
        return [
@@ -658,7 +648,7 @@ export default function DashboardPage() {
          { subject: 'Overall', [myTeamTag]: usStats.o, Oponentes: oppStats.o }
        ];
     }
-  }, [radarCompareMode, statsDetailed, filteredMatches, myTeamTag]);
+  }, [radarCompareMode, teamStatsRaw, filteredMatches, myTeamTag]);
 
   const advancedScrims = useMemo(() => {
     const autoScrimBlocks = new Map();
@@ -666,12 +656,12 @@ export default function DashboardPage() {
        const d = new Date(String(m.game_start_time).replace(' ', 'T'));
        if (!isNaN(d.getTime())) d.setHours(d.getHours() - 6);
        const dateRaw = isNaN(d.getTime()) ? 'unknown' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-       const opp = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag) ? (m.red_team_tag || m.red_tag) : (m.blue_team_tag || m.blue_tag);
+       const opp = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag) ? m.red_team_tag : m.blue_team_tag;
        const key = `${dateRaw}_${opp}`;
        
        if (!autoScrimBlocks.has(key)) autoScrimBlocks.set(key, { date: dateRaw, opp, wins: 0, losses: 0, games: [] });
        const block = autoScrimBlocks.get(key); block.games.push(m);
-       const weAreBlue = String(m.blue_team_tag || m.blue_tag || '').toUpperCase().includes(myTeamTag);
+       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
        const rawWinner = String(m.winner_side || '').toLowerCase();
        if ((weAreBlue && (rawWinner === 'blue' || rawWinner === '100')) || (!weAreBlue && (rawWinner === 'red' || rawWinner === '200'))) block.wins++; else block.losses++;
     });
@@ -718,7 +708,6 @@ export default function DashboardPage() {
     return finalList.sort((a,b) => getSafeTimestamp(b.date) - getSafeTimestamp(a.date));
   }, [filteredMatches, scrimReportsManual, missionsRaw, myTeamTag, filterStartDate, filterEndDate]);
 
-  // Efeito de reset da página de logs
   useEffect(() => {
     setLogsPage(1);
   }, [advancedScrims]);
@@ -731,7 +720,6 @@ export default function DashboardPage() {
       const tierCounts: Record<string, Record<string, number>> = { 'Bad': {}, 'Average': {}, 'Good': {}, 'Excellent': {} };
       ['Bad', 'Average', 'Good', 'Excellent'].forEach(t => { diffOrder.forEach(d => tierCounts[t][d] = 0); });
 
-      // CORREÇÃO: Ignorar missões futuras para não poluir os dados com "AGUARDANDO"
       const validScrims = advancedScrims.filter(s => !s.isMission && s.result !== 'AGEND.');
 
       validScrims.forEach((scrim) => {
@@ -789,6 +777,7 @@ export default function DashboardPage() {
 
   const wellnessChartData = useMemo(() => {
     if (!expandedPlayer || !expandedPlayer.history) return [];
+    
     const matchDates: Record<string, string> = {};
     filteredMatches.forEach(m => {
       if (m.game_start_time) {
@@ -799,17 +788,17 @@ export default function DashboardPage() {
           if (isScrim && d.getHours() < 6) d.setHours(d.getHours() - 6);
           const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           
-          if (m.id) matchDates[String(m.id)] = dateStr;
-          if (m.match_id) matchDates[String(m.match_id)] = dateStr;
+          matchDates[String(m.match_id || m.id)] = dateStr;
         }
       }
     });
 
     const statsByDate: Record<string, {l:number[], i:number[], c:number[], v:number[], o:number[]}> = {};
-    statsDetailed.forEach(s => {
-      if (s.puuid === expandedPlayer.puuid && matchDates[String(s.match_id)]) {
+    
+    teamStatsRaw.forEach(s => {
+      if (String(s.team_acronym).toUpperCase().includes(myTeamTag) && matchDates[String(s.match_id)]) {
         const dateStr = matchDates[String(s.match_id)];
-        const l = Number(s.lane_rating)||0; const i = Number(s.impact_rating)||0; const c = Number(s.conversion_rating)||0; const v = Number(s.vision_rating)||0; const o = (l+i+c+v)/4;
+        const l = Number(s.avg_lane)||0; const i = Number(s.avg_impact)||0; const c = Number(s.avg_conversion)||0; const v = Number(s.avg_vision)||0; const o = (l+i+c+v)/4;
         if (!statsByDate[dateStr]) statsByDate[dateStr] = {l:[], i:[], c:[], v:[], o:[]};
         statsByDate[dateStr].l.push(l); statsByDate[dateStr].i.push(i); statsByDate[dateStr].c.push(c); statsByDate[dateStr].v.push(v); statsByDate[dateStr].o.push(o);
       }
@@ -831,7 +820,7 @@ export default function DashboardPage() {
       conv_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].c) || 0) : null,
       vision_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].v) || 0) : null,
     }));
-  }, [expandedPlayer, filteredMatches, statsDetailed, filterStartDate, filterEndDate]);
+  }, [expandedPlayer, filteredMatches, teamStatsRaw, myTeamTag, filterStartDate, filterEndDate]);
 
   const currentTargetH2H = useMemo(() => {
      if (nextTargetIntel.team === 'SEM ALVO') return null;
@@ -1008,8 +997,14 @@ export default function DashboardPage() {
   const handleRemoveFromRoster = async (player: any) => {
       if (!window.confirm(`Tens a certeza que queres remover ${player.nickname} da equipa?`)) return;
       
-      // CORREÇÃO: Usar apenas team_acronym
-      const { error } = await supabase.from('players').update({ team_acronym: 'FA' }).eq('puuid', player.puuid);
+      const payload = {
+         puuid: player.puuid,
+         nickname: player.nickname,
+         team_acronym: 'FA',
+         primary_role: player.primary_role
+      };
+      
+      const { error } = await supabase.from('players').upsert(payload);
       
       if (error) {
           alert('Erro ao remover jogador da base de dados: ' + error.message);
@@ -1025,8 +1020,14 @@ export default function DashboardPage() {
       const player = allPlayersList.find(p => p.puuid === selectedPlayerToAdd);
       if (!player) return;
 
-      // CORREÇÃO: Usar apenas team_acronym
-      const { error } = await supabase.from('players').update({ team_acronym: myTeamTag }).eq('puuid', player.puuid);
+      const payload = {
+         puuid: player.puuid,
+         nickname: player.nickname,
+         team_acronym: myTeamTag,
+         primary_role: player.primary_role
+      };
+
+      const { error } = await supabase.from('players').upsert(payload);
       
       if (error) {
           alert('Erro ao adicionar jogador: ' + error.message);
@@ -1045,7 +1046,7 @@ export default function DashboardPage() {
       const payload = {
           puuid: tempPuuid,
           nickname: newPlayerForm.nickname.toUpperCase(),
-          team_acronym: myTeamTag, // CORREÇÃO: Usar apenas team_acronym
+          team_acronym: myTeamTag,
           primary_role: newPlayerForm.role,
           photo_url: `https://ui-avatars.com/api/?name=${newPlayerForm.nickname}&background=18181b&color=10b981`
       };
@@ -1108,7 +1109,7 @@ export default function DashboardPage() {
            
            <div className="h-5 w-px bg-zinc-800 hidden md:block"></div>
            
-           {/* NOVO: DROPDOWN DE SPLIT CUSTOMIZADO */}
+           {/* DROPDOWN DE SPLIT CUSTOMIZADO */}
            <div className="relative">
               <div 
                  onClick={() => setSplitDropdownOpen(!isSplitDropdownOpen)} 
@@ -1404,8 +1405,8 @@ export default function DashboardPage() {
                      <div className="bg-zinc-900/30 p-3.5 rounded-xl border border-zinc-800/50 flex flex-col justify-center">
                        <p className="text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] mb-2">PRIORITY PICKS</p>
                        <div className="grid grid-cols-3 gap-2.5 w-full">
-                          {nextTargetIntel.topPicks.length > 0 ? nextTargetIntel.topPicks.map((champ: any, i) => (
-                            <div key={i} className="relative flex items-center gap-2.5 bg-blue-500/5 border border-blue-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-blue-500/10 hover:border-blue-500/50 hover:scale-105 transition-all duration-200 cursor-default group/champ min-w-0">
+                         {nextTargetIntel.topPicks.length > 0 ? nextTargetIntel.topPicks.map((champ: any, i) => (
+                           <div key={i} className="relative flex items-center gap-2.5 bg-blue-500/5 border border-blue-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-blue-500/10 hover:border-blue-500/50 hover:scale-105 transition-all duration-200 cursor-default group/champ min-w-0">
                                
                                <div className="relative shrink-0">
                                   <img src={getChampImage(champ.name)} className="w-7 h-7 rounded-md border border-blue-500/30 object-cover shadow-sm group-hover/champ:border-blue-400 transition-colors" alt={champ.name} onError={(e: any) => { e.target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/0.jpg'; }} />
@@ -1456,8 +1457,8 @@ export default function DashboardPage() {
                      <div className="bg-zinc-900/30 p-3.5 rounded-xl border border-zinc-800/50 flex flex-col justify-center">
                        <p className="text-[8px] font-black text-red-400 uppercase tracking-[0.2em] mb-2">MUST BANS</p>
                        <div className="grid grid-cols-3 gap-2.5 w-full">
-                          {nextTargetIntel.topBans.length > 0 ? nextTargetIntel.topBans.map((champ: any, i) => (
-                            <div key={i} className="flex items-center gap-2.5 bg-red-500/5 border border-red-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-red-500/10 hover:border-red-500/50 hover:scale-105 transition-all duration-200 cursor-default group/ban min-w-0 overflow-hidden">
+                         {nextTargetIntel.topBans.length > 0 ? nextTargetIntel.topBans.map((champ: any, i) => (
+                           <div key={i} className="flex items-center gap-2.5 bg-red-500/5 border border-red-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-red-500/10 hover:border-red-500/50 hover:scale-105 transition-all duration-200 cursor-default group/ban min-w-0 overflow-hidden">
                                <img src={getChampImage(champ.name)} className="w-7 h-7 rounded-md border border-red-500/30 object-cover grayscale opacity-80 shrink-0 shadow-sm group-hover/ban:grayscale-0 group-hover/ban:opacity-100 group-hover/ban:border-red-400 transition-all" alt={champ.name} onError={(e: any) => { e.target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/0.jpg'; }} />
                                <span className="text-[10px] text-red-300 font-black tracking-wider uppercase line-through truncate flex-1 min-w-0">{champ.name}</span>
                             </div>
@@ -1692,6 +1693,7 @@ export default function DashboardPage() {
                       
                       <Tooltip 
                          cursor={{ fill: 'rgba(255,255,255,0.02)' }} 
+                         wrapperStyle={{ zIndex: 9999, outline: 'none' }}
                          content={<CustomMatchupTooltip />}
                       />
                       
@@ -1976,10 +1978,10 @@ export default function DashboardPage() {
                    </BarChart>
                  </ResponsiveContainer>
                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
+                 <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
                      <span className="text-2xl mb-2 grayscale opacity-50">💰</span>
                      <p className="text-[8px] text-zinc-500 font-black uppercase tracking-widest">Sem dados de ouro aos 12 min.</p>
-                  </div>
+                 </div>
                )}
             </div>
           </div>

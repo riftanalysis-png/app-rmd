@@ -45,7 +45,7 @@ const MathSafe = (val: any) => (isNaN(Number(val)) ? 0 : Number(val));
 export default function ScoutingReportPage() {
   const [viewMode, setViewMode] = useState<'H2H' | 'ISOLATED'>('H2H');
   const [allTeams, setAllTeams] = useState<any[]>([]);
-  const [activeTeams, setActiveTeams] = useState<any[]>([]); // Times filtrados pelo torneio
+  const [activeTeams, setActiveTeams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // --- ESTADOS GLOBAIS DE FILTRO ---
@@ -64,7 +64,7 @@ export default function ScoutingReportPage() {
   // 1. Carrega todos os times do DB uma vez
   useEffect(() => {
     async function fetchTeams() {
-      const { data } = await supabase.from('teams').select('*').order('acronym');
+      const { data } = await supabase.from('bff_matches_teams').select('*').order('acronym');
       if (data) setAllTeams(data);
     }
     fetchTeams();
@@ -74,50 +74,70 @@ export default function ScoutingReportPage() {
   useEffect(() => {
     async function fetchActiveMatchesAndTeams() {
       setLoading(true);
-      let matchesQuery = supabase.from('matches').select('id, game_type, split');
-      if (!globalTournaments.includes('ALL')) matchesQuery = matchesQuery.in('game_type', globalTournaments);
+      
+      // Otimização: A gente procura os times e match_ids direto na View do Histórico
+      let matchesQuery = supabase.from('bff_matches_history').select('match_id, game_type, split, blue_team_tag, red_team_tag');
+      
+      // Se não for 'ALL', buscamos os nomes exatos mapeados (como fizemos nas outras páginas)
+      if (!globalTournaments.includes('ALL')) {
+         // Nesse caso específico, como os torneios da Scouting Page estão vindo como siglas diretas
+         // Podemos usar um `.in` simplificado que checa se contem a string
+         matchesQuery = matchesQuery.in('game_type', globalTournaments);
+      }
+      
       if (globalSplit !== 'ALL') matchesQuery = matchesQuery.eq('split', globalSplit);
 
       const { data: matchesRes } = await matchesQuery;
+      
       if (!matchesRes || matchesRes.length === 0) { 
-         setActiveTeams(allTeams); // Fallback
+         setActiveTeams(allTeams); 
          setLoading(false); 
          setPlayerStatsData([]); setObjectivesData([]); setWardsData([]); 
          return; 
       }
 
-      const matchIds = matchesRes.map(m => m.id);
+      const matchIds = matchesRes.map(m => m.match_id);
       
-      // Busca leve apenas para descobrir quais times jogaram nestas partidas
-      const { data: teamsInMatches } = await supabase.from('player_stats_detailed').select('team_acronym').in('match_id', matchIds);
-      
+      // Descobrir quais times jogaram essas partidas
       let validAcronyms = new Set<string>();
-      if (teamsInMatches) {
-         teamsInMatches.forEach(t => validAcronyms.add(t.team_acronym));
-      }
+      matchesRes.forEach(m => {
+          if (m.blue_team_tag) validAcronyms.add(m.blue_team_tag);
+          if (m.red_team_tag) validAcronyms.add(m.red_team_tag);
+      });
 
       const filteredTeams = allTeams.filter(t => validAcronyms.has(t.acronym));
       const finalTeamsList = filteredTeams.length > 0 ? filteredTeams : allTeams;
       
       setActiveTeams(finalTeamsList);
 
-      // Auto-selecionar times válidos se os atuais não estiverem no torneio filtrado
+      // Auto-selecionar times válidos
       if (finalTeamsList.length >= 2) {
          if (!validAcronyms.has(teamA)) setTeamA(finalTeamsList[0].acronym);
          if (!validAcronyms.has(teamB)) setTeamB(finalTeamsList[1].acronym);
          if (!validAcronyms.has(isolatedTeam)) setIsolatedTeam(finalTeamsList[0].acronym);
       }
 
-      // Busca os dados profundos
+      // Busca os dados profundos das equipes selecionadas NO CORAÇÃO MATEMÁTICO (Core)
       const targetTeams = viewMode === 'H2H' ? [teamA || finalTeamsList[0]?.acronym, teamB || finalTeamsList[1]?.acronym] : [isolatedTeam || finalTeamsList[0]?.acronym];
       
       const [statsRes, objRes, wardsRes] = await Promise.all([
-         supabase.from('player_stats_detailed').select('match_id, team_acronym, summoner_name, champion, lane, win, kills, deaths, assists, dpm, vspm, gold_diff_at_12, total_gold, physical_damage, magic_damage, fb_kill, fb_assist, ft_kill, ft_assist, lane_rating, impact_rating, conversion_rating, vision_rating, side, xp_diff_at_12, cs_diff_at_12, game_duration_minutes').in('team_acronym', targetTeams).in('match_id', matchIds),
-         supabase.from('match_objectives').select('*').in('team_acronym', targetTeams).in('match_id', matchIds),
-         supabase.from('match_wards').select('minute, tactical_zone, type, player_name, match_id').in('match_id', matchIds)
+         supabase.from('core_player_stats').select('match_id, team_tag, player_name, champion, role, win, kills, deaths, assists, dpm, vspm, gold_12, xp_12, cs_12, dmg_percent, fb_kill, fb_assist, ft_kill, ft_assist, lane_rating, impact_rating, conversion_rating, vision_rating, side, game_duration').in('team_tag', targetTeams).in('match_id', matchIds).limit(15000),
+         supabase.from('match_objectives').select('*').in('team_name', targetTeams).in('match_id', matchIds).limit(15000),
+         supabase.from('match_wards').select('minute, type, player_name, match_id').in('match_id', matchIds).limit(15000)
       ]);
 
-      setPlayerStatsData(statsRes.data || []);
+      // Traduz e mastiga o que veio do Core pro formato que a página esperava
+      const mappedStats = (statsRes.data || []).map(p => ({
+         ...p,
+         team_acronym: p.team_tag,
+         summoner_name: p.player_name,
+         lane: p.role,
+         // Re-calculando o gold diff falso (já que o backend cruzou com a tabela adversária, na scouting isolada é só um proxy)
+         gold_diff_at_12: 0, 
+         game_duration_minutes: (p.game_duration || 1800) / 60
+      }));
+
+      setPlayerStatsData(mappedStats);
       setObjectivesData(objRes.data || []);
       setWardsData(wardsRes.data || []);
       setLoading(false);
@@ -245,7 +265,6 @@ export default function ScoutingReportPage() {
     return { A: calcResources(teamA), B: calcResources(teamB) };
   }, [playerStatsData, teamA, teamB, viewMode]);
 
-  // NOVO: Resiliência vs Throw
   const resilienceIntel = useMemo(() => {
      if (viewMode !== 'H2H') return null;
      const calcResilience = (acronym: string) => {
@@ -271,7 +290,6 @@ export default function ScoutingReportPage() {
      return { A: calcResilience(teamA), B: calcResilience(teamB) };
   }, [playerStatsData, teamA, teamB, viewMode]);
 
-  // NOVO: Distribuição de Dano
   const damageProfileIntel = useMemo(() => {
      if (viewMode !== 'H2H') return null;
      const calcDamage = (acronym: string) => {
@@ -311,8 +329,8 @@ export default function ScoutingReportPage() {
         const side = pList[0].side; const won = pList[0].win;
 
         if (won) wins++;
-        if (side === 'Blue') { blueGames++; if (won) blueWins++; }
-        if (side === 'Red' || side === 'red') { redGames++; if (won) redWins++; }
+        if (side === 'Blue' || side === '100') { blueGames++; if (won) blueWins++; }
+        if (side === 'Red' || side === '200') { redGames++; if (won) redWins++; }
         if (pList.some(p => p.fb_kill || p.fb_assist)) fbGames++;
         if (pList.some(p => p.ft_kill || p.ft_assist)) ftGames++;
 
@@ -347,7 +365,6 @@ export default function ScoutingReportPage() {
      return { games, winRate: (wins/games)*100, blueWR: blueGames ? (blueWins/blueGames)*100 : 0, redWR: redGames ? (redWins/redGames)*100 : 0, fbRate: (fbGames/games)*100, ftRate: (ftGames/games)*100, avgTeamGD12: teamTotalGD12 / games, starters, blueGames, redGames };
   }, [playerStatsData, isolatedTeam, viewMode]);
 
-  // NOVO: Flex Picks
   const flexPicksIntel = useMemo(() => {
       if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
       const tStats = playerStatsData.filter(p => p.team_acronym === isolatedTeam);
@@ -365,7 +382,6 @@ export default function ScoutingReportPage() {
       return flexes.sort((a, b) => b.roles.length - a.roles.length);
   }, [playerStatsData, isolatedTeam, viewMode]);
 
-  // NOVO: Conversão de Early Game
   const conversionIntel = useMemo(() => {
       if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
       const tStats = playerStatsData.filter(p => p.team_acronym === isolatedTeam);
@@ -388,10 +404,7 @@ export default function ScoutingReportPage() {
       };
   }, [playerStatsData, isolatedTeam, viewMode]);
 
-  // ============================================================================
-  // OUTROS MOTORES (Objetivos, Visão, Sinergia) - Inalterados
-  // ============================================================================
-  const synergyIntel = useMemo(() => { /* Igual ao anterior */
+  const synergyIntel = useMemo(() => {
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
      const combos: any = { MID_JNG: {}, ADC_SUP: {} };
      const matchIds = Array.from(new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.match_id)));
@@ -409,17 +422,20 @@ export default function ScoutingReportPage() {
 
   const objectivesIntel = useMemo(() => {
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
-     const teamObjs = objectivesData.filter(o => o.team_acronym === isolatedTeam);
+     const teamObjs = objectivesData.filter(o => o.team_name === isolatedTeam);
      const matchIds = Array.from(new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.match_id)));
      const games = matchIds.length || 1;
      let firstDrakeTotal = 0; let firstDrakeGames = 0; let firstGrubsTotal = 0; let firstGrubsGames = 0;
+     
      matchIds.forEach(mId => {
         const gameObjs = teamObjs.filter(o => o.match_id === mId);
-        const drakes = gameObjs.filter(o => o.objective_type === 'DRAGON').sort((a,b) => a.minuto - b.minuto);
+        const drakes = gameObjs.filter(o => o.objective_type === 'ELITE_MONSTER_KILL' && String(o.target_or_subtype).includes('DRAGON')).sort((a,b) => a.minuto - b.minuto);
         if (drakes.length > 0) { firstDrakeTotal += drakes[0].minuto; firstDrakeGames++; }
-        const grubs = gameObjs.filter(o => o.objective_type === 'HORDE' || o.objective_type === 'HERALD').sort((a,b) => a.minuto - b.minuto);
+        
+        const grubs = gameObjs.filter(o => o.objective_type === 'ELITE_MONSTER_KILL' && (o.target_or_subtype === 'HORDE' || o.target_or_subtype === 'RIFTHERALD')).sort((a,b) => a.minuto - b.minuto);
         if (grubs.length > 0) { firstGrubsTotal += grubs[0].minuto; firstGrubsGames++; }
      });
+     
      const formatTime = (mins: number) => { if (isNaN(mins) || mins === 0) return "--:--"; const m = Math.floor(mins); const s = Math.round((mins - m) * 60); return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`; };
      return { avgDrakeStr: firstDrakeGames ? formatTime(firstDrakeTotal / firstDrakeGames) : '--:--', drakeRate: (firstDrakeGames / games) * 100, avgGrubsStr: firstGrubsGames ? formatTime(firstGrubsTotal / firstGrubsGames) : '--:--', grubsRate: (firstGrubsGames / games) * 100 };
   }, [objectivesData, playerStatsData, isolatedTeam, viewMode]);
@@ -427,8 +443,11 @@ export default function ScoutingReportPage() {
   const visionIntel = useMemo(() => {
      if (viewMode !== 'ISOLATED' || !isolatedTeam) return null;
      const teamPlayers = new Set(playerStatsData.filter(p => p.team_acronym === isolatedTeam).map(p => p.summoner_name));
-     const earlyWards = wardsData.filter(w => Number(w.minute) <= 5 && teamPlayers.has(w.player_name) && w.tactical_zone);
-     const zones: any = {}; earlyWards.forEach(w => { zones[w.tactical_zone] = (zones[w.tactical_zone] || 0) + 1; });
+     
+     // Note: tactical_zone não existe mais no match_wards. Adaptamos para contar tipos de ward
+     const earlyWards = wardsData.filter(w => Number(w.minute) <= 5 && teamPlayers.has(w.player_name));
+     const zones: any = {}; earlyWards.forEach(w => { zones[w.type || 'UNKNOWN'] = (zones[w.type || 'UNKNOWN'] || 0) + 1; });
+     
      const totalWards = earlyWards.length || 1;
      const topZones = Object.entries(zones).map(([zone, count]: any) => ({ zone, count, pct: (count / totalWards) * 100 })).sort((a, b) => b.count - a.count).slice(0, 3);
      return { topZones, totalWards: earlyWards.length };
@@ -487,7 +506,6 @@ export default function ScoutingReportPage() {
       {viewMode === 'H2H' && macroComparison && draftIntel && laneMatchups && pacingIntel && resourceIntel && resilienceIntel && damageProfileIntel && (
         <div className="animate-fade-in-up">
            
-           {/* NOVA ÁREA DE SELEÇÃO PREMIUM (BORDERLESS LOGOS) */}
            <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 lg:p-12 shadow-sm relative flex flex-col md:flex-row items-center justify-between gap-8 mt-8">
             <div className="flex-1 flex flex-col items-center relative z-10 w-full">
                 <img src={getTeamLogo(teamA)} className="w-36 h-36 md:w-44 md:h-44 mb-8 object-contain drop-shadow-[0_0_25px_rgba(59,130,246,0.15)] transition-transform hover:scale-105 duration-500" alt="Team A Logo" />
@@ -549,10 +567,8 @@ export default function ScoutingReportPage() {
             </div>
           </div>
 
-          {/* SESSÃO: NARRATIVA E IDENTIDADE (COM NOVOS GRÁFICOS) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch mt-8 animate-fade-in-up">
             
-            {/* CARD: Termômetro de Caos e Distribuição de Dano */}
             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
                 <div className="mb-6 border-b border-zinc-800 pb-4">
                   <h3 className="text-xl font-black text-white uppercase tracking-tight">Ritmo & Perfil de Dano</h3>
@@ -562,7 +578,6 @@ export default function ScoutingReportPage() {
                   <TugOfWarBar label="CKPM (Abates / Minuto)" valA={pacingIntel?.A.ckpm} valB={pacingIntel?.B.ckpm} format={(v:any) => v.toFixed(2)} />
                   <TugOfWarBar label="Duração Média (Min)" valA={pacingIntel?.A.avgTime} valB={pacingIntel?.B.avgTime} reverseColors={true} format={(v:any) => `${Math.floor(v)}:${Math.round((v % 1) * 60).toString().padStart(2, '0')}`} />
                   
-                  {/* Gráfico de Dano Híbrido */}
                   <div className="mt-4 pt-6 border-t border-zinc-800/50">
                      <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest text-center block mb-4">Damage Share (Físico vs Mágico)</span>
                      <div className="flex justify-between items-center gap-8">
@@ -591,7 +606,6 @@ export default function ScoutingReportPage() {
                 </div>
             </div>
 
-            {/* CARD: Strong Side & Resiliência */}
             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
                 <div className="mb-6 border-b border-zinc-800 pb-4">
                   <h3 className="text-xl font-black text-white uppercase tracking-tight">Strong Side & Resiliência</h3>
@@ -616,7 +630,6 @@ export default function ScoutingReportPage() {
                       ))}
                    </div>
                    
-                   {/* Throw Rate e Comeback Rate */}
                    <div className="pt-6 border-t border-zinc-800/50 grid grid-cols-2 gap-4">
                       <div className="bg-zinc-900/50 rounded-xl p-4 border border-zinc-800">
                          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block mb-2 text-center">Throw Rate (A) vs (B)</span>
@@ -648,7 +661,7 @@ export default function ScoutingReportPage() {
              </div>
              <div className="flex flex-col gap-4">
                 <div className="grid grid-cols-[1fr_auto_1fr] md:grid-cols-[1fr_200px_1fr] gap-4 px-6 mb-2 text-[9px] font-bold text-zinc-500 tracking-widest uppercase text-center">
-                   <span className="text-left text-blue-500">Titular Azul</span><span>Confronto Central</span><span className="text-right text-red-500">Titular Vermelho</span>
+                   <span className="text-left text-blue-500">Titular {teamA}</span><span>Confronto Central</span><span className="text-right text-red-500">Titular {teamB}</span>
                 </div>
                 {laneMatchups.lanes.map(lane => (
                    <div key={lane.role} className={`grid grid-cols-[1fr_auto_1fr] md:grid-cols-[1fr_200px_1fr] gap-4 bg-zinc-950 border border-zinc-800 rounded-2xl p-4 md:p-6 items-center transition-all hover:border-zinc-600 shadow-sm`}>
@@ -730,7 +743,7 @@ export default function ScoutingReportPage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                
-               {/* 1. Conversão e Flex Picks (Híbrido) */}
+               {/* 1. Conversão e Flex Picks */}
                <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm">
                   <div className="mb-6 border-b border-zinc-800 pb-4">
                      <h3 className="text-xl font-black text-white uppercase tracking-tight">Conversão & Flex</h3>
@@ -801,8 +814,8 @@ export default function ScoutingReportPage() {
                {/* 3. Radar Early Game */}
                <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm flex flex-col">
                   <div className="mb-6 border-b border-zinc-800 pb-4">
-                     <h3 className="text-xl font-black text-white uppercase tracking-tight">Radar Early Game</h3>
-                     <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Zonas Mais Wardadas Até 5 Min</p>
+                     <h3 className="text-xl font-black text-white uppercase tracking-tight">Preferência de Wards</h3>
+                     <p className="text-[9px] font-bold text-zinc-500 tracking-widest mt-1 uppercase">Tipologia da Visão no Early Game</p>
                   </div>
                   <div className="space-y-4 flex-1 flex flex-col justify-center">
                      {visionIntel?.topZones.length ? visionIntel.topZones.map((zone: any, i: number) => (
@@ -838,7 +851,7 @@ export default function ScoutingReportPage() {
                   {isolatedIntel.starters.map((player: any) => (
                      <div key={player.role} className="flex flex-col md:grid md:grid-cols-[200px_1fr] gap-8 bg-zinc-950 border border-zinc-800/80 rounded-2xl p-6 transition-all hover:border-zinc-600">
                         <div className="flex items-center md:items-start md:flex-col gap-4 md:border-r border-zinc-800 md:pr-4">
-                           <div className="w-12 h-12 bg-zinc-900 rounded-xl border border-zinc-700 flex items-center justify-center shrink-0 shadow-sm relative">
+                           <div className="w-12 h-12 md:w-14 md:h-14 bg-zinc-900 rounded-xl border border-zinc-700 flex items-center justify-center shrink-0 shadow-sm relative">
                               {getRoleIcon(player.role, 'w-6 h-6')}
                            </div>
                            <div>
@@ -880,7 +893,6 @@ export default function ScoutingReportPage() {
 
 // --- SUB-COMPONENTES AUXILIARES (FLAT DESIGN & ZINC PALETTE) ---
 
-// NOVO: Seletor de Time Premium
 function PremiumTeamSelector({ value, onChange, options, align = "center" }: { value: string, onChange: (val: string) => void, options: any[], align?: "left"|"center"|"right" }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -893,7 +905,6 @@ function PremiumTeamSelector({ value, onChange, options, align = "center" }: { v
   }, []);
 
   const filteredOptions = options.filter(t => t.acronym.toLowerCase().includes(search.toLowerCase()));
-  const currentTeam = options.find(t => t.acronym === value);
 
   const alignClass = align === "left" ? "text-left" : align === "right" ? "text-right" : "text-center";
 

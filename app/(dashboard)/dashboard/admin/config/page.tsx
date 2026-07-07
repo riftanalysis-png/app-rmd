@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase/client';
+import { Search } from 'lucide-react';
+
+const ITEMS_PER_PAGE = 20;
 
 export default function ConfigPage() {
   const [loading, setLoading] = useState(true);
@@ -11,28 +14,69 @@ export default function ConfigPage() {
   const [teams, setTeams] = useState<any[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
 
+  // Buscas
+  const [searchTeam, setSearchTeam] = useState('');
+  const [searchPlayer, setSearchPlayer] = useState('');
+
+  // Paginação
+  const [teamPage, setTeamPage] = useState(1);
+  const [playerPage, setPlayerPage] = useState(1);
+
   // Estados dos Formulários
   const [teamForm, setTeamForm] = useState({ acronym: '', name: '', logo_url: '' });
   const [isEditingTeam, setIsEditingTeam] = useState(false);
 
   const [playerForm, setPlayerForm] = useState({ puuid: '', nickname: '', team_acronym: '', primary_role: 'TOP', photo_url: '' });
   const [isEditingPlayer, setIsEditingPlayer] = useState(false);
-  const [oldPuuid, setOldPuuid] = useState(''); // Guarda o PUUID antigo para caso de edição (já que é PK)
+  const [oldPuuid, setOldPuuid] = useState('');
 
   useEffect(() => {
     fetchData();
   }, []);
 
+  // Reseta a página quando a pesquisa muda
+  useEffect(() => { setTeamPage(1); }, [searchTeam]);
+  useEffect(() => { setPlayerPage(1); }, [searchPlayer]);
+
   async function fetchData() {
     setLoading(true);
+    // Agora consultamos as Views BFF que unem os dados do ETL com as customizações
     const [t, p] = await Promise.all([
-      supabase.from('teams').select('*').order('acronym'),
-      supabase.from('players').select('*').order('team_acronym')
+      supabase.from('bff_admin_teams').select('*').order('acronym'),
+      supabase.from('bff_admin_players').select('*').order('team_acronym')
     ]);
     if (t.data) setTeams(t.data);
     if (p.data) setPlayers(p.data);
     setLoading(false);
   }
+
+  // --- FILTROS E PAGINAÇÃO DE TIMES ---
+  const filteredTeams = useMemo(() => {
+    return teams.filter(t => 
+      String(t.acronym).toLowerCase().includes(searchTeam.toLowerCase()) || 
+      String(t.name).toLowerCase().includes(searchTeam.toLowerCase())
+    );
+  }, [teams, searchTeam]);
+
+  const totalTeamPages = Math.ceil(filteredTeams.length / ITEMS_PER_PAGE);
+  const paginatedTeams = useMemo(() => {
+    const start = (teamPage - 1) * ITEMS_PER_PAGE;
+    return filteredTeams.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredTeams, teamPage]);
+
+  // --- FILTROS E PAGINAÇÃO DE JOGADORES ---
+  const filteredPlayers = useMemo(() => {
+    return players.filter(p => 
+      String(p.nickname).toLowerCase().includes(searchPlayer.toLowerCase()) || 
+      String(p.team_acronym).toLowerCase().includes(searchPlayer.toLowerCase())
+    );
+  }, [players, searchPlayer]);
+
+  const totalPlayerPages = Math.ceil(filteredPlayers.length / ITEMS_PER_PAGE);
+  const paginatedPlayers = useMemo(() => {
+    const start = (playerPage - 1) * ITEMS_PER_PAGE;
+    return filteredPlayers.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredPlayers, playerPage]);
 
   // ==========================================
   // HANDLERS: TIMES
@@ -47,11 +91,8 @@ export default function ConfigPage() {
         logo_url: teamForm.logo_url 
       };
 
-      if (isEditingTeam) {
-        await supabase.from('teams').update(payload).eq('acronym', payload.acronym);
-      } else {
-        await supabase.from('teams').insert([payload]);
-      }
+      // Sempre salvamos na tabela física para aplicar o override por cima dos dados do ETL
+      await supabase.from('teams').upsert([payload]);
       
       setTeamForm({ acronym: '', name: '', logo_url: '' });
       setIsEditingTeam(false);
@@ -64,12 +105,16 @@ export default function ConfigPage() {
   };
 
   const handleEditTeam = (team: any) => {
-    setTeamForm(team);
+    setTeamForm({
+      acronym: team.acronym,
+      name: team.name || '',
+      logo_url: team.logo_url || ''
+    });
     setIsEditingTeam(true);
   };
 
   const handleDeleteTeam = async (acronym: string) => {
-    if (!window.confirm(`Tem certeza que deseja apagar a equipe ${acronym}?`)) return;
+    if (!window.confirm(`Isso removerá a logo customizada da equipe ${acronym}. Os dados das partidas ficarão intactos. Confirmar?`)) return;
     await supabase.from('teams').delete().eq('acronym', acronym);
     await fetchData();
   };
@@ -81,7 +126,6 @@ export default function ConfigPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      // Se não enviou PUUID, gera um temporário
       let finalPuuid = playerForm.puuid.trim();
       if (!finalPuuid) {
         finalPuuid = `PENDING-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
@@ -95,17 +139,11 @@ export default function ConfigPage() {
         photo_url: playerForm.photo_url
       };
 
-      if (isEditingPlayer) {
-        // Se o PUUID mudou (ou estamos atualizando), precisamos apagar o antigo e inserir o novo pois PUUID costuma ser a Primary Key
-        if (oldPuuid !== payload.puuid) {
-           await supabase.from('players').delete().eq('puuid', oldPuuid);
-           await supabase.from('players').insert([payload]);
-        } else {
-           await supabase.from('players').update(payload).eq('puuid', payload.puuid);
-        }
-      } else {
-        await supabase.from('players').insert([payload]);
+      if (isEditingPlayer && oldPuuid !== payload.puuid && oldPuuid) {
+         await supabase.from('players').delete().eq('puuid', oldPuuid);
       }
+      
+      await supabase.from('players').upsert([payload]);
 
       setPlayerForm({ puuid: '', nickname: '', team_acronym: '', primary_role: 'TOP', photo_url: '' });
       setIsEditingPlayer(false);
@@ -122,8 +160,8 @@ export default function ConfigPage() {
     setPlayerForm({
       puuid: player.puuid,
       nickname: player.nickname,
-      team_acronym: player.team_acronym,
-      primary_role: player.primary_role.toUpperCase(),
+      team_acronym: player.team_acronym || '',
+      primary_role: player.primary_role ? player.primary_role.toUpperCase() : 'TOP',
       photo_url: player.photo_url || ''
     });
     setOldPuuid(player.puuid);
@@ -131,7 +169,7 @@ export default function ConfigPage() {
   };
 
   const handleDeletePlayer = async (puuid: string) => {
-    if (!window.confirm(`Tem certeza que deseja apagar este jogador?`)) return;
+    if (!window.confirm(`Isso removerá a foto e configurações manuais. O jogador voltará ao estado original da API. Confirmar?`)) return;
     await supabase.from('players').delete().eq('puuid', puuid);
     await fetchData();
   };
@@ -142,26 +180,25 @@ export default function ConfigPage() {
   const handleSyncPuuid = async (player: any) => {
     setLoading(true);
     try {
-      // Procura na tabela detalhada uma partida com esse nick e essa tag
       const { data, error } = await supabase
-        .from('player_stats_detailed')
+        .from('player_stats')
         .select('puuid')
-        .ilike('summoner_name', `%${player.nickname}%`)
-        .ilike('team_acronym', player.team_acronym)
+        .ilike('player_name', `%${player.nickname}%`)
+        .ilike('team_tag', player.team_acronym)
         .limit(1)
         .maybeSingle();
 
       if (error) throw error;
 
       if (data && data.puuid) {
-         // Encontrou! Substitui o jogador na tabela apagando o PENDING e salvando o Oficial
          const newPayload = { ...player, puuid: data.puuid };
+         delete newPayload.is_customized; // remove a flag da View antes de salvar
          await supabase.from('players').delete().eq('puuid', player.puuid);
          await supabase.from('players').insert([newPayload]);
          alert(`PUUID Sincronizado com sucesso para ${player.nickname}!`);
          await fetchData();
       } else {
-         alert(`Nenhuma partida encontrada para ${player.nickname} (${player.team_acronym}) ainda. Tente novamente após subir um CSV de campeonato com ele.`);
+         alert(`Nenhuma partida encontrada para ${player.nickname} (${player.team_acronym}). Tente novamente após o ETL importar um jogo dele.`);
       }
     } catch (err: any) {
       alert("Erro na sincronização: " + err.message);
@@ -177,7 +214,7 @@ export default function ConfigPage() {
       
       <header className="border-l-4 border-yellow-500 pl-6 mb-10">
         <h1 className="text-4xl text-white leading-none">SYSTEM <span className="text-yellow-500">CONFIG</span></h1>
-        <p className="text-slate-400 text-[10px] tracking-[0.4em] mt-2">GERENCIAMENTO DE TEAMS E ROSTERS</p>
+        <p className="text-slate-400 text-[10px] tracking-[0.4em] mt-2">GERENCIAMENTO DE TEAMS E ROSTERS DA BASE DE DADOS</p>
       </header>
 
       {/* ABAS DE NAVEGAÇÃO */}
@@ -196,14 +233,12 @@ export default function ConfigPage() {
       {activeTab === 'TEAMS' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
           
-          {/* FORMULÁRIO DE TIMES */}
           <div className="lg:col-span-4 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl h-fit">
-            <h2 className="text-2xl text-white mb-6">{isEditingTeam ? 'EDITAR TIME' : 'CADASTRAR TIME'}</h2>
+            <h2 className="text-2xl text-white mb-6">{isEditingTeam ? 'EDITAR TIME' : 'CUSTOMIZAR TIME'}</h2>
             <form onSubmit={handleSaveTeam} className="space-y-4">
               <div>
                 <label className="text-[10px] text-slate-500 ml-2">Tag do Time (Acronym)</label>
                 <input type="text" required disabled={isEditingTeam} placeholder="Ex: RMD" className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic uppercase disabled:opacity-50" value={teamForm.acronym} onChange={e => setTeamForm({...teamForm, acronym: e.target.value})} />
-                {isEditingTeam && <p className="text-[8px] text-red-400 mt-1 ml-2">A Tag não pode ser alterada após a criação.</p>}
               </div>
               <div>
                 <label className="text-[10px] text-slate-500 ml-2">Nome Completo</label>
@@ -217,35 +252,72 @@ export default function ConfigPage() {
               <div className="pt-4 flex gap-3">
                 {isEditingTeam && <button type="button" onClick={() => {setIsEditingTeam(false); setTeamForm({acronym: '', name: '', logo_url: ''});}} className="px-6 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-[10px]">CANCELAR</button>}
                 <button type="submit" disabled={saving} className="flex-1 px-6 py-4 bg-yellow-500 text-black rounded-2xl hover:bg-yellow-400 transition-all font-black uppercase tracking-widest shadow-lg disabled:opacity-50">
-                  {saving ? 'SALVANDO...' : isEditingTeam ? 'ATUALIZAR' : 'CADASTRAR'}
+                  {saving ? 'SALVANDO...' : 'SALVAR'}
                 </button>
               </div>
             </form>
           </div>
 
-          {/* LISTA DE TIMES */}
           <div className="lg:col-span-8 space-y-4">
-            <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl">
-              <h3 className="text-xl text-white mb-6">DATABASE DE TIMES ({teams.length})</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto max-h-[600px] custom-scrollbar pr-2">
-                {teams.map(team => (
-                  <div key={team.acronym} className="bg-slate-900/50 border border-slate-800 p-4 rounded-[24px] flex items-center gap-4 group hover:border-yellow-500/50 transition-colors">
-                    {team.logo_url ? (
-                      <img src={team.logo_url} className="w-12 h-12 object-contain bg-black rounded-xl border border-white/10 p-1 shrink-0" alt="" />
-                    ) : (
-                      <div className="w-12 h-12 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0">?</div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white truncate">{team.name}</p>
-                      <p className="text-[10px] text-yellow-500 tracking-widest">{team.acronym}</p>
-                    </div>
-                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button onClick={() => handleEditTeam(team)} className="w-8 h-8 flex items-center justify-center bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white">✏️</button>
-                      <button onClick={() => handleDeleteTeam(team.acronym)} className="w-8 h-8 flex items-center justify-center bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white">🗑️</button>
-                    </div>
-                  </div>
-                ))}
+            <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl flex flex-col h-full min-h-[600px]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 shrink-0">
+                 <h3 className="text-xl text-white">DATABASE DE TIMES ({filteredTeams.length})</h3>
+                 <div className="relative">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4" />
+                    <input 
+                      type="text" 
+                      placeholder="BUSCAR EQUIPE..." 
+                      className="bg-black border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white focus:border-yellow-500 outline-none transition-all text-xs w-full sm:w-64"
+                      value={searchTeam}
+                      onChange={(e) => setSearchTeam(e.target.value)}
+                    />
+                 </div>
               </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {paginatedTeams.map(team => (
+                    <div key={team.acronym} className="bg-slate-900/50 border border-slate-800 p-4 rounded-[24px] flex items-center gap-4 group hover:border-yellow-500/50 transition-colors">
+                      {team.logo_url ? (
+                        <img src={team.logo_url} className="w-12 h-12 object-contain bg-black rounded-xl border border-white/10 p-1 shrink-0" alt="" />
+                      ) : (
+                        <div className="w-12 h-12 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0">?</div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-white truncate">{team.name}</p>
+                        <p className="text-[10px] text-yellow-500 tracking-widest">{team.acronym}</p>
+                      </div>
+                      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <button onClick={() => handleEditTeam(team)} className="w-8 h-8 flex items-center justify-center bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white">✏️</button>
+                        <button onClick={() => handleDeleteTeam(team.acronym)} title="Remover Customização" className="w-8 h-8 flex items-center justify-center bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white">🗑️</button>
+                      </div>
+                    </div>
+                  ))}
+                  {paginatedTeams.length === 0 && <div className="col-span-full py-10 text-center text-zinc-600 text-xs">NENHUMA EQUIPE ENCONTRADA.</div>}
+                </div>
+              </div>
+
+              {/* Paginação de Times */}
+              {totalTeamPages > 1 && (
+                <div className="flex justify-between items-center pt-4 border-t border-zinc-800/60 shrink-0">
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+                    Página {teamPage} de {totalTeamPages}
+                  </span>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setTeamPage(p => Math.max(1, p - 1))} 
+                      disabled={teamPage === 1}
+                      className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl disabled:opacity-50 font-bold text-[10px] uppercase hover:bg-zinc-800 hover:text-white transition-colors"
+                    >Anterior</button>
+                    <button 
+                      onClick={() => setTeamPage(p => Math.min(totalTeamPages, p + 1))} 
+                      disabled={teamPage === totalTeamPages}
+                      className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl disabled:opacity-50 font-bold text-[10px] uppercase hover:bg-zinc-800 hover:text-white transition-colors"
+                    >Próxima</button>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         </div>
@@ -257,7 +329,6 @@ export default function ConfigPage() {
       {activeTab === 'PLAYERS' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
           
-          {/* FORMULÁRIO DE JOGADORES */}
           <div className="lg:col-span-4 bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl h-fit">
             <h2 className="text-2xl text-white mb-6">{isEditingPlayer ? 'EDITAR JOGADOR' : 'CADASTRAR JOGADOR'}</h2>
             <form onSubmit={handleSavePlayer} className="space-y-4">
@@ -292,55 +363,92 @@ export default function ConfigPage() {
               <div className="pt-4 flex gap-3">
                 {isEditingPlayer && <button type="button" onClick={() => {setIsEditingPlayer(false); setPlayerForm({puuid: '', nickname: '', team_acronym: '', primary_role: 'TOP', photo_url: ''}); setOldPuuid('');}} className="px-6 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-[10px]">CANCELAR</button>}
                 <button type="submit" disabled={saving} className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl hover:bg-blue-500 transition-all font-black uppercase tracking-widest shadow-lg disabled:opacity-50">
-                  {saving ? 'SALVANDO...' : isEditingPlayer ? 'ATUALIZAR' : 'CADASTRAR'}
+                  {saving ? 'SALVANDO...' : 'SALVAR'}
                 </button>
               </div>
             </form>
           </div>
 
-          {/* LISTA DE JOGADORES */}
           <div className="lg:col-span-8 space-y-4">
-            <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl">
-              <h3 className="text-xl text-white mb-6">ROSTER GLOBAL ({players.length})</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto max-h-[700px] custom-scrollbar pr-2">
-                {players.map(player => {
-                  const isPending = player.puuid.startsWith('PENDING-');
-                  
-                  return (
-                    <div key={player.puuid} className={`bg-slate-900/50 border p-4 rounded-[24px] flex flex-col gap-4 group transition-colors relative ${isPending ? 'border-orange-500/30 hover:border-orange-500/60' : 'border-slate-800 hover:border-blue-500/50'}`}>
-                      
-                      {isPending && <div className="absolute -top-2 -right-2 bg-orange-600 text-white text-[7px] px-2 py-0.5 rounded-md tracking-widest shadow-lg animate-pulse">SEM PUUID</div>}
+            <div className="bg-[#121212] border border-white/5 rounded-[40px] p-8 shadow-2xl flex flex-col h-full min-h-[600px]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 shrink-0">
+                 <h3 className="text-xl text-white">ROSTER GLOBAL ({filteredPlayers.length})</h3>
+                 <div className="relative">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4" />
+                    <input 
+                      type="text" 
+                      placeholder="NICKNAME OU TIME..." 
+                      className="bg-black border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white focus:border-blue-500 outline-none transition-all text-xs w-full sm:w-64"
+                      value={searchPlayer}
+                      onChange={(e) => setSearchPlayer(e.target.value)}
+                    />
+                 </div>
+              </div>
 
-                      <div className="flex items-center gap-3">
-                        {player.photo_url ? (
-                          <img src={player.photo_url} className="w-10 h-10 object-cover bg-black rounded-xl border border-white/10 shrink-0" alt="" />
-                        ) : (
-                          <div className="w-10 h-10 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0 text-xs">👤</div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-white truncate leading-none mb-1">{player.nickname}</p>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[8px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded uppercase tracking-widest">{player.team_acronym}</span>
-                            <span className="text-[8px] text-blue-400 uppercase tracking-widest">{player.primary_role}</span>
+              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {paginatedPlayers.map(player => {
+                    const isPending = player.puuid.startsWith('PENDING-');
+                    
+                    return (
+                      <div key={player.puuid} className={`bg-slate-900/50 border p-4 rounded-[24px] flex flex-col gap-4 group transition-colors relative ${isPending ? 'border-orange-500/30 hover:border-orange-500/60' : 'border-slate-800 hover:border-blue-500/50'}`}>
+                        
+                        {isPending && <div className="absolute -top-2 -right-2 bg-orange-600 text-white text-[7px] px-2 py-0.5 rounded-md tracking-widest shadow-lg animate-pulse">SEM PUUID</div>}
+
+                        <div className="flex items-center gap-3">
+                          {player.photo_url ? (
+                            <img src={player.photo_url} className="w-10 h-10 object-cover bg-black rounded-xl border border-white/10 shrink-0" alt="" />
+                          ) : (
+                            <div className="w-10 h-10 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0 text-xs">👤</div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-white truncate leading-none mb-1">{player.nickname}</p>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded uppercase tracking-widest">{player.team_acronym}</span>
+                              <span className="text-[8px] text-blue-400 uppercase tracking-widest">{player.primary_role}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex gap-2 mt-auto">
-                        <button onClick={() => handleEditPlayer(player)} className="flex-1 py-2 bg-white/5 text-white text-[9px] rounded-xl hover:bg-blue-600 transition-colors">EDITAR</button>
-                        <button onClick={() => handleDeletePlayer(player.puuid)} className="px-4 py-2 bg-white/5 text-red-400 text-[9px] rounded-xl hover:bg-red-600 hover:text-white transition-colors">🗑️</button>
-                        
-                        {/* BOTÃO MÁGICO DE SYNC SE NÃO TIVER PUUID OFICIAL */}
-                        {isPending && (
-                          <button onClick={() => handleSyncPuuid(player)} disabled={loading} title="Varrer BD para achar PUUID" className="px-4 py-2 bg-orange-500/20 text-orange-400 text-[10px] rounded-xl hover:bg-orange-500 hover:text-black transition-colors disabled:opacity-50">
-                            📡
-                          </button>
-                        )}
+                        <div className="flex gap-2 mt-auto">
+                          <button onClick={() => handleEditPlayer(player)} className="flex-1 py-2 bg-white/5 text-white text-[9px] rounded-xl hover:bg-blue-600 transition-colors">EDITAR</button>
+                          <button onClick={() => handleDeletePlayer(player.puuid)} title="Remover Configuração Manual" className="px-4 py-2 bg-white/5 text-red-400 text-[9px] rounded-xl hover:bg-red-600 hover:text-white transition-colors">🗑️</button>
+                          
+                          {/* BOTÃO MÁGICO DE SYNC */}
+                          {isPending && (
+                            <button onClick={() => handleSyncPuuid(player)} disabled={loading} title="Varrer BD para achar PUUID" className="px-4 py-2 bg-orange-500/20 text-orange-400 text-[10px] rounded-xl hover:bg-orange-500 hover:text-black transition-colors disabled:opacity-50">
+                              📡
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                  {paginatedPlayers.length === 0 && <div className="col-span-full py-10 text-center text-zinc-600 text-xs">NENHUM JOGADOR ENCONTRADO.</div>}
+                </div>
               </div>
+
+              {/* Paginação de Jogadores */}
+              {totalPlayerPages > 1 && (
+                <div className="flex justify-between items-center pt-4 border-t border-zinc-800/60 shrink-0">
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+                    Página {playerPage} de {totalPlayerPages}
+                  </span>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setPlayerPage(p => Math.max(1, p - 1))} 
+                      disabled={playerPage === 1}
+                      className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl disabled:opacity-50 font-bold text-[10px] uppercase hover:bg-zinc-800 hover:text-white transition-colors"
+                    >Anterior</button>
+                    <button 
+                      onClick={() => setPlayerPage(p => Math.min(totalPlayerPages, p + 1))} 
+                      disabled={playerPage === totalPlayerPages}
+                      className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl disabled:opacity-50 font-bold text-[10px] uppercase hover:bg-zinc-800 hover:text-white transition-colors"
+                    >Próxima</button>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         </div>

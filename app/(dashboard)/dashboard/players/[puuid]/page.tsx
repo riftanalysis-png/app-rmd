@@ -11,7 +11,7 @@ import {
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
-// --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
+// --- CLASSIFICADOR DE CAMPEONATOS ---
 function normalizeTournamentScope(rawName: string | null): string {
   const name = String(rawName || '').toUpperCase();
   if (name.includes('SCRIM')) return 'SCRIM';
@@ -176,14 +176,15 @@ export default function PlayerProfilePage() {
 
   useEffect(() => {
     async function loadSplitsMap() {
-      const { data } = await supabase.from('matches').select('game_type, split');
+      // Usando a View BFF de histórico
+      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
             const scope = normalizeTournamentScope(d.game_type);
             if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split);
+            map[scope].add(d.split.trim().toUpperCase());
           }
         });
         const finalMap: Record<string, string[]> = {};
@@ -199,60 +200,30 @@ export default function PlayerProfilePage() {
     setLoading(true);
     
     try {
-      // 🔥 REMOVIDO: game_type, split, cs_12 e cs_at_12 para não quebrar a consulta. 🔥
+      // 🚀 Consulta Otimizada com limite de 1 para evitar falha no maybeSingle
       const [pRes, tRes, allPRes, statsRes] = await Promise.all([
-        supabase.from('view_players_with_stats').select('*').eq('puuid', puuid).single(),
-        supabase.from('teams').select('*').order('acronym'),
-        supabase.from('players').select('puuid, team_acronym, nickname, primary_role'),
-        supabase.from('player_stats_detailed').select('match_id, puuid, win, kp, gold_efficiency, champion, lane_rating, impact_rating, conversion_rating, vision_rating, gold_diff_at_12, xp_diff_at_12, gpm, dpm, deaths_at_12, deaths, vspm, side, lane').eq('puuid', puuid).order('match_id', { ascending: true })
+        supabase.from('bff_hub_players_roster').select('*').eq('puuid', puuid).limit(1).maybeSingle(),
+        supabase.from('bff_matches_teams').select('*').order('acronym'),
+        supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
+        supabase.from('bff_player_matches').select('*').eq('puuid', puuid).order('game_start_time', { ascending: true })
       ]);
+
+
 
       if (pRes.data && allPRes.data) {
         setPlayer(pRes.data);
-        const teamLookup: Record<string, string> = {};
-        allPRes.data.forEach(p => { teamLookup[p.puuid] = p.team_acronym; });
 
         if (statsRes.data && statsRes.data.length > 0) {
-          const matchIds = statsRes.data.map(m => m.match_id);
-          
-          // Pegamos os metadados brutos da partida (aqui sim o game_type e o split existem!)
-          const { data: matchesMeta } = await supabase.from('matches').select('id, game_type, split, blue_team_tag, red_team_tag').in('id', matchIds);
-          
-          const matchMetaMap: Record<string, any> = {};
-          matchesMeta?.forEach(m => { matchMetaMap[m.id] = m; });
-          
-          const enriched = statsRes.data.map(m => {
-            const meta = matchMetaMap[m.match_id] || {};
-            const finalGameType = meta.game_type || 'UNKNOWN';
-            const normalizedScope = normalizeTournamentScope(finalGameType);
-
-            // A lógica ultra rápida para descobrir o inimigo:
-            let oppAcronym = 'MIX';
-            const sSide = String(m.side || '').toLowerCase();
-            
-            if (sSide === 'blue' || sSide === '100') {
-               oppAcronym = meta.red_team_tag || 'MIX';
-            } else if (sSide === 'red' || sSide === '200') {
-               oppAcronym = meta.blue_team_tag || 'MIX';
-            }
-            
-            return { 
-              ...m, 
-              opponent_acronym: oppAcronym, 
-              is_win: m.win === true || String(m.win).toLowerCase() === 'win' || String(m.win).toLowerCase() === 'true', 
-              kp_val: parseFloat(String(m.kp || 0).replace('%', '')),
-              eff_val: Number(m.gold_efficiency) || 1,
-              game_type: finalGameType,
-              normalized_scope: normalizedScope,
-              split: meta.split || 'UNKNOWN'
-            };
-          });
+          const enriched = statsRes.data.map((m: any) => ({ 
+            ...m, 
+            normalized_scope: normalizeTournamentScope(m.game_type)
+          }));
           setAllMatchesRaw(enriched);
         } else {
           setAllMatchesRaw([]);
         }
 
-        let rosterQuery = supabase.from('hub_players_roster').select('puuid, nickname, team_acronym, game_type');
+        let rosterQuery = supabase.from('bff_hub_players_roster').select('puuid, nickname, team_acronym, game_type');
         if (globalSplit !== 'ALL') rosterQuery = rosterQuery.eq('split', globalSplit);
 
         const { data: rosterData } = await rosterQuery;
@@ -346,12 +317,14 @@ export default function PlayerProfilePage() {
   })), [filteredMatches]);
   
   const goldBoxPlotData = useMemo(() => {
-    const wins = filteredMatches.filter(m => m.is_win).map(m => Number(m.gold_diff_at_12) || 0); const losses = filteredMatches.filter(m => !m.is_win).map(m => Number(m.gold_diff_at_12) || 0);
+    const wins = filteredMatches.filter(m => m.is_win).map(m => Number(m.gold_diff_at_12) || 0); 
+    const losses = filteredMatches.filter(m => !m.is_win).map(m => Number(m.gold_diff_at_12) || 0);
     return [{ name: 'VITÓRIAS', ...calculateBoxPlotStats(wins), color: '#3b82f6' }, { name: 'DERROTAS', ...calculateBoxPlotStats(losses), color: '#ef4444' }];
   }, [filteredMatches]);
   
   const xpBoxPlotData = useMemo(() => {
-    const wins = filteredMatches.filter(m => m.is_win).map(m => Number(m.xp_diff_at_12) || 0); const losses = filteredMatches.filter(m => !m.is_win).map(m => Number(m.xp_diff_at_12) || 0);
+    const wins = filteredMatches.filter(m => m.is_win).map(m => Number(m.xp_diff_at_12) || 0); 
+    const losses = filteredMatches.filter(m => !m.is_win).map(m => Number(m.xp_diff_at_12) || 0);
     return [{ name: 'VITÓRIAS', ...calculateBoxPlotStats(wins), color: '#3b82f6' }, { name: 'DERROTAS', ...calculateBoxPlotStats(losses), color: '#ef4444' }];
   }, [filteredMatches]);
 
@@ -514,7 +487,7 @@ export default function PlayerProfilePage() {
                 </div>
               </div>
                 
-              <h2 className="text-3xl font-black mt-2 text-white uppercase tracking-tight drop-shadow-md">{player.nickname}</h2>
+              <h2 className="text-3xl font-black mt-2 text-white uppercase tracking-tight text-center drop-shadow-md">{player.nickname}</h2>
               <div className="flex items-center gap-2 mt-3 mb-4">
                  <p className="text-blue-400 text-[10px] tracking-widest uppercase font-bold bg-blue-900/20 px-2.5 py-1 rounded border border-blue-900/30 backdrop-blur-sm">{player.team_acronym}</p>
                  <p className="text-zinc-300 text-[10px] tracking-widest uppercase font-bold bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-700/50 backdrop-blur-sm">{player.primary_role}</p>
@@ -667,7 +640,6 @@ export default function PlayerProfilePage() {
                    </h3>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {/* O gráfico Farm@12 vs XP Diff foi removido conforme a exclusão da métrica cs_12 do banco */}
                   <RelationalChart title="Mortes@12 vs Mortes Totais" data={filteredMatches} teams={teams} x="deaths_at_12" y="deaths" xN="M@12" yN="Total" />
                   <RelationalChart title="KP% vs Visão por Minuto" data={filteredMatches} teams={teams} x="kp_val" y="vspm" xN="KP%" yN="VPM" />
                   <RelationalChart title="Mortes@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="deaths_at_12" y="xp_diff_at_12" xN="M@12" yN="XP Diff" />
