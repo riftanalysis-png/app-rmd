@@ -23,7 +23,7 @@ export default function ConfigPage() {
   const [playerPage, setPlayerPage] = useState(1);
 
   // Estados dos Formulários
-  const [teamForm, setTeamForm] = useState({ acronym: '', name: '', logo_url: '' });
+  const [teamForm, setTeamForm] = useState({ acronym: '', name: '', logo_url: '', tier: 'Average' });
   const [isEditingTeam, setIsEditingTeam] = useState(false);
 
   const [playerForm, setPlayerForm] = useState({ puuid: '', nickname: '', team_acronym: '', primary_role: 'TOP', photo_url: '' });
@@ -40,7 +40,6 @@ export default function ConfigPage() {
 
   async function fetchData() {
     setLoading(true);
-    // Agora consultamos as Views BFF que unem os dados do ETL com as customizações
     const [t, p] = await Promise.all([
       supabase.from('bff_admin_teams').select('*').order('acronym'),
       supabase.from('bff_admin_players').select('*').order('team_acronym')
@@ -88,13 +87,13 @@ export default function ConfigPage() {
       const payload = { 
         acronym: teamForm.acronym.toUpperCase(), 
         name: teamForm.name.toUpperCase(), 
-        logo_url: teamForm.logo_url 
+        logo_url: teamForm.logo_url,
+        tier: teamForm.tier
       };
 
-      // Sempre salvamos na tabela física para aplicar o override por cima dos dados do ETL
       await supabase.from('teams').upsert([payload]);
       
-      setTeamForm({ acronym: '', name: '', logo_url: '' });
+      setTeamForm({ acronym: '', name: '', logo_url: '', tier: 'Average' });
       setIsEditingTeam(false);
       await fetchData();
     } catch (err: any) {
@@ -108,13 +107,14 @@ export default function ConfigPage() {
     setTeamForm({
       acronym: team.acronym,
       name: team.name || '',
-      logo_url: team.logo_url || ''
+      logo_url: team.logo_url || '',
+      tier: team.tier || 'Average'
     });
     setIsEditingTeam(true);
   };
 
   const handleDeleteTeam = async (acronym: string) => {
-    if (!window.confirm(`Isso removerá a logo customizada da equipe ${acronym}. Os dados das partidas ficarão intactos. Confirmar?`)) return;
+    if (!window.confirm(`Isso removerá a logo customizada e a classificação de Tier da equipe ${acronym}. Os dados das partidas ficarão intactos. Confirmar?`)) return;
     await supabase.from('teams').delete().eq('acronym', acronym);
     await fetchData();
   };
@@ -249,8 +249,23 @@ export default function ConfigPage() {
                 <input type="url" placeholder="https://..." className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic" value={teamForm.logo_url} onChange={e => setTeamForm({...teamForm, logo_url: e.target.value})} />
               </div>
               
+              {/* NOVO CAMPO: TIER DO TIME */}
+              <div>
+                <label className="text-[10px] text-slate-500 ml-2">Força da Equipe (Tier)</label>
+                <select 
+                  className="w-full bg-black border border-white/10 rounded-2xl px-5 py-4 text-white focus:border-yellow-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer"
+                  value={teamForm.tier} 
+                  onChange={e => setTeamForm({...teamForm, tier: e.target.value})}
+                >
+                  <option value="Excellent">EXCELLENT (Elite/Tier 1)</option>
+                  <option value="Good">GOOD (Forte/Playoffs)</option>
+                  <option value="Average">AVERAGE (Médio/Padrão)</option>
+                  <option value="Bad">BAD (Fraco/Tabela Inferior)</option>
+                </select>
+              </div>
+              
               <div className="pt-4 flex gap-3">
-                {isEditingTeam && <button type="button" onClick={() => {setIsEditingTeam(false); setTeamForm({acronym: '', name: '', logo_url: ''});}} className="px-6 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-[10px]">CANCELAR</button>}
+                {isEditingTeam && <button type="button" onClick={() => {setIsEditingTeam(false); setTeamForm({acronym: '', name: '', logo_url: '', tier: 'Average'});}} className="px-6 py-4 bg-white/5 text-white rounded-2xl hover:bg-white/10 transition-all font-black text-[10px]">CANCELAR</button>}
                 <button type="submit" disabled={saving} className="flex-1 px-6 py-4 bg-yellow-500 text-black rounded-2xl hover:bg-yellow-400 transition-all font-black uppercase tracking-widest shadow-lg disabled:opacity-50">
                   {saving ? 'SALVANDO...' : 'SALVAR'}
                 </button>
@@ -276,23 +291,34 @@ export default function ConfigPage() {
 
               <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 mb-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {paginatedTeams.map(team => (
-                    <div key={team.acronym} className="bg-slate-900/50 border border-slate-800 p-4 rounded-[24px] flex items-center gap-4 group hover:border-yellow-500/50 transition-colors">
-                      {team.logo_url ? (
-                        <img src={team.logo_url} className="w-12 h-12 object-contain bg-black rounded-xl border border-white/10 p-1 shrink-0" alt="" />
-                      ) : (
-                        <div className="w-12 h-12 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0">?</div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-white truncate">{team.name}</p>
-                        <p className="text-[10px] text-yellow-500 tracking-widest">{team.acronym}</p>
+                  {paginatedTeams.map(team => {
+                    // Cor baseada no Tier
+                    const tierColor = team.tier === 'Excellent' ? 'text-emerald-400 border-emerald-500/30' :
+                                      team.tier === 'Good' ? 'text-blue-400 border-blue-500/30' :
+                                      team.tier === 'Bad' ? 'text-red-400 border-red-500/30' :
+                                      'text-zinc-400 border-zinc-700';
+
+                    return (
+                      <div key={team.acronym} className="bg-slate-900/50 border border-slate-800 p-4 rounded-[24px] flex items-center gap-4 group hover:border-yellow-500/50 transition-colors">
+                        {team.logo_url ? (
+                          <img src={team.logo_url} className="w-12 h-12 object-contain bg-black rounded-xl border border-white/10 p-1 shrink-0" alt="" />
+                        ) : (
+                          <div className="w-12 h-12 bg-black rounded-xl border border-white/10 flex items-center justify-center text-slate-600 shrink-0">?</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-white truncate">{team.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <p className="text-[10px] text-yellow-500 tracking-widest">{team.acronym}</p>
+                            <span className={`text-[8px] font-black uppercase tracking-widest bg-zinc-950 px-1.5 py-0.5 rounded border ${tierColor}`}>{team.tier || 'Average'}</span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button onClick={() => handleEditTeam(team)} className="w-8 h-8 flex items-center justify-center bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white">✏️</button>
+                          <button onClick={() => handleDeleteTeam(team.acronym)} title="Remover Customização" className="w-8 h-8 flex items-center justify-center bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white">🗑️</button>
+                        </div>
                       </div>
-                      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                        <button onClick={() => handleEditTeam(team)} className="w-8 h-8 flex items-center justify-center bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white">✏️</button>
-                        <button onClick={() => handleDeleteTeam(team.acronym)} title="Remover Customização" className="w-8 h-8 flex items-center justify-center bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white">🗑️</button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {paginatedTeams.length === 0 && <div className="col-span-full py-10 text-center text-zinc-600 text-xs">NENHUMA EQUIPE ENCONTRADA.</div>}
                 </div>
               </div>
@@ -351,7 +377,7 @@ export default function ConfigPage() {
                 <div>
                   <label className="text-[10px] text-slate-500 ml-2">Role Principal</label>
                   <select required className="w-full bg-black border border-white/10 rounded-2xl px-4 py-4 text-white focus:border-blue-500 outline-none transition-all font-black italic uppercase appearance-none cursor-pointer" value={playerForm.primary_role} onChange={e => setPlayerForm({...playerForm, primary_role: e.target.value})}>
-                    <option value="TOP">TOP</option><option value="JUNGLE">JUNGLE</option><option value="MID">MID</option><option value="ADC">ADC</option><option value="SUPPORT">SUPPORT</option>
+                    <option value="TOP">TOP</option><option value="JNG">JUNGLE</option><option value="MID">MID</option><option value="ADC">ADC</option><option value="SUP">SUPPORT</option>
                   </select>
                 </div>
               </div>
