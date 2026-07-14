@@ -85,7 +85,7 @@ export default function ScoutingReportPage() {
          matchesQuery = matchesQuery.in('game_type', globalTournaments);
       }
       
-      if (globalSplit !== 'ALL') matchesQuery = matchesQuery.eq('split', globalSplit);
+      if (globalSplit !== 'ALL') matchesQuery = matchesQuery.ilike('split', globalSplit);
 
       const { data: matchesRes } = await matchesQuery;
       

@@ -94,12 +94,12 @@ export default function MatchesPage() {
   const [drafts, setDrafts] = useState<Record<string, any[]>>({});
   const [playerStats, setPlayerStats] = useState<Record<string, any[]>>({}); 
   const [globalBans, setGlobalBans] = useState<Record<string, number>>({}); 
-  const [teamsDict, setTeamsDict] = useState<Record<string, string>>({});
+  const [teamsDict, setTeamsDict] = useState<Record<string, any>>({}); // <--- Alterado para guardar objetos completos (logo, nome, acronym)
   const [loadingDrafts, setLoadingDrafts] = useState<string | null>(null);
 
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Estados de Filtro (Circuito Desafiante como Padrão)
+  // Estados de Filtro
   const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
   const [globalTournament, setGlobalTournament] = useState("CIRCUITO DESAFIANTE");
   const [globalSplit, setGlobalSplit] = useState("ALL");
@@ -114,38 +114,46 @@ export default function MatchesPage() {
     setCurrentPage(1);
   }, [matchType, globalTournament, globalSplit]);
 
-  useEffect(() => {
-    async function loadSplitsMap() {
-      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
-      if (data) {
-        const map: Record<string, Set<string>> = {};
-        data.forEach((d: any) => {
-          if (d.game_type && d.split) {
-            const scope = normalizeTournamentScope(d.game_type);
-            if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split.trim().toUpperCase());
-          }
-        });
-        const finalMap: Record<string, string[]> = {};
-        for (const k in map) finalMap[k] = Array.from(map[k]);
-        setValidSplitsMap(finalMap);
-      }
-    }
-    loadSplitsMap();
-  }, []);
-
   useEffect(() => { fetchMatches(); }, []);
 
+  // Mapa dinâmico de Splits
+  const validSplitsMapMemo = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    matches.forEach(m => {
+       const scope = m.normalized_scope || 'OUTRO';
+       const split = String(m.split || '').toUpperCase().trim();
+       if (split && split !== 'NULL' && split !== 'UNDEFINED') {
+          if (!map[scope]) map[scope] = new Set();
+          map[scope].add(split);
+       }
+    });
+    const finalMap: Record<string, string[]> = {};
+    for (const k in map) {
+       finalMap[k] = Array.from(map[k]);
+    }
+    return finalMap;
+  }, [matches]);
+
   const dynamicAvailableSplits = useMemo(() => {
+    const splits = new Set<string>();
+    
     if (globalTournament === 'ALL') {
-      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+      Object.values(validSplitsMapMemo).forEach(arr => arr.forEach(s => splits.add(s)));
+    } else if (validSplitsMapMemo[globalTournament]) {
+      validSplitsMapMemo[globalTournament].forEach(s => splits.add(s));
     }
-    if (validSplitsMap[globalTournament]) {
-      const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
-      return validSplitsMap[globalTournament].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    }
-    return [];
-  }, [globalTournament, validSplitsMap]);
+    
+    const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
+    
+    return Array.from(splits).sort((a, b) => {
+      const indexA = order.indexOf(a);
+      const indexB = order.indexOf(b);
+      if (indexA === -1 && indexB === -1) return a.localeCompare(b);
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
+  }, [globalTournament, validSplitsMapMemo]);
 
   useEffect(() => {
     if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
@@ -164,8 +172,14 @@ export default function MatchesPage() {
       ]);
 
       if (teamsRes.data) {
-        const tDict: Record<string, string> = {};
-        teamsRes.data.forEach((t: any) => tDict[t.acronym] = t.name || t.acronym);
+        const tDict: Record<string, any> = {};
+        teamsRes.data.forEach((t: any) => {
+          tDict[t.acronym] = {
+            name: t.name || t.acronym,
+            acronym: t.acronym,
+            logo: t.logo_url
+          };
+        });
         setTeamsDict(tDict);
       }
       
@@ -252,8 +266,13 @@ export default function MatchesPage() {
       
       if (matchType === 'SCRIM' && !isScrim) return false;
       if (matchType === 'OFICIAL' && isScrim) return false;
-      if (!isScrim && globalTournament !== 'ALL' && scope !== globalTournament) return false;
-      if (globalSplit !== 'ALL' && String(m.split || '').toUpperCase() !== globalSplit.toUpperCase()) return false;
+      
+      if (matchType !== 'SCRIM' && globalTournament !== 'ALL' && scope !== globalTournament) return false;
+      
+      if (globalSplit !== 'ALL') {
+         const matchSplit = String(m.split || '').toUpperCase().trim();
+         if (matchSplit !== globalSplit) return false;
+      }
 
       return true;
     });
@@ -298,7 +317,9 @@ export default function MatchesPage() {
           id: sId,
           description: desc,
           isScrim: isScrim,
-          tournament: m.game_type, 
+          tournament: m.game_type,
+          scope: m.normalized_scope, // Guardado para display visual sem duplicação
+          split: m.split, // Guardado para display
           logicalDate: m.game_start_time, 
           games: [],
           teamA: { tag: blueTag, logo: m.blue_logo },
@@ -346,7 +367,6 @@ export default function MatchesPage() {
     };
   }, [groupedSeries, filteredMatches]);
 
-  // Recorte da paginação
   const paginatedSeries = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
     return groupedSeries.slice(startIndex, startIndex + ITEMS_PER_PAGE);
@@ -453,59 +473,69 @@ export default function MatchesPage() {
              barTitle = `Red Side Dominante (${redSideWins} vitórias)`;
           }
 
-          const teamAName = teamsDict[series.teamA.tag] || series.teamA.tag;
-          const teamBName = teamsDict[series.teamB.tag] || series.teamB.tag;
+          // Resgate Inteligente dos Times (Agora puxa a Logo verdadeira se existir)
+          const teamAInfo = teamsDict[series.teamA.tag] || { name: series.teamA.tag, acronym: series.teamA.tag, logo: series.teamA.logo };
+          const teamBInfo = teamsDict[series.teamB.tag] || { name: series.teamB.tag, acronym: series.teamB.tag, logo: series.teamB.logo };
 
           return (
             <div key={series.id} className="bg-[#18181b] border border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-600 transition-colors shadow-sm">
               
               <div onClick={() => toggleSeries(series)} className="flex items-stretch cursor-pointer">
                 
+                {/* Linha Lateral de Cor */}
                 <div className={`w-1.5 flex-shrink-0 transition-colors ${barColor}`} title={barTitle}></div>
 
-                <div className="flex-1 flex flex-col md:flex-row items-center justify-between p-4 px-6 gap-6">
+                <div className="flex-1 flex flex-col md:flex-row items-center justify-between p-4 px-5 md:px-6 gap-4 md:gap-6">
                    
-                   <div className="flex flex-col w-full md:w-1/4">
-                      <span className="text-[10px] text-zinc-500 font-mono font-bold tracking-widest uppercase">
-                         {series.isScrim ? 'TREINO / SCRIM' : (series.tournament ? series.tournament : 'OFICIAL')}
+                   {/* INFO DO CAMPEONATO (Limpo e Sem Duplicação) */}
+                   <div className="flex flex-col w-full md:w-1/4 shrink-0 text-center md:text-left">
+                      <span className="text-[10px] text-zinc-500 font-mono font-bold tracking-widest uppercase truncate">
+                         {series.isScrim ? 'TREINO / SCRIM' : series.scope}
                       </span>
-                      <span className="text-sm font-bold text-zinc-200 mt-0.5 truncate uppercase tracking-tight">{series.description}</span>
+                      <span className="text-sm font-bold text-zinc-200 mt-0.5 truncate uppercase tracking-tight">
+                         {series.isScrim ? series.description : (series.split || 'OFICIAL')}
+                      </span>
                    </div>
 
-                   <div className="flex items-center gap-4 justify-center flex-1 min-w-0">
+                   {/* BLOCO CENTRAL (Times + Placar, com espaço para respirar) */}
+                   <div className="flex items-center gap-3 md:gap-6 justify-center flex-1 min-w-0">
                       
-                      <div className="flex items-center gap-4 justify-end flex-1 min-w-0">
-                        <span className={`text-sm font-black uppercase truncate text-right ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`} title={teamAName}>
-                          {teamAName}
+                      {/* LADO AZUL */}
+                      <div className="flex items-center gap-3 justify-end flex-1 min-w-0">
+                        <span className={`hidden sm:block text-sm md:text-base font-black uppercase truncate text-right ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`} title={teamAInfo.name}>
+                          {teamAInfo.acronym}
                         </span>
-                        {series.teamA.logo ? (
-                          <img src={series.teamA.logo} className="w-12 h-12 object-contain shrink-0" alt="" />
+                        {teamAInfo.logo ? (
+                          <img src={teamAInfo.logo} className="w-8 h-8 md:w-10 md:h-10 object-contain shrink-0 drop-shadow-md" alt="" />
                         ) : (
-                          <div className="w-12 h-12 bg-zinc-800 rounded-md border border-zinc-700 shrink-0"></div>
+                          <div className="w-8 h-8 md:w-10 md:h-10 bg-zinc-800 rounded-md border border-zinc-700 shrink-0 flex items-center justify-center text-[10px] font-bold text-zinc-500">{teamAInfo.acronym?.substring(0,3)}</div>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900 rounded-md border border-zinc-800 shadow-inner shrink-0">
-                        <span className={`text-xl font-black ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreA}</span>
-                        <span className="text-zinc-600 text-xs font-bold">-</span>
-                        <span className={`text-xl font-black ${isTeamBWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreB}</span>
+                      {/* PLACAR */}
+                      <div className="flex items-center gap-3 px-3 py-1.5 md:px-5 md:py-2 bg-zinc-900 rounded-lg border border-zinc-800 shadow-inner shrink-0">
+                        <span className={`text-lg md:text-xl font-black ${isTeamAWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreA}</span>
+                        <span className="text-zinc-600 text-[10px] md:text-xs font-bold">-</span>
+                        <span className={`text-lg md:text-xl font-black ${isTeamBWin ? 'text-white' : 'text-zinc-500'}`}>{series.scoreB}</span>
                       </div>
 
-                      <div className="flex items-center gap-4 justify-start flex-1 min-w-0">
-                        {series.teamB.logo ? (
-                          <img src={series.teamB.logo} className="w-12 h-12 object-contain shrink-0" alt="" />
+                      {/* LADO VERMELHO */}
+                      <div className="flex items-center gap-3 justify-start flex-1 min-w-0">
+                        {teamBInfo.logo ? (
+                          <img src={teamBInfo.logo} className="w-8 h-8 md:w-10 md:h-10 object-contain shrink-0 drop-shadow-md" alt="" />
                         ) : (
-                          <div className="w-12 h-12 bg-zinc-800 rounded-md border border-zinc-700 shrink-0"></div>
+                          <div className="w-8 h-8 md:w-10 md:h-10 bg-zinc-800 rounded-md border border-zinc-700 shrink-0 flex items-center justify-center text-[10px] font-bold text-zinc-500">{teamBInfo.acronym?.substring(0,3)}</div>
                         )}
-                        <span className={`text-sm font-black uppercase truncate text-left ${isTeamBWin ? 'text-white' : 'text-zinc-500'}`} title={teamBName}>
-                          {teamBName}
+                        <span className={`hidden sm:block text-sm md:text-base font-black uppercase truncate text-left ${isTeamBWin ? 'text-white' : 'text-zinc-500'}`} title={teamBInfo.name}>
+                          {teamBInfo.acronym}
                         </span>
                       </div>
 
                    </div>
 
-                   <div className="flex items-center justify-end w-full md:w-1/4 gap-4">
-                      <div className="flex gap-1">
+                   {/* PONTINHOS DAS PARTIDAS */}
+                   <div className="flex items-center justify-center md:justify-end w-full md:w-[15%] shrink-0 gap-3">
+                      <div className="flex gap-1.5 flex-wrap justify-center md:justify-end">
                          {[...series.games].sort((a, b) => getSafeTimestamp(a.game_start_time) - getSafeTimestamp(b.game_start_time)).map((g: any, i: number) => {
                             const rWin = String(g.winner_side || '').toLowerCase().trim();
                             const isBLU = rWin === 'blue' || rWin === '100';
@@ -515,11 +545,11 @@ export default function MatchesPage() {
                             const winnerTag = isBLU ? gameBlueTag : gameRedTag;
 
                             return (
-                               <div key={i} className={`w-3 h-3 rounded-sm shadow-sm ${isBLU ? 'bg-blue-500' : 'bg-red-500'}`} title={`Game ${i+1}: ${winnerTag} win (${isBLU ? 'Blue' : 'Red'} side)`}></div>
+                               <div key={i} className={`w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm shadow-sm ${isBLU ? 'bg-blue-500' : 'bg-red-500'}`} title={`Game ${i+1}: ${winnerTag} win (${isBLU ? 'Blue' : 'Red'} side)`}></div>
                             );
                          })}
                       </div>
-                      <div className={`text-zinc-600 ml-2 transition-transform duration-300 ${expandedSeries === series.id ? 'rotate-180' : ''}`}>
+                      <div className={`text-zinc-600 ml-1 transition-transform duration-300 ${expandedSeries === series.id ? 'rotate-180 text-white' : ''}`}>
                          ▼
                       </div>
                    </div>
@@ -549,8 +579,9 @@ export default function MatchesPage() {
                       const rWin = String(game.winner_side || '').toLowerCase().trim();
                       const gameIsBlueWin = rWin === 'blue' || rWin === '100';
                       
-                      const gameBlueName = game.blue_name || teamsDict[game.blue_team_tag || game.blue_tag] || game.blue_team_tag || game.blue_tag || 'BLUE TEAM';
-                      const gameRedName  = game.red_name || teamsDict[game.red_team_tag || game.red_tag]   || game.red_team_tag || game.red_tag   || 'RED TEAM';
+                      // Ajustado para resgatar o Nome inteiro (via obj do dicionário)
+                      const gameBlueName = game.blue_name || teamsDict[game.blue_team_tag || game.blue_tag]?.name || game.blue_team_tag || game.blue_tag || 'BLUE TEAM';
+                      const gameRedName  = game.red_name || teamsDict[game.red_team_tag || game.red_tag]?.name   || game.red_team_tag || game.red_tag   || 'RED TEAM';
 
                       return (
                         <div key={matchId} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 relative shadow-sm">

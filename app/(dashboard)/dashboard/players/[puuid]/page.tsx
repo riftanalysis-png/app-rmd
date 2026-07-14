@@ -224,7 +224,7 @@ export default function PlayerProfilePage() {
         }
 
         let rosterQuery = supabase.from('bff_hub_players_roster').select('puuid, nickname, team_acronym, game_type');
-        if (globalSplit !== 'ALL') rosterQuery = rosterQuery.eq('split', globalSplit);
+        if (globalSplit !== 'ALL') rosterQuery = rosterQuery.ilike('split', globalSplit);
 
         const { data: rosterData } = await rosterQuery;
         if (rosterData) {

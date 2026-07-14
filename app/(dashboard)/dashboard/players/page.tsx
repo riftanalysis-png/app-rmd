@@ -78,8 +78,6 @@ function normalizeTournamentScope(rawName: string | null): string {
   return 'OUTRO';
 }
 
-// --- UTILITÁRIOS ---
-
 function formatTime(decimal: number) {
   if (isNaN(decimal) || decimal === null) return "00:00";
   const mins = Math.floor(decimal);
@@ -189,14 +187,12 @@ export default function PlayersHubPage() {
   
   const [teamsList, setTeamsList] = useState<any[]>([]); 
   const [statsDetailed, setStatsDetailed] = useState<any[]>([]);
-  const [myTeamTag, setMyTeamTag] = useState('RMD');
 
   useEffect(() => { checkUserRole(); }, []);
   
   useEffect(() => {
     async function loadSplitsMap() {
-      // Usa a BFF View de Matches History para pegar os escopos reais
-      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
+      const { data } = await supabase.from('bff_matches_history').select('game_type, split').limit(50000);
       if (data) {
         const map: Record<string, Set<string>> = {};
         const scopeMap: Record<string, Set<string>> = {};
@@ -204,7 +200,6 @@ export default function PlayersHubPage() {
         data.forEach((d: any) => {
           if (d.game_type && d.split) {
             const scope = normalizeTournamentScope(d.game_type);
-            
             if (!map[scope]) map[scope] = new Set();
             map[scope].add(d.split.trim().toUpperCase());
             
@@ -238,17 +233,24 @@ export default function PlayersHubPage() {
   }, [filterTeam, globalTournaments, globalSplit, isMapLoaded]);
 
   const dynamicAvailableSplits = useMemo(() => {
-    if (globalTournaments.includes('ALL')) {
-      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
-    }
     const splits = new Set<string>();
-    globalTournaments.forEach(t => {
-      if (validSplitsMap[t]) {
-        validSplitsMap[t].forEach(s => splits.add(s));
-      }
-    });
+    if (globalTournaments.includes('ALL')) {
+      Object.values(validSplitsMap).forEach(arr => arr.forEach(s => splits.add(s)));
+    } else {
+      globalTournaments.forEach(t => {
+        if (validSplitsMap[t]) validSplitsMap[t].forEach(s => splits.add(s));
+      });
+    }
+    
     const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
-    return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return Array.from(splits).sort((a, b) => {
+      const indexA = order.indexOf(a);
+      const indexB = order.indexOf(b);
+      if (indexA === -1 && indexB === -1) return a.localeCompare(b);
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
   }, [globalTournaments, validSplitsMap]);
 
   useEffect(() => {
@@ -265,144 +267,157 @@ export default function PlayersHubPage() {
   async function fetchInitialData() {
     setLoading(true);
     
-    // Fallback safe para Squad Config 
-    const { data: configData } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
-    if (configData && configData.my_team_tag) setMyTeamTag(configData.my_team_tag.toUpperCase());
-
-    const { data: t } = await supabase.from('bff_matches_teams').select('*').order('acronym');
-    
-    const rawTypesToFetch = globalTournaments.includes('ALL') 
-      ? [] 
-      : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
-
     let query = supabase.from('bff_hub_players_roster').select('*');
-    if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-    if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
+    if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
 
-    const { data: p } = await query;
-    
     let banQuery = supabase.from('bff_matches_bans').select('*').limit(200);
-    if (!globalTournaments.includes('ALL')) banQuery = banQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-    if (globalSplit !== 'ALL') banQuery = banQuery.eq('split', globalSplit);
-    
-    const [bansRes, matchCountRes] = await Promise.all([
+    if (globalSplit !== 'ALL') banQuery = banQuery.ilike('split', globalSplit); 
+
+    const [pRes, tRes, bansRes, matchCountRes, playersTableRes] = await Promise.all([
+      query,
+      supabase.from('bff_matches_teams').select('*').order('acronym'),
       banQuery,
-      supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true })
+      supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true }),
+      supabase.from('players').select('puuid, photo_url') 
     ]);
 
-    if (t && p) {
-      // --- DEDUPLICAÇÃO DE TIMES ---
-      const uniqueTeamsMap = new Map();
-      t.forEach((team: any) => {
-        const upperAcr = String(team.acronym || '').toUpperCase().trim();
-        if (!upperAcr) return;
-        
-        // Se a sigla ainda não existe no mapa, adiciona.
-        // Se já existe, mas a atual tem logo e a salva não tem, substitui.
-        if (!uniqueTeamsMap.has(upperAcr)) {
-          uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
-        } else if (team.logo_url && !uniqueTeamsMap.get(upperAcr).logo_url) {
-          uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
-        }
-      });
-      const allUniqueTeams = Array.from(uniqueTeamsMap.values());
-      // ---------------------------------------
-
-      const groupedPlayersMap = new Map();
-      p.forEach((curr: any) => {
-        const safeAcr = String(curr.team_acronym || '').toUpperCase().trim();
-        if (!groupedPlayersMap.has(curr.puuid)) {
-          groupedPlayersMap.set(curr.puuid, { ...curr, team_acronym: safeAcr, count: 1 });
-        } else {
-          const acc = groupedPlayersMap.get(curr.puuid);
-          const totalGames = acc.games_played + curr.games_played;
-          if (totalGames > 0) {
-            acc.median_lane = ((acc.median_lane * acc.games_played) + (curr.median_lane * curr.games_played)) / totalGames;
-            acc.median_impact = ((acc.median_impact * acc.games_played) + (curr.median_impact * curr.games_played)) / totalGames;
-            acc.median_conversion = ((acc.median_conversion * acc.games_played) + (curr.median_conversion * curr.games_played)) / totalGames;
-            acc.median_vision = ((acc.median_vision * acc.games_played) + (curr.median_vision * curr.games_played)) / totalGames;
-          }
-          acc.games_played = totalGames;
-          acc.count += 1;
-        }
-      });
-
-      const aggregatedPlayers = Array.from(groupedPlayersMap.values());
-
-      let maxMvpScore = -1;
-      let mvpPuuid = null;
-      aggregatedPlayers.forEach((player: any) => {
-        player.mvp_score = (player.median_lane + player.median_impact + player.median_conversion + player.median_vision) / 4;
-        if (player.mvp_score > maxMvpScore && player.games_played > 0) {
-          maxMvpScore = player.mvp_score;
-          mvpPuuid = player.puuid;
-        }
-      });
-      aggregatedPlayers.forEach((player: any) => player.is_mvp = player.puuid === mvpPuuid);
-
-      setPlayers(aggregatedPlayers);
-
-      const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
-      
-      // Filtrar usando a nossa lista limpa sem duplicatas
-      const filteredTeams = allUniqueTeams.filter((team: any) => activeTeamTags.has(team.acronym));
-      
-      setTeams(filteredTeams);
-      setTeamsList(allUniqueTeams);
-
-      setFilterTeam(prev => {
-        if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS";
-        return prev;
+    const t = tRes.data || [];
+    const pRaw = pRes.data || [];
+    
+    // FILTRAGEM JS PARA O ROSTER DE JOGADORES (Case-Insensitive seguríssima)
+    const p = pRaw.filter((curr: any) => {
+      if (globalTournaments.includes('ALL')) return true;
+      const normalized = normalizeTournamentScope(curr.game_type);
+      return globalTournaments.includes(normalized);
+    });
+    
+    const photoMap: Record<string, string> = {};
+    if (playersTableRes.data) {
+      playersTableRes.data.forEach((pl: any) => {
+         if (pl.photo_url) photoMap[pl.puuid] = pl.photo_url;
       });
     }
 
+    const uniqueTeamsMap = new Map();
+    t.forEach((team: any) => {
+      const upperAcr = String(team.acronym || '').toUpperCase().trim();
+      if (!upperAcr) return;
+      if (!uniqueTeamsMap.has(upperAcr)) {
+        uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
+      } else if (team.logo_url && !uniqueTeamsMap.get(upperAcr).logo_url) {
+        uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr });
+      }
+    });
+    const allUniqueTeams = Array.from(uniqueTeamsMap.values());
+
+    const groupedPlayersMap = new Map();
+    p.forEach((curr: any) => {
+      const safeAcr = String(curr.team_acronym || '').toUpperCase().trim();
+      if (!groupedPlayersMap.has(curr.puuid)) {
+        groupedPlayersMap.set(curr.puuid, { 
+          ...curr, 
+          team_acronym: safeAcr, 
+          count: 1,
+          photo_url: photoMap[curr.puuid] || null 
+        });
+      } else {
+        const acc = groupedPlayersMap.get(curr.puuid);
+        const totalGames = acc.games_played + curr.games_played;
+        if (totalGames > 0) {
+          acc.median_lane = ((acc.median_lane * acc.games_played) + (curr.median_lane * curr.games_played)) / totalGames;
+          acc.median_impact = ((acc.median_impact * acc.games_played) + (curr.median_impact * curr.games_played)) / totalGames;
+          acc.median_conversion = ((acc.median_conversion * acc.games_played) + (curr.median_conversion * curr.games_played)) / totalGames;
+          acc.median_vision = ((acc.median_vision * acc.games_played) + (curr.median_vision * curr.games_played)) / totalGames;
+        }
+        acc.games_played = totalGames;
+        acc.count += 1;
+      }
+    });
+
+    const aggregatedPlayers = Array.from(groupedPlayersMap.values());
+
+    let maxMvpScore = -1;
+    let mvpPuuid = null;
+    aggregatedPlayers.forEach((player: any) => {
+      player.mvp_score = (player.median_lane + player.median_impact + player.median_conversion + player.median_vision) / 4;
+      if (player.mvp_score > maxMvpScore && player.games_played > 0) {
+        maxMvpScore = player.mvp_score;
+        mvpPuuid = player.puuid;
+      }
+    });
+    aggregatedPlayers.forEach((player: any) => player.is_mvp = player.puuid === mvpPuuid);
+
+    setPlayers(aggregatedPlayers);
+
+    const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
+    const filteredTeams = allUniqueTeams.filter((team: any) => activeTeamTags.has(team.acronym));
+    
+    setTeams(filteredTeams);
+    setTeamsList(allUniqueTeams);
+
+    setFilterTeam(prev => {
+      if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS";
+      return prev;
+    });
+
+    // FILTRAGEM JS PARA O RANKING GLOBAL DE BANS
     if (bansRes.data) {
+       const validBans = bansRes.data.filter((curr: any) => {
+          if (globalTournaments.includes('ALL')) return true;
+          return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+       });
+
        const totalMatches = matchCountRes.count || 1;
        const banMap: Record<string, number> = {};
-       bansRes.data.forEach((b: any) => {
+       validBans.forEach((b: any) => {
           const rate = (Number(b.total_bans) / totalMatches) * 100;
           banMap[normalizeChampName(b.champion)] = Number(rate.toFixed(1));
        });
        setGlobalBans(banMap);
     }
 
-    const { data: sDetailed } = await supabase.from('core_player_stats').select('champion, team_tag, lane, role').limit(20000);
+    const { data: sDetailed } = await supabase.from('core_player_stats').select('champion, team_tag, lane, role').limit(50000);
     if (sDetailed) setStatsDetailed(sDetailed);
 
     setLoading(false);
   }
 
   async function fetchPerformanceData(team: string) {
-    const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
-
-    let query = supabase.from('bff_hub_performance').select('*').eq('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
-    if (!globalTournaments.includes('ALL')) query = query.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-    if (globalSplit !== 'ALL') query = query.eq('split', globalSplit);
+    let query = supabase.from('bff_hub_performance').select('*').ilike('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
+    if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
 
     const { data } = await query;
-    if (data) setTeamChartData(data);
+    if (data) {
+      // FILTRAGEM JS PARA PERFORMANCE
+      const validData = data.filter((curr: any) => {
+        if (globalTournaments.includes('ALL')) return true;
+        const normalized = normalizeTournamentScope(curr.game_type);
+        return globalTournaments.includes(normalized);
+      });
+      setTeamChartData(validData);
+    }
   }
 
   async function fetchAnalysisData(team: string) {
-    const rawTypesToFetch = globalTournaments.includes('ALL') ? [] : globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
+    let objQuery = supabase.from('bff_hub_objectives').select('*').ilike('team_acronym', team).limit(10000);
+    let draftQuery = supabase.from('bff_hub_draft').select('*').ilike('team_acronym', team).limit(10000);
 
-    let objQuery = supabase.from('bff_hub_objectives').select('*').eq('team_acronym', team).limit(10000);
-    let draftQuery = supabase.from('bff_hub_draft').select('*').eq('team_acronym', team).limit(10000);
-
-    if (!globalTournaments.includes('ALL')) {
-      objQuery = objQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-      draftQuery = draftQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-    }
     if (globalSplit !== 'ALL') {
-      objQuery = objQuery.eq('split', globalSplit);
-      draftQuery = draftQuery.eq('split', globalSplit);
+      objQuery = objQuery.ilike('split', globalSplit);
+      draftQuery = draftQuery.ilike('split', globalSplit);
     }
 
     const [obj, draft] = await Promise.all([objQuery, draftQuery]);
     
+    // BLINDAGEM DOS OBJETIVOS (JS Filter)
     if (obj.data) {
+      const validObjs = obj.data.filter((curr: any) => {
+        if (globalTournaments.includes('ALL')) return true;
+        return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+      });
+
       const groupedObjMap = new Map();
-      obj.data.forEach((curr: any) => {
+      validObjs.forEach((curr: any) => {
         const normSide = String(curr.side || '').toLowerCase() === '100' ? 'blue' : String(curr.side || '').toLowerCase() === '200' ? 'red' : String(curr.side || '').toLowerCase();
         const key = `${String(curr.objective_type).toLowerCase()}_${normSide}`;
         
@@ -419,21 +434,31 @@ export default function PlayersHubPage() {
       setTeamObjectiveWindows(Array.from(groupedObjMap.values()));
     }
 
+    // BLINDAGEM DO DRAFT (JS Filter + Numeração Estrita)
     if (draft.data) {
+      const validDrafts = draft.data.filter((curr: any) => {
+        if (globalTournaments.includes('ALL')) return true;
+        return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+      });
+
       const groupedDraftMap = new Map();
-      draft.data.forEach((curr: any) => {
-        const key = `${curr.sequence}_${curr.champion}_${curr.type}`;
+      validDrafts.forEach((curr: any) => {
+        const safeType = String(curr.type || '').toUpperCase().trim();
+        const key = `${curr.sequence}_${curr.champion}_${safeType}`;
         if (!groupedDraftMap.has(key)) {
-          groupedDraftMap.set(key, { ...curr });
+          groupedDraftMap.set(key, { ...curr, type: safeType });
         } else {
           const acc = groupedDraftMap.get(key);
-          const total = acc.total_count + curr.total_count;
+          const cTotal = Number(curr.total_count) || 1; 
+          const aTotal = Number(acc.total_count) || 0;
+          const total = aTotal + cTotal;
+          
           if (total > 0) {
-            acc.win_rate = ((acc.win_rate * acc.total_count) + (curr.win_rate * curr.total_count)) / total;
-            if(curr.avg_lane) acc.avg_lane = ((acc.avg_lane * acc.total_count) + (curr.avg_lane * curr.total_count)) / total;
-            if(curr.avg_impact) acc.avg_impact = ((acc.avg_impact * acc.total_count) + (curr.avg_impact * curr.total_count)) / total;
-            if(curr.avg_conv) acc.avg_conv = ((acc.avg_conv * acc.total_count) + (curr.avg_conv * curr.total_count)) / total;
-            if(curr.avg_vision) acc.avg_vision = ((acc.avg_vision * acc.total_count) + (curr.avg_vision * curr.total_count)) / total;
+            acc.win_rate = ((Number(acc.win_rate || 0) * aTotal) + (Number(curr.win_rate || 0) * cTotal)) / total;
+            if(curr.avg_lane) acc.avg_lane = ((Number(acc.avg_lane || 0) * aTotal) + (Number(curr.avg_lane || 0) * cTotal)) / total;
+            if(curr.avg_impact) acc.avg_impact = ((Number(acc.avg_impact || 0) * aTotal) + (Number(curr.avg_impact || 0) * cTotal)) / total;
+            if(curr.avg_conv) acc.avg_conv = ((Number(acc.avg_conv || 0) * aTotal) + (Number(curr.avg_conv || 0) * cTotal)) / total;
+            if(curr.avg_vision) acc.avg_vision = ((Number(acc.avg_vision || 0) * aTotal) + (Number(curr.avg_vision || 0) * cTotal)) / total;
           }
           acc.total_count = total;
         }
@@ -441,6 +466,7 @@ export default function PlayersHubPage() {
       setDraftStats(Array.from(groupedDraftMap.values()));
     }
     
+    // BLINDAGEM DAS WARDS (Visão)
     let allWards: any[] = [];
     let fetchMore = true;
     let from = 0;
@@ -450,18 +476,22 @@ export default function PlayersHubPage() {
       let wardsQuery = supabase
         .from('bff_hub_vision')
         .select('*')
-        .eq('team_acronym', team)
+        .ilike('team_acronym', team)
         .range(from, from + step - 1);
 
-      if (!globalTournaments.includes('ALL')) wardsQuery = wardsQuery.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
-      if (globalSplit !== 'ALL') wardsQuery = wardsQuery.eq('split', globalSplit);
+      if (globalSplit !== 'ALL') wardsQuery = wardsQuery.ilike('split', globalSplit); 
 
       const { data: wardsChunk, error } = await wardsQuery;
 
       if (error || !wardsChunk || wardsChunk.length === 0) {
         fetchMore = false;
       } else {
-        allWards = [...allWards, ...wardsChunk];
+        const validWards = wardsChunk.filter((curr: any) => {
+           if (globalTournaments.includes('ALL')) return true;
+           return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+        });
+
+        allWards = [...allWards, ...validWards];
         from += step;
         
         if (wardsChunk.length < step) {
@@ -469,11 +499,8 @@ export default function PlayersHubPage() {
         }
       }
     }
-
     setTeamWards(allWards);
   }
-
-  // --- USEMEMOS BLINDADOS ---
 
   const sideStatsData = useMemo(() => {
     if (filterTeam === "TODOS" || teamChartData.length === 0) return null;
@@ -524,11 +551,11 @@ export default function PlayersHubPage() {
 
   const mostPickedOverall = useMemo(() => {
     const counts = draftStats.reduce((acc: any, curr) => {
-      if (curr.type === 'PICK') {
+      if (String(curr.type || '').toUpperCase() === 'PICK') { 
         if (!acc[curr.champion]) acc[curr.champion] = { name: curr.champion, count: 0, wins: 0 };
-        const count = curr.total_count || 0;
+        const count = Number(curr.total_count) || 1;
         acc[curr.champion].count += count;
-        acc[curr.champion].wins += (count * ((curr.win_rate || 0) / 100));
+        acc[curr.champion].wins += (count * ((Number(curr.win_rate) || 0) / 100));
       }
       return acc;
     }, {});
@@ -537,11 +564,14 @@ export default function PlayersHubPage() {
 
   const draftAssignments = useMemo(() => {
     const assignments: { [key: number]: any } = {};
+    
     for (let seq = 1; seq <= 20; seq++) {
       const isBan = [1,2,3,4,5,6,13,14,15,16].includes(seq);
-      const records = draftStats.filter(d => d.sequence === seq && d.type === (isBan ? 'BAN' : 'PICK'));
+      const expectedType = isBan ? 'BAN' : 'PICK';
       
-      if (records.length) {
+      const records = draftStats.filter(d => Number(d.sequence) === seq && String(d.type || '').toUpperCase() === expectedType);
+      
+      if (records.length > 0) {
         if (draftViewMode === 'role' && !isBan) {
           const roleMap: any = {};
           records.forEach(r => {
@@ -549,7 +579,7 @@ export default function PlayersHubPage() {
              if (!rawRole) {
                 const champStats = statsDetailed.find((s: any) => 
                    normalizeChampName(s.champion) === normalizeChampName(r.champion) && 
-                   String(s.team_tag).toUpperCase() === myTeamTag
+                   String(s.team_tag).toUpperCase() === filterTeam.toUpperCase()
                 );
                 if (champStats) rawRole = champStats.role || champStats.lane;
              }
@@ -558,12 +588,13 @@ export default function PlayersHubPage() {
              if (rKey === 'unknown') return; 
 
              if(!roleMap[rKey]) roleMap[rKey] = { name: rKey, count: 0, wrSum: 0, laneSum:0, impSum:0, convSum:0, visSum:0 };
-             roleMap[rKey].count += r.total_count;
-             roleMap[rKey].wrSum += ((r.win_rate || 0) * r.total_count);
-             roleMap[rKey].laneSum += ((r.avg_lane || 0) * r.total_count);
-             roleMap[rKey].impSum += ((r.avg_impact || 0) * r.total_count);
-             roleMap[rKey].convSum += ((r.avg_conv || 0) * r.total_count);
-             roleMap[rKey].visSum += ((r.avg_vision || 0) * r.total_count);
+             const rCount = Number(r.total_count) || 1;
+             roleMap[rKey].count += rCount;
+             roleMap[rKey].wrSum += ((Number(r.win_rate) || 0) * rCount);
+             roleMap[rKey].laneSum += ((Number(r.avg_lane) || 0) * rCount);
+             roleMap[rKey].impSum += ((Number(r.avg_impact) || 0) * rCount);
+             roleMap[rKey].convSum += ((Number(r.avg_conv) || 0) * rCount);
+             roleMap[rKey].visSum += ((Number(r.avg_vision) || 0) * rCount);
           });
           
           const sorted = Object.values(roleMap).sort((a: any, b: any) => b.count - a.count);
@@ -583,27 +614,30 @@ export default function PlayersHubPage() {
           records.forEach(r => {
              const cKey = r.champion;
              if(!champMap[cKey]) champMap[cKey] = { name: cKey, count: 0, wrSum: 0, laneSum:0, impSum:0, convSum:0, visSum:0 };
-             champMap[cKey].count += r.total_count;
-             champMap[cKey].wrSum += ((r.win_rate || 0) * r.total_count);
-             champMap[cKey].laneSum += ((r.avg_lane || 0) * r.total_count);
-             champMap[cKey].impSum += ((r.avg_impact || 0) * r.total_count);
-             champMap[cKey].convSum += ((r.avg_conv || 0) * r.total_count);
-             champMap[cKey].visSum += ((r.avg_vision || 0) * r.total_count);
+             const rCount = Number(r.total_count) || 1;
+             champMap[cKey].count += rCount;
+             champMap[cKey].wrSum += ((Number(r.win_rate) || 0) * rCount);
+             champMap[cKey].laneSum += ((Number(r.avg_lane) || 0) * rCount);
+             champMap[cKey].impSum += ((Number(r.avg_impact) || 0) * rCount);
+             champMap[cKey].convSum += ((Number(r.avg_conv) || 0) * rCount);
+             champMap[cKey].visSum += ((Number(r.avg_vision) || 0) * rCount);
           });
           const top = Object.values(champMap).sort((a: any, b: any) => b.count - a.count)[0] as any;
-          assignments[seq] = { 
-            name: top.name, 
-            wr: top.count > 0 ? top.wrSum / top.count : 0, 
-            count: top.count, 
-            image: getChampionImageUrl(top.name), 
-            splash: getChampionSplashUrl(top.name),
-            ratings: top.count > 0 ? { lane: top.laneSum/top.count, impact: top.impSum/top.count, conv: top.convSum/top.count, vision: top.visSum/top.count } : null 
-          };
+          if (top) {
+            assignments[seq] = { 
+              name: top.name, 
+              wr: top.count > 0 ? top.wrSum / top.count : 0, 
+              count: top.count, 
+              image: getChampionImageUrl(top.name), 
+              splash: getChampionSplashUrl(top.name),
+              ratings: top.count > 0 ? { lane: top.laneSum/top.count, impact: top.impSum/top.count, conv: top.convSum/top.count, vision: top.visSum/top.count } : null 
+            };
+          }
         }
       }
     }
     return assignments;
-  }, [draftStats, draftViewMode, statsDetailed, myTeamTag]);
+  }, [draftStats, draftViewMode, statsDetailed, filterTeam]);
 
   const boxPlotData = useMemo(() => ORDERED_OBJECTIVES.filter(k => k !== 'lvl1').map(objKey => {
     const targetSide = String(heatmapSide).toLowerCase();
@@ -754,7 +788,7 @@ export default function PlayersHubPage() {
             ) : (
               leaderboardPlayers.map((p, index) => {
                 const isTop1 = index === 0;
-                const team = teams.find((t: any) => t.acronym === p.team_acronym);
+                const team = teamsList.find((t: any) => t.acronym.toUpperCase() === p.team_acronym.toUpperCase());
                 const roleIcon = getRoleIcon(String(p.primary_role), "w-3 h-3");
                 
                 return (
@@ -807,6 +841,7 @@ export default function PlayersHubPage() {
       ) : (
         <div className="space-y-6">
           
+          {/* GRÁFICO PERFORMANCE ANALYTICS COM SCROLL E LOGOS */}
           <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 h-[380px] shadow-sm relative flex flex-col">
             <div className="flex justify-between items-center mb-6 shrink-0">
                <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
@@ -814,20 +849,23 @@ export default function PlayersHubPage() {
                  Performance Analytics Timeline
                </h3>
             </div>
-            <div className="flex-1 min-h-0">
-               <ResponsiveContainer width="100%" height="100%">
-                 <LineChart data={teamChartData} margin={{ top: 5, right: 20, left: -20, bottom: 40 }}>
-                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                   <XAxis dataKey="match_id" tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} />} interval={0} stroke="#27272a" axisLine={false} tickLine={false} />
-                   <YAxis domain={[40, 100]} stroke="#71717a" fontSize={9} fontStyle="bold" axisLine={false} tickLine={false} />
-                   <Tooltip content={<CustomChartTooltip />} wrapperStyle={{ zIndex: 9999 }} cursor={{ stroke: '#3f3f46', strokeWidth: 1, strokeDasharray: '5 5' }} />
-                   <Legend verticalAlign="bottom" align="center" iconType="circle" wrapperStyle={{ paddingTop: '20px', fontSize: '10px', fontWeight: 'bold' }} />
-                   <Line type="monotone" dataKey="avg_lane" name="LANE" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#8b5cf6' }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
-                   <Line type="monotone" dataKey="avg_impact" name="IMPACTO" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#3b82f6' }} activeDot={{ r: 5, fill: '#3b82f6' }} />
-                   <Line type="monotone" dataKey="avg_conversion" name="CONV." stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#10b981' }} activeDot={{ r: 5, fill: '#10b981' }} />
-                   <Line type="monotone" dataKey="avg_vision" name="VISÃO" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#f59e0b' }} activeDot={{ r: 5, fill: '#f59e0b' }} />
-                 </LineChart>
-               </ResponsiveContainer>
+            
+            <div className="flex-1 min-h-0 overflow-x-auto custom-scrollbar pb-2">
+               <div style={{ minWidth: teamChartData.length > 15 ? `${teamChartData.length * 45}px` : '100%', height: '100%' }}>
+                 <ResponsiveContainer width="100%" height="100%">
+                   <LineChart data={teamChartData} margin={{ top: 5, right: 20, left: -20, bottom: 20 }}>
+                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                     <XAxis dataKey="match_id" tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} teamsList={teamsList} />} interval={0} stroke="#27272a" axisLine={false} tickLine={false} />
+                     <YAxis domain={[40, 100]} stroke="#71717a" fontSize={9} fontStyle="bold" axisLine={false} tickLine={false} />
+                     <Tooltip content={<CustomChartTooltip teamsList={teamsList} />} wrapperStyle={{ zIndex: 9999 }} cursor={{ stroke: '#3f3f46', strokeWidth: 1, strokeDasharray: '5 5' }} />
+                     <Legend verticalAlign="bottom" align="center" iconType="circle" wrapperStyle={{ paddingTop: '10px', fontSize: '10px', fontWeight: 'bold' }} />
+                     <Line type="monotone" dataKey="avg_lane" name="LANE" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#8b5cf6' }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
+                     <Line type="monotone" dataKey="avg_impact" name="IMPACTO" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#3b82f6' }} activeDot={{ r: 5, fill: '#3b82f6' }} />
+                     <Line type="monotone" dataKey="avg_conversion" name="CONV." stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#10b981' }} activeDot={{ r: 5, fill: '#10b981' }} />
+                     <Line type="monotone" dataKey="avg_vision" name="VISÃO" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#f59e0b' }} activeDot={{ r: 5, fill: '#f59e0b' }} />
+                   </LineChart>
+                 </ResponsiveContainer>
+               </div>
             </div>
           </div>
 
@@ -854,7 +892,7 @@ export default function PlayersHubPage() {
                       <PlayerCard 
                         key={p.puuid} 
                         player={p} 
-                        teams={teams} 
+                        teams={teamsList} 
                         isAdmin={isAdmin} 
                         isTeamMVP={p.mvp_score === maxTeamScore && maxTeamScore > 0}
                         onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
@@ -874,7 +912,7 @@ export default function PlayersHubPage() {
                           <PlayerCard 
                             key={p.puuid} 
                             player={p} 
-                            teams={teams} 
+                            teams={teamsList} 
                             isAdmin={isAdmin} 
                             isTeamMVP={false}
                             onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
@@ -1059,7 +1097,7 @@ function ProgressBar({ label, value }: { label: string, value: number }) {
 }
 
 function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
-  const team = teams.find((t: any) => t.acronym === player.team_acronym);
+  const team = teams.find((t: any) => t.acronym.toUpperCase() === player.team_acronym.toUpperCase());
   const isGlobalMVP = player.is_mvp;
   
   let cardBorder = 'border-zinc-800 hover:border-blue-500';
@@ -1488,23 +1526,53 @@ function SideSelector({ value, onChange }: { value: string, onChange: (val: stri
 
 // --- GRÁFICOS (TOOLTIPS & TICKS FLAT) ---
 
-const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
+const CustomXAxisTick = ({ x, y, payload, teamChartData, teamsList }: any) => {
   const match = teamChartData?.find((d: any) => d.match_id === payload.value);
+  const opponentAcronym = String(match?.opponent_acronym || '').toUpperCase();
+  
+  const opponentTeamData = teamsList?.find((t: any) => t.acronym === opponentAcronym);
+  const logoUrl = opponentTeamData?.logo_url || match?.opponent_logo;
+
   return (
     <g transform={`translate(${x},${y})`}>
-      {match?.opponent_logo ? (
-        <image href={match.opponent_logo} x={-8} y={5} width="16" height="16" />
+      {logoUrl ? (
+        <image href={logoUrl} x={-10} y={8} width="20" height="20" />
       ) : (
-        <text x={0} y={15} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {String(match?.opponent_acronym || '?').toUpperCase()}</text>
+        <text x={0} y={18} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {opponentAcronym || '?'}</text>
       )}
     </g>
   );
 };
 
-const CustomChartTooltip = ({ active, payload }: any) => {
+const CustomChartTooltip = ({ active, payload, teamsList }: any) => {
   if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    const isWin = data.win_status === 'W';
+    const resultColor = isWin ? 'text-blue-500' : 'text-red-500';
+    const resultText = isWin ? 'VITÓRIA' : 'DERROTA';
+    
+    const opponentAcronym = String(data.opponent_acronym || '?').toUpperCase();
+    const opponentTeamData = teamsList?.find((t: any) => t.acronym === opponentAcronym);
+    const oppLogo = opponentTeamData?.logo_url || data.opponent_logo;
+
+    let placarStr = resultText;
+    if (data.team_score !== undefined && data.opponent_score !== undefined) {
+      placarStr = `${data.team_score} x ${data.opponent_score}`;
+    } else if (data.team_kills !== undefined && data.opponent_kills !== undefined) {
+      placarStr = `${data.team_kills} x ${data.opponent_kills} (KILLS)`;
+    }
+
     return (
-      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
+      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[170px] uppercase">
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-2 mb-2">
+           <div className="flex items-center gap-2">
+             {oppLogo && <img src={oppLogo} className="w-4 h-4 object-contain rounded-sm" alt="" />}
+             <span className="text-white text-[10px] font-black">VS {opponentAcronym}</span>
+           </div>
+           <span className={`text-[10px] font-black tracking-widest ${resultColor}`}>
+             {placarStr}
+           </span>
+        </div>
         <div className="space-y-1.5">
           {payload.map((p: any) => (
             <div key={p.dataKey} className="flex justify-between items-center gap-3 text-[9px] font-bold text-white">

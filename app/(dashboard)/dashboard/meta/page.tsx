@@ -9,9 +9,6 @@ import {
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
-// ==========================================
-// 1. ADICIONE ESTE BLOCO AQUI
-// ==========================================
 const BASE_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons";
 const BASE_ANNOUNCE_URL = "https://raw.communitydragon.org/latest/game/assets/ux/announcements";
 
@@ -52,7 +49,6 @@ function getScoreColor(score: any) {
   return "text-red-400 drop-shadow-[0_0_8px_rgba(248,113,113,0.5)]";                                 
 }
 
-// --- CLASSIFICADOR DE CAMPEONATOS (TRADUTOR UI -> BANCO) ---
 function normalizeTournamentScope(rawName: string | null): string {
   const name = String(rawName || '').toUpperCase();
   if (name.includes('SCRIM')) return 'SCRIM';
@@ -84,7 +80,6 @@ function normalizeTournamentScope(rawName: string | null): string {
   return 'OUTRO';
 }
 
-// --- TRITURADORES E FORMATADORES ---
 function normalizeChampName(name: string | null): string {
   if (!name) return 'unknown';
   let n = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -251,7 +246,7 @@ export default function MetaWarRoom() {
              const rawTypesToFetch = globalTournaments.flatMap(scope => scopeToRawMap[scope] || []);
              q = q.in('game_type', rawTypesToFetch.length > 0 ? rawTypesToFetch : ['__EMPTY__']);
          }
-         if (globalSplit !== 'ALL') q = q.eq('split', globalSplit);
+         if (globalSplit !== 'ALL') q = q.ilike('split', globalSplit);
          return q;
       };
 
@@ -267,16 +262,29 @@ export default function MetaWarRoom() {
 
       const goldData = goldRes?.data || [];
 
+      // NOVO AGREGADOR DE TIERS (Agora puxa Lane, Impacto, Conversão e Visão)
       const aggTiers = Array.from((t.data || []).reduce((acc, curr) => {
           const lane = normalizeRole(curr.lane);
           const key = `${normalizeChampName(curr.champion)}_${lane}`;
           const pScore = MathSafe(curr.power_score);
           const tPicks = MathSafe(curr.total_picks);
+          
+          const aLane = MathSafe(curr.avg_lane);
+          const aImp = MathSafe(curr.avg_impact);
+          const aConv = MathSafe(curr.avg_conversion);
+          const aVis = MathSafe(curr.avg_vision);
+          const aWr = MathSafe(curr.win_rate);
 
-          if (!acc.has(key)) acc.set(key, { ...curr, lane, power_score: pScore, total_picks: tPicks });
-          else {
+          if (!acc.has(key)) {
+            acc.set(key, { ...curr, lane, power_score: pScore, total_picks: tPicks, avg_lane: aLane, avg_impact: aImp, avg_conversion: aConv, avg_vision: aVis, win_rate: aWr });
+          } else {
               const ex = acc.get(key);
               ex.power_score = weightedAvg(ex.power_score, ex.total_picks, pScore, tPicks);
+              ex.avg_lane = weightedAvg(ex.avg_lane, ex.total_picks, aLane, tPicks);
+              ex.avg_impact = weightedAvg(ex.avg_impact, ex.total_picks, aImp, tPicks);
+              ex.avg_conversion = weightedAvg(ex.avg_conversion, ex.total_picks, aConv, tPicks);
+              ex.avg_vision = weightedAvg(ex.avg_vision, ex.total_picks, aVis, tPicks);
+              ex.win_rate = weightedAvg(ex.win_rate, ex.total_picks, aWr, tPicks);
               ex.total_picks += tPicks;
           }
           return acc;
@@ -425,7 +433,7 @@ export default function MetaWarRoom() {
     <button key={`${c.champion}-${c.lane}`} onClick={() => { setSelectedChamp({ name: c.champion, lane: c.lane }); setActiveTab('DRAFT'); }} className="relative group/matrix hover:-translate-y-1 transition-transform hover:z-[999]">
       <img src={getChampionImageUrl(c.champion)} className={`w-14 h-14 rounded-2xl border ${borderClass} shadow-sm group-hover/matrix:shadow-lg ${colorClass === 'text-zinc-500' ? 'grayscale opacity-70 group-hover/matrix:grayscale-0 group-hover/matrix:opacity-100' : ''}`} alt="" />
       
-      <div className="absolute bottom-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.8)] opacity-0 invisible group-hover/matrix:opacity-100 group-hover/matrix:visible transition-all duration-200 z-[9999] origin-bottom scale-95 group-hover/matrix:scale-100 pointer-events-none">
+      <div className="absolute bottom-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-56 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.8)] opacity-0 invisible group-hover/matrix:opacity-100 group-hover/matrix:visible transition-all duration-200 z-[9999] origin-bottom scale-95 group-hover/matrix:scale-100 pointer-events-none">
          <div className="flex items-center justify-between gap-3 mb-2 border-b border-zinc-800 pb-2">
             <div className="flex items-center gap-2">
               <img src={getRoleIcon(c.lane)} className="w-3 h-3 brightness-200 opacity-80" alt="" />
@@ -436,9 +444,16 @@ export default function MetaWarRoom() {
          
          <p className="text-[9px] text-zinc-400 leading-snug mb-3 text-left normal-case">{catDesc}</p>
          
-         <div className="grid grid-cols-2 gap-2 text-[9px] font-bold">
+         <div className="grid grid-cols-2 gap-2 text-[9px] font-bold mb-3">
            <div className="bg-zinc-900 rounded p-1.5 text-center border border-zinc-800"><span className="block text-[7px] text-zinc-500 mb-0.5 uppercase tracking-widest">Amostra</span><span className="text-white">{c.total_picks} Jogos</span></div>
            <div className="bg-zinc-900 rounded p-1.5 text-center border border-zinc-800"><span className="block text-[7px] text-zinc-500 mb-0.5 uppercase tracking-widest">Tatical Score</span><span className="text-white">{Math.round(c.power_score)} Pts</span></div>
+         </div>
+
+         <div className="space-y-2 border-t border-zinc-800 pt-3">
+           <MiniPilar label="LANE" score={c.avg_lane} compact />
+           <MiniPilar label="IMPACTO" score={c.avg_impact} compact />
+           <MiniPilar label="CONVERSÃO" score={c.avg_conversion} compact />
+           <MiniPilar label="VISÃO" score={c.avg_vision} compact />
          </div>
       </div>
     </button>
@@ -537,6 +552,13 @@ export default function MetaWarRoom() {
     }
     return { pickIdentity, pickColor };
   }, [selectedChamp, champDraft]);
+
+  const selectedChampInfo = useMemo(() => {
+    if (!selectedChamp) return null;
+    const cName = normalizeChampName(selectedChamp.name);
+    const cLane = normalizeRole(selectedChamp.lane);
+    return data.tiers.find((c: any) => normalizeChampName(c.champion) === cName && normalizeRole(c.lane) === cLane);
+  }, [selectedChamp, data.tiers]);
 
   const findGoldValue = (iconKey: string, dbData: any[]) => {
     if (!dbData || dbData.length === 0) return null;
@@ -995,7 +1017,7 @@ export default function MetaWarRoom() {
                 </div>
               )}
 
-              {/* LENS 2: TRUST INDEX (COM HOVER DE CONTEXTO MATEMÁTICO) */}
+              {/* LENS 2: TRUST INDEX */}
               {championView === 'TRUST_INDEX' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in-up">
                   {trustIndexList.length > 0 ? trustIndexList.map((c: any, idx: number) => (
@@ -1021,10 +1043,20 @@ export default function MetaWarRoom() {
                           <p className="text-xl font-black text-white uppercase tracking-tight leading-none drop-shadow-md">{c.champion}</p>
                           <img src={getRoleIcon(c.lane)} className="w-4 h-4 brightness-200 opacity-70" alt="" />
                         </div>
-                        <div className="flex justify-between items-center mt-3">
+                        
+                        <div className="flex justify-between items-center mt-3 mb-2">
                            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">{c.total_picks} JOGOS</p>
                            <p className="text-[12px] text-blue-400 font-black">{Math.round(c.power_score)} SC</p>
                         </div>
+                        
+                        {/* MINI-BARRAS DE PERFORMANCE */}
+                        <div className="grid grid-cols-4 gap-1.5 opacity-80">
+                           <div className="h-1 bg-zinc-800 rounded-full overflow-hidden" title={`Lane: ${c.avg_lane?.toFixed(1)}`}><div className="h-full bg-blue-400" style={{width: `${Math.min(100, Math.max(0, c.avg_lane))}%`}}></div></div>
+                           <div className="h-1 bg-zinc-800 rounded-full overflow-hidden" title={`Impact: ${c.avg_impact?.toFixed(1)}`}><div className="h-full bg-red-400" style={{width: `${Math.min(100, Math.max(0, c.avg_impact))}%`}}></div></div>
+                           <div className="h-1 bg-zinc-800 rounded-full overflow-hidden" title={`Conv: ${c.avg_conversion?.toFixed(1)}`}><div className="h-full bg-amber-400" style={{width: `${Math.min(100, Math.max(0, c.avg_conversion))}%`}}></div></div>
+                           <div className="h-1 bg-zinc-800 rounded-full overflow-hidden" title={`Vision: ${c.avg_vision?.toFixed(1)}`}><div className="h-full bg-emerald-400" style={{width: `${Math.min(100, Math.max(0, c.avg_vision))}%`}}></div></div>
+                        </div>
+
                       </div>
 
                       {/* POPOVER TRUST INDEX (EXPLICATIVO) */}
@@ -1056,7 +1088,7 @@ export default function MetaWarRoom() {
                 </div>
               )}
 
-              {/* LENS 3: META MATRIX (COM HOVER EXPLICATIVO) */}
+              {/* LENS 3: META MATRIX */}
               {championView === 'META_MATRIX' && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in-up">
                   
@@ -1117,7 +1149,7 @@ export default function MetaWarRoom() {
             </>
           )}
 
-          {/* PERFIL DO CAMPEÃO SELECIONADO (COM SPLASH ART GIGANTE E TABS FLATS) */}
+          {/* PERFIL DO CAMPEÃO SELECIONADO */}
           {selectedChamp && pickProfile && (
             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl relative overflow-hidden shadow-xl animate-fade-in-up duration-500 group">
               
@@ -1130,7 +1162,7 @@ export default function MetaWarRoom() {
               <div className="relative z-10 p-8 lg:p-12 flex flex-col xl:flex-row gap-12">
                 
                 {/* Lado Esquerdo: Perfil */}
-                <div className="flex flex-col xl:border-r border-zinc-800 xl:pr-12 min-w-[280px]">
+                <div className="flex flex-col xl:border-r border-zinc-800 xl:pr-12 min-w-[320px]">
                   
                   <button onClick={() => setSelectedChamp(null)} className="mb-8 flex items-center gap-2 text-[10px] text-zinc-500 hover:text-white font-bold uppercase tracking-widest transition-colors bg-zinc-900 px-4 py-2 rounded-md border border-zinc-800 hover:border-zinc-600 w-max shadow-sm">
                     <span className="text-lg leading-none mb-0.5">←</span> VOLTAR
@@ -1146,12 +1178,31 @@ export default function MetaWarRoom() {
                     <h2 className="text-4xl font-black mt-2 text-white uppercase tracking-tight text-center drop-shadow-md">{selectedChamp.name}</h2>
                     <p className="text-zinc-400 font-bold text-[10px] tracking-widest uppercase mb-6 text-center">{selectedChamp.lane}</p>
                     
-                    <div className="flex flex-col gap-2 w-full mb-10">
+                    <div className="flex flex-col gap-2 w-full mb-8">
                       <div className={`text-[10px] font-bold text-center tracking-widest uppercase border px-4 py-2 rounded-lg shadow-sm ${pickProfile.pickColor}`}>{pickProfile.pickIdentity}</div>
                     </div>
+
+                    {/* NOVO: RADAR DE PILARES */}
+                    {selectedChampInfo && (
+                      <div className="w-full bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 mb-8 shadow-inner relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
+                        <div className="flex justify-between items-center mb-5 border-b border-zinc-800/80 pb-3">
+                          <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">WIN RATE GERAL</span>
+                          <span className={`text-xl font-black ${selectedChampInfo.win_rate >= 50 ? 'text-blue-400' : 'text-orange-400'}`}>
+                            {selectedChampInfo.win_rate.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="space-y-4">
+                          <MiniPilar label="FASE DE ROTAS" score={selectedChampInfo.avg_lane} />
+                          <MiniPilar label="IMPACTO / LUTAS" score={selectedChampInfo.avg_impact} />
+                          <MiniPilar label="EFICIÊNCIA OURO" score={selectedChampInfo.avg_conversion} />
+                          <MiniPilar label="CONTROLE DE VISÃO" score={selectedChampInfo.avg_vision} />
+                        </div>
+                      </div>
+                    )}
                     
-                    {/* TABS (FLAT) */}
-                    <div className="flex flex-col gap-3 w-full">
+                    {/* TABS */}
+                    <div className="flex flex-col gap-3 w-full mt-auto">
                       <button onClick={() => setActiveTab('DRAFT')} className={`w-full py-3.5 rounded-xl text-[10px] font-bold tracking-widest uppercase border transition-all ${activeTab === 'DRAFT' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300'}`}>DRAFT INTEL</button>
                       <button onClick={() => setActiveTab('MATCHUPS')} className={`w-full py-3.5 rounded-xl text-[10px] font-bold tracking-widest uppercase border transition-all ${activeTab === 'MATCHUPS' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300'}`}>MATCHUPS @12</button>
                       <button onClick={() => setActiveTab('SYNERGIES')} className={`w-full py-3.5 rounded-xl text-[10px] font-bold tracking-widest uppercase border transition-all ${activeTab === 'SYNERGIES' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300'}`}>ALLIES / DUOS</button>
@@ -1291,6 +1342,30 @@ export default function MetaWarRoom() {
 // -----------------------------------------------------
 // COMPONENTES AUXILIARES (FLAT DESIGN & ZINC PALETTE)
 // -----------------------------------------------------
+
+function MiniPilar({ label, score, compact = false }: { label: string, score: number, compact?: boolean }) {
+  const s = Number(score) || 0;
+  let colorClass = "bg-zinc-600";
+  let textClass = "text-zinc-600";
+  
+  if (s >= 90) { colorClass = "bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.5)]"; textClass = "text-purple-400"; }
+  else if (s >= 80) { colorClass = "bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.5)]"; textClass = "text-blue-400"; }
+  else if (s >= 70) { colorClass = "bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]"; textClass = "text-emerald-400"; }
+  else if (s >= 60) { colorClass = "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.5)]"; textClass = "text-amber-400"; }
+  else if (s > 0) { colorClass = "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]"; textClass = "text-red-400"; }
+
+  return (
+    <div className="flex flex-col gap-1.5 w-full">
+      <div className="flex justify-between items-end leading-none">
+        <span className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-bold text-zinc-400 uppercase tracking-widest`}>{label}</span>
+        <span className={`${compact ? 'text-[10px]' : 'text-[12px]'} font-black ${textClass}`}>{s.toFixed(1)}</span>
+      </div>
+      <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+        <div className={`h-full ${colorClass}`} style={{ width: `${Math.min(100, Math.max(0, s))}%` }}></div>
+      </div>
+    </div>
+  );
+}
 
 function GoldBadge({ gold }: { gold: number | string }) {
   const perPlayer = typeof gold === 'number' ? Math.round(gold / 5) : 0;
@@ -1445,10 +1520,6 @@ function MatchupStat({ label, val, isDiff = false, color = "text-white", isBadHi
     </div>
   );
 }
-
-// -----------------------------------------------------
-// COMPONENTES DOS DROPDOWNS INTELIGENTES
-// -----------------------------------------------------
 
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -1648,68 +1719,7 @@ function SplitSelector({ value, onChange, availableSplits }: { value: string, on
   );
 }
 
-function ObjectiveSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  
-  useEffect(() => {
-    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
-    document.addEventListener("mousedown", click); 
-    return () => document.removeEventListener("mousedown", click);
-  }, []);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[140px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
-        <img src={OBJECTIVE_ASSETS[value]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
-        <span className="flex-1 text-left">{OBJECTIVE_LABELS[value]}</span>
-        <span className="text-[8px] text-zinc-500">▼</span>
-      </button>
-      {isOpen && (
-        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[140px]">
-          {ORDERED_OBJECTIVES.map(objKey => (
-            <button key={objKey} onClick={() => { onChange(objKey); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === objKey ? 'bg-zinc-800' : ''}`}>
-              <img src={OBJECTIVE_ASSETS[objKey]?.icon} className="w-3.5 h-3.5 object-contain" alt="" />
-              <span className={`text-[9px] font-bold uppercase ${value === objKey ? 'text-blue-400' : 'text-zinc-400'}`}>{OBJECTIVE_LABELS[objKey]}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SideSelector({ value, onChange }: { value: string, onChange: (val: string) => void }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
-    document.addEventListener("mousedown", click); return () => document.removeEventListener("mousedown", click);
-  }, []);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-md flex items-center gap-2 min-w-[100px] hover:border-zinc-600 transition-colors shadow-sm text-[9px] text-zinc-300 font-bold uppercase">
-        <div className={`w-1.5 h-2.5 rounded-sm ${value === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
-        <span className="flex-1 text-left">{value} Side</span>
-        <span className="text-[8px] text-zinc-500">▼</span>
-      </button>
-      {isOpen && (
-        <div className="absolute top-full mt-1 right-0 bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden shadow-xl z-[9999] min-w-[100px]">
-          {['Blue', 'Red'].map(side => (
-            <button key={side} onClick={() => { onChange(side); setIsOpen(false); }} className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/50 last:border-0 ${value === side ? 'bg-zinc-800' : ''}`}>
-              <div className={`w-1.5 h-2.5 rounded-sm ${side === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
-              <span className={`text-[9px] font-bold uppercase ${value === side ? 'text-white' : 'text-zinc-400'}`}>{side} Side</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// --- GRÁFICOS (TOOLTIPS & TICKS FLAT) ---
-
+// ... Gráficos customizados abaixo (mantidos originais)
 const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
   const match = teamChartData?.find((d: any) => d.match_id === payload.value);
   return (
@@ -1719,82 +1729,6 @@ const CustomXAxisTick = ({ x, y, payload, teamChartData }: any) => {
       ) : (
         <text x={0} y={15} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {String(match?.opponent_acronym || '?').toUpperCase()}</text>
       )}
-    </g>
-  );
-};
-
-const CustomChartTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
-        <div className="space-y-1.5">
-          {payload.map((p: any) => (
-            <div key={p.dataKey} className="flex justify-between items-center gap-3 text-[9px] font-bold text-white">
-              <div className="flex items-center gap-1.5">
-                 <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: p.color }} />
-                 <span className="text-zinc-400">{p.name}</span>
-              </div>
-              <span className="font-black">{p.value.toFixed(1)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-const CustomPieTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[140px] uppercase">
-        <div className="flex items-center gap-2 mb-2 border-b border-zinc-800 pb-2">
-           <div className={`w-1 h-3 rounded-sm ${data.name === 'Blue' ? 'bg-blue-500' : 'bg-red-500'}`} />
-           <span className="text-white text-[9px] font-bold">{data.name} PERFORMANCE</span>
-        </div>
-        <div className="space-y-1.5 font-bold">
-           {Object.keys(data.ratings).map(key => (
-             <div key={key} className="flex justify-between items-center text-[9px]">
-               <span className="text-zinc-500">{key}</span>
-               <span className={`${getScoreColor(data.ratings[key])}`}>{data.ratings[key].toFixed(1)}</span>
-             </div>
-           ))}
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-const CustomObjectiveTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length && payload[0].payload.window) {
-    const data = payload[0].payload;
-    return (
-      <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-lg shadow-xl uppercase min-w-[180px]">
-        <div className="flex items-center gap-3 mb-3 border-b border-zinc-800 pb-2">
-          <img src={data.hoverImg} className="w-8 h-8 object-contain" alt="" />
-          <div>
-             <p className="text-white text-[10px] font-black">{data.name}</p>
-             <span className="text-[7px] text-zinc-500 font-bold tracking-widest">TIMING DATA</span>
-          </div>
-        </div>
-        <div className="space-y-2 font-bold">
-           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">MÉDIA TÁTICA</span><span className="text-blue-400 text-[10px] font-black">{formatTime(data.avg)}</span></div>
-           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÍNIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[0])}</span></div>
-           <div className="flex justify-between items-center"><span className="text-[8px] text-zinc-500">JANELA MÁXIMA</span><span className="text-white text-[10px] font-black">{formatTime(data.window[1])}</span></div>
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-const ObjectiveAxisTick = ({ x, y, payload }: any) => {
-  const assets = OBJECTIVE_ASSETS[payload.value];
-  return (
-    <g transform={`translate(${x},${y})`}>
-      {assets && <image href={assets.icon} x={-8} y={5} width="16" height="16" />}
     </g>
   );
 };
