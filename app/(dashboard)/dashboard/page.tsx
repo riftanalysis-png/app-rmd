@@ -100,7 +100,10 @@ function normalizeTournamentScope(rawName: string | null): string {
 
 export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState({ id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' });
-  const isStaff = ['analista', 'treinador', 'diretor'].includes(String(currentUser.role || '').toLowerCase());
+  
+  // REGRA DE STAFF MELHORADA E BLINDADA
+  const STAFF_ROLES = ['analista', 'treinador', 'diretor', 'coach', 'head coach', 'manager', 'staff'];
+  const isStaff = STAFF_ROLES.includes(String(currentUser.role || '').toLowerCase());
 
   const [loading, setLoading] = useState(true);
   
@@ -203,7 +206,7 @@ export default function DashboardPage() {
       if (configRes.data) setSquadConfigState(configRes.data);
 
       const [rosterRes, teamsRes, historyRes, teamStatsRes, myStatsRes, missionsRes, scrimsRes] = await Promise.all([
-        supabase.from('bff_admin_players').select('*'), // ← Bff view contendo todos os jogadores (ETL + Manual)
+        supabase.from('bff_admin_players').select('*'),
         supabase.from('bff_matches_teams').select('*'),
         supabase.from('bff_matches_history').select('*').limit(15000),
         supabase.from('bff_dashboard_team_stats').select('*').limit(15000),
@@ -370,7 +373,15 @@ export default function DashboardPage() {
            return { puuid: p.puuid, name: p.nickname || p.name, role: p.primary_role || p.role, photo: p.photo_url || p.photo, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
         }));
       }
-      if (activeRoster.length > 0) setWellnessForm(prev => ({ ...prev, puuid: activeRoster[0].puuid }));
+      
+      // BLINDAGEM DE SEGURANÇA NO FORM DE SYNC INICIAL
+      if (activeRoster.length > 0) {
+         const userIsStaff = STAFF_ROLES.includes(String(loggedUser.role || '').toLowerCase());
+         const myRosterEntry = activeRoster.find(p => p.puuid === loggedUser.puuid);
+         // Se for staff escolhe o primeiro do elenco, se for jogador, fica preso estritamente no seu próprio PUUID.
+         const targetFormPuuid = userIsStaff ? activeRoster[0].puuid : (myRosterEntry ? myRosterEntry.puuid : loggedUser.puuid);
+         setWellnessForm(prev => ({ ...prev, puuid: targetFormPuuid }));
+      }
 
       setLoading(false);
     }
@@ -1497,10 +1508,20 @@ export default function DashboardPage() {
                  <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3"><div className="w-1 h-5 bg-emerald-500 rounded-full shadow-[0_0_12px_rgba(16,185,129,0.8)]"></div> Squad Readiness</h3>
                  <p className="text-[9px] text-zinc-500 font-bold tracking-[0.2em] mt-1.5 uppercase">Monitorização Biométrica de Prontidão</p>
               </div>
-              <button onClick={() => { if(!isStaff) setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); setWellnessModalOpen(true); }} className="bg-zinc-900 border border-zinc-800 text-emerald-400 px-5 py-2.5 rounded-xl text-[9px] font-black hover:bg-emerald-600 hover:border-emerald-500 hover:text-white transition-all flex items-center gap-2 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] uppercase tracking-widest"><Plus size={14} /> DAILY SYNC</button>
+              <button 
+                 onClick={() => { 
+                    if(!isStaff) {
+                       setWellnessForm(prev => ({ ...prev, puuid: currentUser.puuid })); 
+                    }
+                    setWellnessModalOpen(true); 
+                 }} 
+                 className="bg-zinc-900 border border-zinc-800 text-emerald-400 px-5 py-2.5 rounded-xl text-[9px] font-black hover:bg-emerald-600 hover:border-emerald-500 hover:text-white transition-all flex items-center gap-2 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] uppercase tracking-widest"
+              >
+                 <Plus size={14} /> DAILY SYNC
+              </button>
            </div>
 
-           <div className={`grid gap-4 relative z-10 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 lg:grid-cols-5'}`}>
+           <div className={`grid gap-4 relative z-10 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 md:max-w-md mx-auto'}`}>
               {teamWellness.filter(p => isStaff || p.puuid === currentUser.puuid).map((p) => {
                  const isDanger = p.score < 65; const isOptimal = p.score > 85;
                  const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5 shadow-[inset_4px_0_20px_-5px_rgba(239,68,68,0.15)]' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5 shadow-[inset_4px_0_20px_-5px_rgba(16,185,129,0.15)]' : 'text-amber-400 border-amber-500/30 bg-amber-500/5 shadow-[inset_4px_0_20px_-5px_rgba(245,158,11,0.15)]';
@@ -2305,8 +2326,16 @@ export default function DashboardPage() {
             <h2 className="text-2xl font-black text-white uppercase tracking-tight text-center mb-6">Daily Readiness Sync</h2>
             <div className="space-y-4 mb-5">
                <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest ml-1 block mb-1.5">Atleta Selecionado</label>
-               <select value={wellnessForm.puuid} disabled={!isStaff} onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
-                  {roster.map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)}
+               <select 
+                  value={wellnessForm.puuid} 
+                  disabled={!isStaff} 
+                  onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} 
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
+               >
+                  {roster
+                     .filter(p => isStaff || p.puuid === currentUser.puuid)
+                     .map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)
+                  }
                </select>
             </div>
             <div className="space-y-6">
