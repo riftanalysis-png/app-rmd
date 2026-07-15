@@ -210,7 +210,8 @@ export default function DashboardPage() {
         supabase.from('bff_matches_teams').select('*'),
         supabase.from('bff_matches_history').select('*').limit(15000),
         supabase.from('bff_dashboard_team_stats').select('*').limit(15000),
-        supabase.from('bff_player_matches').select('*').eq('puuid', loggedUser.puuid).limit(5000),
+        // PUXA OS DADOS INDIVIDUAIS DE TODO O ROSTER, E NÃO SÓ DO USUÁRIO LOGADO!
+        supabase.from('bff_player_matches').select('*').limit(15000), 
         supabase.from('missions').select('*'),
         supabase.from('scrim_reports').select('*')
       ]);
@@ -221,7 +222,7 @@ export default function DashboardPage() {
       const activeRoster = allPlayersFetched.filter(p => String(p.team_acronym || p.team || '').toUpperCase().includes(myTeam));
       setRoster(activeRoster);
 
-      const myPlayerInfo = activeRoster.find(p => p.puuid === loggedUser.puuid);
+      const myPlayerInfo = activeRoster.find(p => String(p.puuid).toLowerCase() === String(loggedUser.puuid).toLowerCase());
       if (myPlayerInfo) { 
           loggedUser.name = myPlayerInfo.nickname || myPlayerInfo.name; 
           if(myPlayerInfo.photo_url) loggedUser.photo = myPlayerInfo.photo_url; 
@@ -250,7 +251,6 @@ export default function DashboardPage() {
 
       const today = new Date();
       const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const activePuuids = activeRoster.map(p => p.puuid).filter(Boolean);
 
       const nextOfficial = safeMissions.filter(m => m.mission_date >= todayStr && m.mission_type === 'OFFICIAL').sort((a,b) => `${a.mission_date}T${a.mission_time||'00:00'}`.localeCompare(`${b.mission_date}T${b.mission_time||'00:00'}`));
       
@@ -261,7 +261,8 @@ export default function DashboardPage() {
       }
 
       const fetchPromises: any[] = [
-         activePuuids.length > 0 ? supabase.from('player_wellness').select('*').in('puuid', activePuuids).order('record_date', { ascending: false }) : Promise.resolve({ data: [] })
+         // REMOVIDO O '.in()' CASE SENSITIVE. BEM-VINDO AO FILTRO JAVASCRIPT!
+         supabase.from('player_wellness').select('*').order('record_date', { ascending: false }).limit(5000)
       ];
 
       if (targetMission) {
@@ -273,6 +274,10 @@ export default function DashboardPage() {
       }
 
       const [wellnessDataRes, draftRes, perfRes, hubRosterRes, objRes] = await Promise.all(fetchPromises);
+
+      if (wellnessDataRes && wellnessDataRes.error) {
+         console.error("ERRO ao puxar tabela player_wellness:", wellnessDataRes.error.message);
+      }
 
       if (targetMission) {
          const nextOp = targetMission.opponent_acronym;
@@ -368,7 +373,8 @@ export default function DashboardPage() {
 
       if (wellnessDataRes && wellnessDataRes.data) {
         setTeamWellness(activeRoster.map(p => {
-           const pRecs = wellnessDataRes.data.filter((w: any) => w.puuid === p.puuid);
+           // Mapeamento Blindado Ignorando Case Sensitive
+           const pRecs = wellnessDataRes.data.filter((w: any) => String(w.puuid).toLowerCase() === String(p.puuid).toLowerCase());
            const lRec = pRecs.length > 0 ? pRecs[0] : null;
            return { puuid: p.puuid, name: p.nickname || p.name, role: p.primary_role || p.role, photo: p.photo_url || p.photo, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
         }));
@@ -377,8 +383,8 @@ export default function DashboardPage() {
       // BLINDAGEM DE SEGURANÇA NO FORM DE SYNC INICIAL
       if (activeRoster.length > 0) {
          const userIsStaff = STAFF_ROLES.includes(String(loggedUser.role || '').toLowerCase());
-         const myRosterEntry = activeRoster.find(p => p.puuid === loggedUser.puuid);
-         // Se for staff escolhe o primeiro do elenco, se for jogador, fica preso estritamente no seu próprio PUUID.
+         const myRosterEntry = activeRoster.find(p => String(p.puuid).toLowerCase() === String(loggedUser.puuid).toLowerCase());
+         
          const targetFormPuuid = userIsStaff ? activeRoster[0].puuid : (myRosterEntry ? myRosterEntry.puuid : loggedUser.puuid);
          setWellnessForm(prev => ({ ...prev, puuid: targetFormPuuid }));
       }
@@ -414,7 +420,6 @@ export default function DashboardPage() {
     return { directive, load, intensity, daysToMatch };
   }, [nextTargetIntel.date, squadConfigState]);
 
-  // BASE PURA: APENAS FILTRA TIPO E PATCH (Ignora a data para alimentar o Calendário)
   const calendarMatches = useMemo(() => {
     return matchesRaw.filter(m => {
       const isScrim = String(m.game_type || '').toUpperCase().includes('SCRIM');
@@ -425,7 +430,6 @@ export default function DashboardPage() {
     });
   }, [matchesRaw, matchType, filterPatch]);
 
-  // FILTRAGEM GLOBAL: Afeta Radares, Win Rates e Logs
   const filteredMatches = useMemo(() => {
     return calendarMatches.filter(m => {
       if (filterStartDate || filterEndDate) {
@@ -434,9 +438,7 @@ export default function DashboardPage() {
               const d = new Date(String(m.game_start_time).replace(' ', 'T'));
               if (!isNaN(d.getTime())) matchDateStr = d.toISOString().split('T')[0];
           }
-          
           if (!matchDateStr) return false; 
-          
           if (filterStartDate && matchDateStr < filterStartDate) return false;
           if (filterEndDate && matchDateStr > filterEndDate) return false;
       }
@@ -444,7 +446,6 @@ export default function DashboardPage() {
     });
   }, [calendarMatches, filterStartDate, filterEndDate]);
 
-  // CALENDÁRIO USA A BASE PURA
   const groupedSeries = useMemo(() => {
     const groups: { [key: string]: any } = {};
     calendarMatches.forEach(m => {
@@ -563,6 +564,7 @@ export default function DashboardPage() {
     return grid;
   }, [currentDate, groupedSeries, missionsRaw, scrimReportsManual, teamsList]);
 
+  // CORREÇÃO: myStats local do usuário
   const myStats = useMemo(() => {
      let temp = { lane: 0, impact: 0, conversion: 0, vision: 0 };
      
@@ -573,7 +575,10 @@ export default function DashboardPage() {
        }, [])
      );
 
-     const myGames = myPlayerStatsRaw.filter(s => activeMatchIds.has(String(s.match_id)));
+     const myGames = myPlayerStatsRaw.filter(s => 
+         activeMatchIds.has(String(s.match_id)) &&
+         String(s.puuid).toLowerCase() === String(currentUser.puuid).toLowerCase()
+     );
      
      if (myGames.length > 0) {
         const getMed = (arr: number[]) => { const s = [...arr].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
@@ -583,7 +588,7 @@ export default function DashboardPage() {
         temp.vision = Math.round(getMed(myGames.map(s => Number(s.vision_rating) || 0)));
      }
      return temp;
-  }, [myPlayerStatsRaw, filteredMatches]);
+  }, [myPlayerStatsRaw, filteredMatches, currentUser.puuid]);
 
   const earlyGameSnowball = useMemo(() => {
     const recentMatches = [...filteredMatches].slice(0, 10).reverse();
@@ -786,6 +791,7 @@ export default function DashboardPage() {
     return sortedGroups;
   }, [teamsList]);
 
+  // CORREÇÃO: CRIAÇÃO DO GRÁFICO BASEADO NO JOGADOR INDIVIDUAL
   const wellnessChartData = useMemo(() => {
     if (!expandedPlayer || !expandedPlayer.history) return [];
     
@@ -806,10 +812,15 @@ export default function DashboardPage() {
 
     const statsByDate: Record<string, {l:number[], i:number[], c:number[], v:number[], o:number[]}> = {};
     
-    teamStatsRaw.forEach(s => {
-      if (String(s.team_acronym).toUpperCase().includes(myTeamTag) && matchDates[String(s.match_id)]) {
+    myPlayerStatsRaw.forEach(s => {
+      // Usa os dados do jogador selecionado ignorando maiúsculas
+      if (String(s.puuid).toLowerCase() === String(expandedPlayer.puuid).toLowerCase() && matchDates[String(s.match_id)]) {
         const dateStr = matchDates[String(s.match_id)];
-        const l = Number(s.avg_lane)||0; const i = Number(s.avg_impact)||0; const c = Number(s.avg_conversion)||0; const v = Number(s.avg_vision)||0; const o = (l+i+c+v)/4;
+        const l = Number(s.lane_rating)||0; 
+        const i = Number(s.impact_rating)||0; 
+        const c = Number(s.conversion_rating)||0; 
+        const v = Number(s.vision_rating)||0; 
+        const o = (l+i+c+v)/4;
         if (!statsByDate[dateStr]) statsByDate[dateStr] = {l:[], i:[], c:[], v:[], o:[]};
         statsByDate[dateStr].l.push(l); statsByDate[dateStr].i.push(i); statsByDate[dateStr].c.push(c); statsByDate[dateStr].v.push(v); statsByDate[dateStr].o.push(o);
       }
@@ -831,7 +842,7 @@ export default function DashboardPage() {
       conv_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].c) || 0) : null,
       vision_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].v) || 0) : null,
     }));
-  }, [expandedPlayer, filteredMatches, teamStatsRaw, myTeamTag, filterStartDate, filterEndDate]);
+  }, [expandedPlayer, filteredMatches, myPlayerStatsRaw, filterStartDate, filterEndDate]);
 
   const currentTargetH2H = useMemo(() => {
      if (nextTargetIntel.team === 'SEM ALVO') return null;
@@ -1002,7 +1013,48 @@ export default function DashboardPage() {
      } 
   };
   
-  const handleWellnessSubmit = async (e: React.FormEvent) => { e.preventDefault(); const r = Math.round(((wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical) / 15) * 100); const td = new Date().toISOString().split('T')[0]; const { data } = await supabase.from('player_wellness').upsert({ puuid: wellnessForm.puuid, record_date: td, sleep_score: wellnessForm.sleep, mental_score: wellnessForm.mental, physical_score: wellnessForm.physical, focus_score: wellnessForm.focus, readiness_percent: r }, { onConflict: 'puuid, record_date' }).select(); if (data) { setTeamWellness(prev => prev.map(p => p.puuid === wellnessForm.puuid ? { ...p, score: r, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true } : p)); setWellnessModalOpen(false); } };
+  // CORREÇÃO: INSERÇÃO E ATUALIZAÇÃO BLINDADA DO WELLNESS
+  const handleWellnessSubmit = async (e: React.FormEvent) => { 
+     e.preventDefault(); 
+     const r = Math.round(((wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical) / 15) * 100); 
+     
+     // 1. Garante o horário local do jogador em vez de UTC que causa problemas de offset na BD
+     const today = new Date();
+     const td = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+     
+     const payload = { 
+         puuid: wellnessForm.puuid, 
+         record_date: td, 
+         sleep_score: wellnessForm.sleep, 
+         mental_score: wellnessForm.mental, 
+         physical_score: wellnessForm.physical, 
+         focus_score: wellnessForm.focus, 
+         readiness_percent: r 
+     };
+
+     // 2. Avisa em tela caso o Supabase silencie o erro de falta de Unique Constraint
+     const { data, error } = await supabase
+         .from('player_wellness')
+         .upsert(payload, { onConflict: 'puuid, record_date' })
+         .select(); 
+
+     if (error) {
+         console.error("ERRO AO SALVAR WELLNESS:", error);
+         alert(`ERRO AO SALVAR: Certifica-te de que a tabela 'player_wellness' tem uma chave única composta (UNIQUE CONSTRAINT) para 'puuid' e 'record_date'.\n\nDetalhe do erro: ${error.message}`);
+     } else if (data && data.length > 0) { 
+         // 3. Atualiza os cards e injeta o histórico instantaneamente no JS
+         setTeamWellness(prev => prev.map(p => {
+            if (String(p.puuid).toLowerCase() === String(wellnessForm.puuid).toLowerCase()) {
+               const newRecord = data[0];
+               // Limpa o registo do mesmo dia se existia, e injeta o novo
+               const updatedHistory = [newRecord, ...p.history.filter((h: any) => h.record_date !== td)];
+               return { ...p, score: r, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true, history: updatedHistory };
+            }
+            return p;
+         })); 
+         setWellnessModalOpen(false); 
+     } 
+  };
 
   // LÓGICA DE MERCADO / GESTÃO DE ELENCO
   const handleRemoveFromRoster = async (player: any) => {
@@ -1522,7 +1574,8 @@ export default function DashboardPage() {
            </div>
 
            <div className={`grid gap-4 relative z-10 ${isStaff ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-5' : 'grid-cols-1 md:max-w-md mx-auto'}`}>
-              {teamWellness.filter(p => isStaff || p.puuid === currentUser.puuid).map((p) => {
+              {/* COMPARAÇÃO CASE INSENSITIVE NO FILTER PARA NÃO PERDER NINGUÉM */}
+              {teamWellness.filter(p => isStaff || String(p.puuid).toLowerCase() === String(currentUser.puuid).toLowerCase()).map((p) => {
                  const isDanger = p.score < 65; const isOptimal = p.score > 85;
                  const colorClass = isDanger ? 'text-red-400 border-red-500/30 bg-red-500/5 shadow-[inset_4px_0_20px_-5px_rgba(239,68,68,0.15)]' : isOptimal ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5 shadow-[inset_4px_0_20px_-5px_rgba(16,185,129,0.15)]' : 'text-amber-400 border-amber-500/30 bg-amber-500/5 shadow-[inset_4px_0_20px_-5px_rgba(245,158,11,0.15)]';
                  const isExpanded = expandedWellnessId === p.puuid;
@@ -2333,7 +2386,7 @@ export default function DashboardPage() {
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
                >
                   {roster
-                     .filter(p => isStaff || p.puuid === currentUser.puuid)
+                     .filter(p => isStaff || String(p.puuid).toLowerCase() === String(currentUser.puuid).toLowerCase())
                      .map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)
                   }
                </select>
