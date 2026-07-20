@@ -58,6 +58,15 @@ const getChampImage = (champName: string) => {
   return `https://ddragon.leagueoflegends.com/cdn/14.5.1/img/champion/${name}.png`;
 };
 
+const getScoreColor = (score: number | null) => {
+  if (!score) return "text-zinc-600";
+  if (score >= 90) return "text-purple-500"; 
+  if (score >= 80) return "text-blue-500";     
+  if (score >= 70) return "text-emerald-500"; 
+  if (score >= 60) return "text-amber-500";  
+  return "text-red-500";                                 
+};
+
 const getCurrentSplit = () => {
   const month = new Date().getMonth() + 1;
   const year = new Date().getFullYear();
@@ -66,48 +75,50 @@ const getCurrentSplit = () => {
   return { id: `OFF-SEASON ${year}`, start: `${year}-12-01`, end: `${year}-12-31` };
 };
 
-// --- CLASSIFICADOR DE CAMPEONATOS ---
-function normalizeTournamentScope(rawName: string | null): string {
-  const name = String(rawName || '').toUpperCase();
-  if (name.includes('SCRIM')) return 'SCRIM';
-  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
-  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
-  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
-  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
-  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
-  
-  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
-  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
-  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
-  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
+const ROLES_ORDER = ['top', 'jng', 'mid', 'adc', 'support'];
 
-  if (name.includes('CBLOL')) return 'CBLOL';
-  if (name.includes('LCK')) return 'LCK';
-  if (name.includes('LCS')) return 'LCS';
-  if (name.includes('LEC')) return 'LEC';
-  if (name.includes('LPL')) return 'LPL';
+function normalizeRole(lane: string | null): string {
+  if (!lane) return 'unknown'; 
+  const l = String(lane).toLowerCase().trim();
+  if (l.includes('top')) return 'top';
+  if (l.includes('jungle') || l.includes('jng') || l === 'jg' || l.includes('jug')) return 'jng';
+  if (l.includes('mid')) return 'mid';
+  if (l.includes('bot') || l.includes('adc')) return 'adc';
+  if (l.includes('sup') || l.includes('utility')) return 'support';
+  return 'unknown'; 
+}
 
-  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
-  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
-  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
-  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
-  if (name.includes('FIRST STAND')) return 'FIRST STAND';
-  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
-  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
+function getRoleIcon(role: string, size: string = "w-4 h-4") {
+  const basePath = "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-clash/global/default/assets/images/position-selector/positions";
+  let iconName = "";
+  const normalizedRole = normalizeRole(role); 
+  switch (normalizedRole) {
+    case 'top': iconName = "icon-position-top.png"; break;
+    case 'jng': iconName = "icon-position-jungle.png"; break;
+    case 'mid': iconName = "icon-position-middle.png"; break;
+    case 'adc': iconName = "icon-position-bottom.png"; break; 
+    case 'support': iconName = "icon-position-utility.png"; break;
+    default: return <span className="text-[12px] font-black text-zinc-600">?</span>;
+  }
+  return <img src={`${basePath}/${iconName}`} alt={normalizedRole} className={`${size} object-contain brightness-200 opacity-80`} />;
+}
 
-  return 'OUTRO';
+function sortPicks(picksArray: any[]) {
+  return [...picksArray].sort((a, b) => {
+    const roleA = normalizeRole(a.role || a.lane);
+    const roleB = normalizeRole(b.role || b.lane);
+    return ROLES_ORDER.indexOf(roleA) - ROLES_ORDER.indexOf(roleB);
+  });
 }
 
 export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState({ id: '', role: 'analista', puuid: 'PUUID_DE_TESTE_DO_JOGADOR', name: 'CARREGANDO...', photo: '' });
   
-  // REGRA DE STAFF MELHORADA E BLINDADA
   const STAFF_ROLES = ['analista', 'treinador', 'diretor', 'coach', 'head coach', 'manager', 'staff'];
   const isStaff = STAFF_ROLES.includes(String(currentUser.role || '').toLowerCase());
 
   const [loading, setLoading] = useState(true);
   
-  // FILTROS E ESTADOS TEMPORAIS
   const currentSplitObj = getCurrentSplit();
   const [matchType, setMatchType] = useState<'ALL' | 'OFICIAL' | 'SCRIM'>('ALL');
   const [selectedPeriod, setSelectedPeriod] = useState(currentSplitObj.id);
@@ -117,7 +128,6 @@ export default function DashboardPage() {
   const [myTeamTag, setMyTeamTag] = useState('RMD'); 
   const [isSplitDropdownOpen, setSplitDropdownOpen] = useState(false);
   
-  // PAGINAÇÃO DOS ADVANCED LOGS
   const [logsPage, setLogsPage] = useState(1);
   const LOGS_PER_PAGE = 20;
   
@@ -133,23 +143,25 @@ export default function DashboardPage() {
   const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [], date: null });
   const [squadConfigState, setSquadConfigState] = useState<any>({});
   
-  // UI STATE
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedWellnessId, setExpandedWellnessId] = useState<string | null>(null);
   const [radarCompareMode, setRadarCompareMode] = useState<'OFFICIAL_VS_SCRIM' | 'US_VS_OPP'>('OFFICIAL_VS_SCRIM');
   const [oppChartMode, setOppChartMode] = useState<'COUNT' | 'RATE'>('COUNT');
   
-  // ESTADOS DOS GRÁFICOS DO JOGADOR
   const [expandedChartMode, setExpandedChartMode] = useState<'OVERVIEW' | 'BIO' | 'TACTICAL' | 'CORRELATION'>('OVERVIEW');
   const [corrBio, setCorrBio] = useState('sleep_score');
   const [corrTact, setCorrTact] = useState('perf_score');
 
-  // MODAIS & FORMS
   const [isWellnessModalOpen, setWellnessModalOpen] = useState(false);
   const [isMissionModalOpen, setMissionModalOpen] = useState(false);
   const [isScrimModalOpen, setScrimModalOpen] = useState(false);
   const [isProfileModalOpen, setProfileModalOpen] = useState(false);
   const [isRosterModalOpen, setRosterModalOpen] = useState(false);
+  
+  const [isDraftsModalOpen, setDraftsModalOpen] = useState(false);
+  const [isDraftsLoading, setDraftsLoading] = useState(false);
+  const [targetDraftsList, setTargetDraftsList] = useState<any[]>([]);
+
   const [wellnessHistoryModal, setWellnessHistoryModal] = useState<{isOpen: boolean, player: any, history: any[]}>({ isOpen: false, player: null, history: [] });
 
   const [profileForm, setProfileForm] = useState({ name: '', photo_url: '' });
@@ -159,12 +171,10 @@ export default function DashboardPage() {
   const [missionForm, setMissionForm] = useState({ date: '', time: '', opponent: '', customOpponent: '', type: 'SCRIM', gamesCount: '3 JOGOS', draftMode: 'PADRÃO' });
   const [scrimForm, setScrimForm] = useState({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' });
   
-  // FORMS DO ELENCO
   const [selectedPlayerToAdd, setSelectedPlayerToAdd] = useState('');
   const [newPlayerForm, setNewPlayerForm] = useState({ nickname: '', role: 'TOP' });
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // OPÇÕES DO DROPDOWN DE SPLIT
   const splitOptions = useMemo(() => {
     const yr = new Date().getFullYear();
     return [
@@ -210,7 +220,6 @@ export default function DashboardPage() {
         supabase.from('bff_matches_teams').select('*'),
         supabase.from('bff_matches_history').select('*').limit(15000),
         supabase.from('bff_dashboard_team_stats').select('*').limit(15000),
-        // PUXA OS DADOS INDIVIDUAIS DE TODO O ROSTER, E NÃO SÓ DO USUÁRIO LOGADO!
         supabase.from('bff_player_matches').select('*').limit(15000), 
         supabase.from('missions').select('*'),
         supabase.from('scrim_reports').select('*')
@@ -261,7 +270,6 @@ export default function DashboardPage() {
       }
 
       const fetchPromises: any[] = [
-         // REMOVIDO O '.in()' CASE SENSITIVE. BEM-VINDO AO FILTRO JAVASCRIPT!
          supabase.from('player_wellness').select('*').order('record_date', { ascending: false }).limit(5000)
       ];
 
@@ -274,10 +282,6 @@ export default function DashboardPage() {
       }
 
       const [wellnessDataRes, draftRes, perfRes, hubRosterRes, objRes] = await Promise.all(fetchPromises);
-
-      if (wellnessDataRes && wellnessDataRes.error) {
-         console.error("ERRO ao puxar tabela player_wellness:", wellnessDataRes.error.message);
-      }
 
       if (targetMission) {
          const nextOp = targetMission.opponent_acronym;
@@ -373,18 +377,15 @@ export default function DashboardPage() {
 
       if (wellnessDataRes && wellnessDataRes.data) {
         setTeamWellness(activeRoster.map(p => {
-           // Mapeamento Blindado Ignorando Case Sensitive
            const pRecs = wellnessDataRes.data.filter((w: any) => String(w.puuid).toLowerCase() === String(p.puuid).toLowerCase());
            const lRec = pRecs.length > 0 ? pRecs[0] : null;
            return { puuid: p.puuid, name: p.nickname || p.name, role: p.primary_role || p.role, photo: p.photo_url || p.photo, score: lRec ? lRec.readiness_percent : 0, sleep: lRec ? lRec.sleep_score : 0, mental: lRec ? lRec.mental_score : 0, physical: lRec ? lRec.physical_score : 0, hasAnsweredToday: !!(lRec && lRec.record_date === todayStr), history: pRecs };
         }));
       }
       
-      // BLINDAGEM DE SEGURANÇA NO FORM DE SYNC INICIAL
       if (activeRoster.length > 0) {
          const userIsStaff = STAFF_ROLES.includes(String(loggedUser.role || '').toLowerCase());
          const myRosterEntry = activeRoster.find(p => String(p.puuid).toLowerCase() === String(loggedUser.puuid).toLowerCase());
-         
          const targetFormPuuid = userIsStaff ? activeRoster[0].puuid : (myRosterEntry ? myRosterEntry.puuid : loggedUser.puuid);
          setWellnessForm(prev => ({ ...prev, puuid: targetFormPuuid }));
       }
@@ -394,6 +395,103 @@ export default function DashboardPage() {
     
     fetchDashboardData();
   }, [refreshTrigger]);
+
+  // ATUALIZADO: BUSCA OS DRAFTS E PERFORMANCE INDIVIDUAL DAS ÚLTIMAS 5 PARTIDAS
+  const handleOpenTargetDrafts = async () => {
+     if (nextTargetIntel.team === 'SEM ALVO') return;
+     
+     setDraftsModalOpen(true);
+     setDraftsLoading(true);
+
+     const targetTeam = nextTargetIntel.team.toUpperCase();
+
+     const { data: matches } = await supabase.from('bff_matches_history')
+        .select('*')
+        .or(`blue_team_tag.ilike.%${targetTeam}%,red_team_tag.ilike.%${targetTeam}%`)
+        .order('game_start_time', { ascending: false })
+        .limit(5);
+
+     if (!matches || matches.length === 0) {
+        setTargetDraftsList([]);
+        setDraftsLoading(false);
+        return;
+     }
+
+     const matchIds = matches.map(m => m.match_id);
+
+     const [picksRes, bansRes] = await Promise.all([
+        supabase.from('bff_player_matches').select('*').in('match_id', matchIds),
+        supabase.from('bff_matches_bans').select('*').in('match_id', matchIds)
+     ]);
+
+     const picks = picksRes.data || [];
+     const bans = bansRes.data || [];
+
+     const formattedDrafts = matches.map(m => {
+         const blueTag = String(m.blue_team_tag || '').toUpperCase();
+         const redTag = String(m.red_team_tag || '').toUpperCase();
+         const isBlue = blueTag.includes(targetTeam);
+         const targetSide = isBlue ? 'BLUE' : 'RED';
+         const oppName = isBlue ? m.red_team_tag : m.blue_team_tag;
+         
+         const rawWinner = String(m.winner_side || '').toLowerCase();
+         const isBlueWin = rawWinner === 'blue' || rawWinner === '100';
+         const isWin = (isBlue && isBlueWin) || (!isBlue && !isBlueWin);
+
+         const matchPicks = picks.filter(p => String(p.match_id) === String(m.match_id));
+         const matchBans = bans.filter(b => String(b.match_id) === String(m.match_id));
+
+         // Blindagem para separar quem é quem (ignorando diferenças nas tags)
+         const bluePicks = matchPicks.filter(p => {
+            const tag = String(p.team_acronym || p.team_tag || p.team || '').toUpperCase();
+            const side = String(p.side || '').toLowerCase();
+            return side === 'blue' || side === '100' || tag === blueTag || blueTag.includes(tag) || tag.includes(blueTag);
+         });
+         
+         const redPicks = matchPicks.filter(p => {
+            const tag = String(p.team_acronym || p.team_tag || p.team || '').toUpperCase();
+            const side = String(p.side || '').toLowerCase();
+            return side === 'red' || side === '200' || tag === redTag || redTag.includes(tag) || tag.includes(redTag);
+         });
+
+         const blueBans = matchBans.filter(b => {
+            const tag = String(b.team_acronym || b.team_tag || b.team || '').toUpperCase();
+            const side = String(b.side || '').toLowerCase();
+            return side === 'blue' || side === '100' || tag === blueTag || blueTag.includes(tag) || tag.includes(blueTag);
+         }).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
+
+         const redBans = matchBans.filter(b => {
+            const tag = String(b.team_acronym || b.team_tag || b.team || '').toUpperCase();
+            const side = String(b.side || '').toLowerCase();
+            return side === 'red' || side === '200' || tag === redTag || redTag.includes(tag) || tag.includes(redTag);
+         }).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
+
+         // Formatador limpo de Data e Hora
+         let safeDate = 'Data Desconhecida';
+         if (m.game_start_time) {
+            const d = new Date(String(m.game_start_time).replace(' ', 'T'));
+            if (!isNaN(d.getTime())) {
+               safeDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth()+1).padStart(2, '0')} às ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            }
+         }
+
+         return {
+             match_id: m.match_id,
+             date: safeDate,
+             targetSide,
+             oppName,
+             isWin,
+             bluePicks: sortPicks(bluePicks),
+             redPicks: sortPicks(redPicks),
+             blueBans,
+             redBans,
+             patch: m.patch
+         };
+     });
+
+     setTargetDraftsList(formattedDrafts);
+     setDraftsLoading(false);
+  };
 
   const squadConfig = useMemo(() => {
     let intensity = squadConfigState.intensity_score || 70; 
@@ -537,13 +635,23 @@ export default function DashboardPage() {
     for(let i = 1; i <= daysInMonth; i++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
         
-        const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
-            return { id: g.id, time: g.time, opp: g.opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${g.ourWins} - ${g.theirWins} ${g.ourWins > g.theirWins ? 'W' : g.theirWins > g.ourWins ? 'L' : 'D'}`, isWin: g.ourWins > g.theirWins, isPast: true, isAuto: true, logo: getTeamLogo(String(g.opp)) };
+        // 1. CARREGA OS REGISTROS MANUAIS
+        const manualPastEvents = scrimReportsManual.filter(s => s.scrim_date === dateStr).map(s => {
+            // Tenta puxar a hora original do evento automático (se existir), para não ficar apenas "MANUAL"
+            const autoMatch = groupedSeries.find(g => g.calendarDate === dateStr && String(g.opp).toUpperCase() === String(s.opponent_acronym).toUpperCase());
+            const eventTime = autoMatch ? autoMatch.time : 'MANUAL';
+
+            return { id: s.id, time: eventTime, opp: s.opponent_acronym, type: 'SCRIM', resultText: `${s.score} ${s.result}`, isWin: s.result === 'W', isPast: true, isAuto: false, logo: getTeamLogo(s.opponent_acronym), rawScrim: s };
         });
 
-        const manualPastEvents = scrimReportsManual.filter(s => s.scrim_date === dateStr).map(s => {
-            return { id: s.id, time: 'MANUAL', opp: s.opponent_acronym, type: 'SCRIM', resultText: `${s.score} ${s.result}`, isWin: s.result === 'W', isPast: true, isAuto: false, logo: getTeamLogo(s.opponent_acronym), rawScrim: s };
-        });
+        // 2. CARREGA OS AUTOMÁTICOS (MAS IGNORA SE JÁ EXISTIR UM MANUAL POR CIMA)
+        const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
+            const isOverridden = scrimReportsManual.some(s => s.scrim_date === dateStr && String(s.opponent_acronym).toUpperCase() === String(g.opp).toUpperCase());
+            
+            if (isOverridden) return null; // Se você já editou, não renderiza o automático
+
+            return { id: g.id, time: g.time, opp: g.opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${g.ourWins} - ${g.theirWins} ${g.ourWins > g.theirWins ? 'W' : g.theirWins > g.ourWins ? 'L' : 'D'}`, isWin: g.ourWins > g.theirWins, isPast: true, isAuto: true, logo: getTeamLogo(String(g.opp)) };
+        }).filter(Boolean); // Remove os nulos da array
 
         const allPastEvents = [...pastEvents, ...manualPastEvents];
         const opponentsPlayedToday = allPastEvents.map(ev => String(ev.opp).toUpperCase().trim());
@@ -564,7 +672,6 @@ export default function DashboardPage() {
     return grid;
   }, [currentDate, groupedSeries, missionsRaw, scrimReportsManual, teamsList]);
 
-  // CORREÇÃO: myStats local do usuário
   const myStats = useMemo(() => {
      let temp = { lane: 0, impact: 0, conversion: 0, vision: 0 };
      
@@ -791,7 +898,6 @@ export default function DashboardPage() {
     return sortedGroups;
   }, [teamsList]);
 
-  // CORREÇÃO: CRIAÇÃO DO GRÁFICO BASEADO NO JOGADOR INDIVIDUAL
   const wellnessChartData = useMemo(() => {
     if (!expandedPlayer || !expandedPlayer.history) return [];
     
@@ -813,7 +919,6 @@ export default function DashboardPage() {
     const statsByDate: Record<string, {l:number[], i:number[], c:number[], v:number[], o:number[]}> = {};
     
     myPlayerStatsRaw.forEach(s => {
-      // Usa os dados do jogador selecionado ignorando maiúsculas
       if (String(s.puuid).toLowerCase() === String(expandedPlayer.puuid).toLowerCase() && matchDates[String(s.match_id)]) {
         const dateStr = matchDates[String(s.match_id)];
         const l = Number(s.lane_rating)||0; 
@@ -1013,12 +1118,10 @@ export default function DashboardPage() {
      } 
   };
   
-  // CORREÇÃO: INSERÇÃO E ATUALIZAÇÃO BLINDADA DO WELLNESS
   const handleWellnessSubmit = async (e: React.FormEvent) => { 
      e.preventDefault(); 
      const r = Math.round(((wellnessForm.sleep + wellnessForm.mental + wellnessForm.physical) / 15) * 100); 
      
-     // 1. Garante o horário local do jogador em vez de UTC que causa problemas de offset na BD
      const today = new Date();
      const td = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
      
@@ -1032,7 +1135,6 @@ export default function DashboardPage() {
          readiness_percent: r 
      };
 
-     // 2. Avisa em tela caso o Supabase silencie o erro de falta de Unique Constraint
      const { data, error } = await supabase
          .from('player_wellness')
          .upsert(payload, { onConflict: 'puuid, record_date' })
@@ -1042,11 +1144,9 @@ export default function DashboardPage() {
          console.error("ERRO AO SALVAR WELLNESS:", error);
          alert(`ERRO AO SALVAR: Certifica-te de que a tabela 'player_wellness' tem uma chave única composta (UNIQUE CONSTRAINT) para 'puuid' e 'record_date'.\n\nDetalhe do erro: ${error.message}`);
      } else if (data && data.length > 0) { 
-         // 3. Atualiza os cards e injeta o histórico instantaneamente no JS
          setTeamWellness(prev => prev.map(p => {
             if (String(p.puuid).toLowerCase() === String(wellnessForm.puuid).toLowerCase()) {
                const newRecord = data[0];
-               // Limpa o registo do mesmo dia se existia, e injeta o novo
                const updatedHistory = [newRecord, ...p.history.filter((h: any) => h.record_date !== td)];
                return { ...p, score: r, sleep: wellnessForm.sleep, mental: wellnessForm.mental, physical: wellnessForm.physical, hasAnsweredToday: true, history: updatedHistory };
             }
@@ -1056,7 +1156,6 @@ export default function DashboardPage() {
      } 
   };
 
-  // LÓGICA DE MERCADO / GESTÃO DE ELENCO
   const handleRemoveFromRoster = async (player: any) => {
       if (!window.confirm(`Tens a certeza que queres remover ${player.nickname} da equipa?`)) return;
       
@@ -1142,7 +1241,6 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 font-sans relative">
       
-      {/* OVERLAY PARA FECHAR O DROPDOWN QUANDO SE CLICA FORA */}
       {isSplitDropdownOpen && (
          <div className="fixed inset-0 z-[998]" onClick={() => setSplitDropdownOpen(false)}></div>
       )}
@@ -1172,7 +1270,6 @@ export default function DashboardPage() {
            
            <div className="h-5 w-px bg-zinc-800 hidden md:block"></div>
            
-           {/* DROPDOWN DE SPLIT CUSTOMIZADO */}
            <div className="relative">
               <div 
                  onClick={() => setSplitDropdownOpen(!isSplitDropdownOpen)} 
@@ -1215,9 +1312,7 @@ export default function DashboardPage() {
            </div>
         </div>
 
-        {/* ----------------------------------------------------
-            TOP BAR (COCKPIT): PROFILE + DIRECTIVE
-        ---------------------------------------------------- */}
+        {/* TOP BAR (COCKPIT) */}
         <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[24px] p-4 md:p-6 flex flex-col xl:flex-row items-center justify-between gap-6 shadow-xl relative overflow-hidden mt-6" style={{ opacity: 0, animationDelay: '0.15s' }}>
            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/5 to-transparent opacity-50 pointer-events-none"></div>
            
@@ -1284,12 +1379,9 @@ export default function DashboardPage() {
            <div className="h-px bg-zinc-800/60 flex-1"></div>
         </div>
 
-        {/* ----------------------------------------------------
-            SECÇÃO 1: CALENDAR | TARGET INTEL (AUTOMATED)
-        ---------------------------------------------------- */}
+        {/* SECÇÃO 1: CALENDAR | TARGET INTEL */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
            
-           {/* CALENDÁRIO */}
            <div className="lg:col-span-5 animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl flex flex-col shrink-0 hover-lift h-full min-h-[450px]" style={{ opacity: 0, animationDelay: '0.25s' }}>
               <div className="flex justify-between items-center mb-5 pb-4 border-b border-zinc-800/60 shrink-0">
                  <h3 className="text-[10px] text-zinc-300 font-black tracking-[0.2em] uppercase flex items-center gap-2">
@@ -1384,7 +1476,7 @@ export default function DashboardPage() {
                 </div>
                 
                 {nextTargetIntel.team !== 'SEM ALVO' && (
-                   <button onClick={() => alert('Em breve: Abre modal com os últimos 5 drafts!')} className="bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 hover:border-zinc-600 px-3 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all shadow-sm flex items-center gap-1.5">
+                   <button onClick={handleOpenTargetDrafts} className="bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 hover:border-zinc-600 px-3 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all shadow-sm flex items-center gap-1.5">
                       <Swords size={10} /> DRAFTS
                    </button>
                 )}
@@ -1490,7 +1582,7 @@ export default function DashboardPage() {
                                          <div className="flex items-center gap-2">
                                             <span className="bg-amber-500 text-white text-[7px] px-1.5 py-0.5 rounded font-black tracking-widest shadow-sm">BLIND</span>
                                             <span className="text-[8px] text-zinc-400 uppercase font-bold">Pickado B1/R1-R2</span>
-                                         </div>
+                                      </div>
                                       )}
                                       
                                       {champ.isFlex ? (
@@ -2196,8 +2288,131 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* MODAIS */}
-      
+      {/* MODAL DOS DRAFTS */}
+      {isDraftsModalOpen && (
+         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
+           <div className="w-full max-w-5xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-6 md:p-8 shadow-2xl relative flex flex-col max-h-[90vh] animate-[fadeInUp_0.3s_ease-out_forwards]">
+             <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/60 shrink-0">
+                <div className="flex items-center gap-4">
+                   {getTeamLogo(nextTargetIntel.team) ? (
+                      <img src={getTeamLogo(nextTargetIntel.team)!} className="w-12 h-12 object-contain bg-zinc-900 rounded-xl p-1 border border-zinc-800 shadow-md" />
+                   ) : (
+                      <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[10px] font-black text-zinc-600">{nextTargetIntel.team.substring(0,3)}</div>
+                   )}
+                   <div>
+                      <h2 className="text-2xl font-black text-white uppercase tracking-tight leading-none">Últimos 5 Drafts</h2>
+                      <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-1.5 uppercase">Intel de Picks & Bans: {nextTargetIntel.team}</p>
+                   </div>
+                </div>
+                <button onClick={() => setDraftsModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors w-10 h-10 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 rounded-xl border border-zinc-800"><X size={20}/></button>
+             </div>
+
+             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-6">
+                {isDraftsLoading ? (
+                   <div className="flex flex-col items-center justify-center py-20 gap-4 opacity-60">
+                      <div className="w-8 h-8 border-4 border-zinc-800 border-t-amber-500 rounded-full animate-spin"></div>
+                      <span className="text-[10px] font-black tracking-widest uppercase text-zinc-500">A extrair dados da BD...</span>
+                   </div>
+                ) : targetDraftsList.length > 0 ? (
+                   targetDraftsList.map((draft, idx) => (
+                      <div key={idx} className="bg-zinc-900/30 border border-zinc-800/60 rounded-2xl overflow-hidden flex flex-col">
+                         {/* HEADER MATCH */}
+                         <div className="bg-zinc-900/60 px-4 py-2.5 border-b border-zinc-800/60 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                               <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest shadow-sm ${draft.isWin ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                                  {draft.isWin ? 'VITÓRIA' : 'DERROTA'}
+                               </span>
+                               <span className="text-[10px] font-black text-white tracking-widest uppercase">{nextTargetIntel.team} <span className="text-zinc-600 px-1 text-[8px]">VS</span> {draft.oppName}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-[9px] font-bold text-zinc-500 tracking-widest uppercase">
+                               <span>PATCH {draft.patch || 'DESCONHECIDO'}</span>
+                               <span className="w-1 h-1 bg-zinc-700 rounded-full"></span>
+                               <span>{draft.date}</span>
+                            </div>
+                         </div>
+                         
+                         {/* DRAFTS BODY */}
+                         <div className="grid grid-cols-2 divide-x divide-zinc-800/60">
+                            {/* BLUE SIDE */}
+                            <div className={`p-4 flex flex-col gap-4 ${draft.targetSide === 'BLUE' ? 'bg-blue-900/5' : ''}`}>
+                               <div className="flex justify-between items-center">
+                                  <span className="text-[10px] font-black text-blue-400 tracking-widest uppercase flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div> Blue Side</span>
+                                  <span className="text-[8px] font-bold text-zinc-500 uppercase">{draft.targetSide === 'BLUE' ? nextTargetIntel.team : draft.oppName}</span>
+                               </div>
+                               <div className="flex flex-col gap-3">
+                                  <div className="flex gap-1.5">
+                                     {draft.blueBans.length === 0 && <span className="text-[8px] text-zinc-600 uppercase font-bold italic py-1">Sem Bans Registados</span>}
+                                     {draft.blueBans.slice(0,5).map((b:any, i:number) => <img key={i} src={getChampImage(b.champion)} className="w-7 h-7 rounded bg-zinc-950 border border-zinc-800 object-cover grayscale opacity-70" alt={b.champion} title={b.champion} />)}
+                                  </div>
+                                  <div className="flex flex-col gap-2">
+                                     {draft.bluePicks.length === 0 && <span className="text-[8px] text-zinc-600 uppercase font-bold italic py-2">Sem Picks Registados</span>}
+                                     {sortPicks(draft.bluePicks).map((p:any, i:number) => (
+                                        <div key={i} className="flex items-center gap-3 bg-zinc-950/50 p-2 rounded-xl border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+                                            <div className="w-6 h-6 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                                               {getRoleIcon(p.role || p.lane || p.primary_role, "w-4 h-4")}
+                                            </div>
+                                            <img src={getChampImage(p.champion)} className="w-8 h-8 rounded-md border border-zinc-700 object-cover" />
+                                            <div className="flex flex-col flex-1 min-w-0">
+                                               <span className="text-[10px] font-black text-white uppercase truncate">{p.nickname || p.player_name || 'Desconhecido'}</span>
+                                               <span className="text-[8px] font-bold text-zinc-500">{p.kills || 0}/{p.deaths || 0}/{p.assists || 0} KDA</span>
+                                            </div>
+                                            <div className="flex flex-col items-end shrink-0">
+                                               <span className={`text-[11px] font-black ${getScoreColor(p.mvp_score)}`}>{Math.round(p.mvp_score || 0)}</span>
+                                               <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest">MVP</span>
+                                            </div>
+                                        </div>
+                                     ))}
+                                  </div>
+                               </div>
+                            </div>
+                            
+                            {/* RED SIDE */}
+                            <div className={`p-4 flex flex-col gap-4 ${draft.targetSide === 'RED' ? 'bg-red-900/5' : ''}`}>
+                               <div className="flex justify-between items-center">
+                                  <span className="text-[10px] font-black text-red-400 tracking-widest uppercase flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-red-500"></div> Red Side</span>
+                                  <span className="text-[8px] font-bold text-zinc-500 uppercase">{draft.targetSide === 'RED' ? nextTargetIntel.team : draft.oppName}</span>
+                               </div>
+                               <div className="flex flex-col gap-3">
+                                  <div className="flex gap-1.5 justify-end">
+                                     {draft.redBans.length === 0 && <span className="text-[8px] text-zinc-600 uppercase font-bold italic py-1">Sem Bans Registados</span>}
+                                     {draft.redBans.slice(0,5).map((b:any, i:number) => <img key={i} src={getChampImage(b.champion)} className="w-7 h-7 rounded bg-zinc-950 border border-zinc-800 object-cover grayscale opacity-70" alt={b.champion} title={b.champion} />)}
+                                  </div>
+                                  <div className="flex flex-col gap-2 justify-end">
+                                     {draft.redPicks.length === 0 && <span className="text-[8px] text-zinc-600 uppercase font-bold italic py-2">Sem Picks Registados</span>}
+                                     {sortPicks(draft.redPicks).map((p:any, i:number) => (
+                                        <div key={i} className="flex items-center gap-3 bg-zinc-950/50 p-2 rounded-xl border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+                                            <div className="flex flex-col items-end shrink-0">
+                                               <span className={`text-[11px] font-black ${getScoreColor(p.mvp_score)}`}>{Math.round(p.mvp_score || 0)}</span>
+                                               <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest">MVP</span>
+                                            </div>
+                                            <div className="flex flex-col flex-1 min-w-0 items-end text-right">
+                                               <span className="text-[10px] font-black text-white uppercase truncate">{p.nickname || p.player_name || 'Desconhecido'}</span>
+                                               <span className="text-[8px] font-bold text-zinc-500">{p.kills || 0}/{p.deaths || 0}/{p.assists || 0} KDA</span>
+                                            </div>
+                                            <img src={getChampImage(p.champion)} className="w-8 h-8 rounded-md border border-zinc-700 object-cover" />
+                                            <div className="w-6 h-6 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                                               {getRoleIcon(p.role || p.lane || p.primary_role, "w-4 h-4")}
+                                            </div>
+                                        </div>
+                                     ))}
+                                  </div>
+                               </div>
+                            </div>
+                         </div>
+                      </div>
+                   ))
+                ) : (
+                   <div className="flex flex-col items-center justify-center py-20 opacity-50">
+                      <Swords size={48} className="text-zinc-600 mb-4" />
+                      <span className="text-xs font-black tracking-widest uppercase text-zinc-500">Nenhum Draft Completo Encontrado</span>
+                   </div>
+                )}
+             </div>
+           </div>
+         </div>
+      )}
+
+      {/* MODAL EDIÇÃO PROFILE */}
       {isProfileModalOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleUpdateProfile} className="w-full max-w-md bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 space-y-6 shadow-2xl relative animate-[fadeInUp_0.3s_ease-out_forwards]">
@@ -2370,155 +2585,6 @@ export default function DashboardPage() {
               <button type="submit" className="flex-1 px-6 py-3.5 bg-amber-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-amber-500 transition-colors shadow-[0_0_15px_rgba(217,119,6,0.4)]">Guardar Registo</button>
             </div>
           </form>
-        </div>
-      )}
-
-      {isWellnessModalOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <form onSubmit={handleWellnessSubmit} className="w-full max-w-2xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 space-y-8 shadow-2xl animate-[fadeInUp_0.3s_ease-out_forwards]">
-            <h2 className="text-2xl font-black text-white uppercase tracking-tight text-center mb-6">Daily Readiness Sync</h2>
-            <div className="space-y-4 mb-5">
-               <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest ml-1 block mb-1.5">Atleta Selecionado</label>
-               <select 
-                  value={wellnessForm.puuid} 
-                  disabled={!isStaff} 
-                  onChange={e => setWellnessForm({...wellnessForm, puuid: e.target.value})} 
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
-               >
-                  {roster
-                     .filter(p => isStaff || String(p.puuid).toLowerCase() === String(currentUser.puuid).toLowerCase())
-                     .map(p => <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.primary_role})</option>)
-                  }
-               </select>
-            </div>
-            <div className="space-y-6">
-               <WellnessInput icon={<Moon size={24} className="text-indigo-400" />} title="Qualidade do Sono" desc="1 = Insónia/Péssimo | 5 = Recuperação Total" value={wellnessForm.sleep} onChange={(v: any) => setWellnessForm({...wellnessForm, sleep: v})} />
-               <WellnessInput icon={<Brain size={24} className="text-amber-400" />} title="Estado Mental & Stress" desc="1 = Esgotado | 5 = Foco Total/Calmo" value={wellnessForm.mental} onChange={(v: any) => setWellnessForm({...wellnessForm, mental: v})} />
-               <WellnessInput icon={<Activity size={24} className="text-emerald-400" />} title="Dores & Fadiga Física" desc="1 = Dor forte | 5 = Zero Dor/Pronto" value={wellnessForm.physical} onChange={(v: any) => setWellnessForm({...wellnessForm, physical: v})} />
-            </div>
-            <div className="flex gap-4 pt-6 border-t border-zinc-800/60 mt-4">
-              <button type="button" onClick={() => setWellnessModalOpen(false)} className="px-6 py-3.5 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-zinc-800 hover:text-white transition-colors">Cancelar</button>
-              <button type="submit" className="flex-1 px-6 py-3.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.4)]">Sincronizar Dados</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {wellnessHistoryModal.isOpen && wellnessHistoryModal.player && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
-          <div className="w-full max-w-3xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 shadow-2xl relative animate-[fadeInUp_0.3s_ease-out_forwards]">
-            <div className="flex items-center justify-between mb-8 border-b border-zinc-800/60 pb-5">
-               <div className="flex items-center gap-5">
-                  <img src={wellnessHistoryModal.player.photo} className="w-14 h-14 rounded-xl border-2 border-emerald-500/30 object-cover shadow-[0_0_10px_rgba(16,185,129,0.2)]" />
-                  <div>
-                     <h2 className="text-2xl font-black text-white uppercase tracking-tight">{wellnessHistoryModal.player.name}</h2>
-                     <p className="text-[10px] text-emerald-500 font-bold tracking-widest mt-1 uppercase">Histórico Biométrico</p>
-                  </div>
-               </div>
-               <button onClick={() => setWellnessHistoryModal({ isOpen: false, player: null, history: [] })} className="text-zinc-500 hover:text-white transition-colors w-10 h-10 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 rounded-xl border border-zinc-800"><X size={20}/></button>
-            </div>
-            <div className="overflow-y-auto max-h-[400px] custom-scrollbar pr-2">
-               <table className="w-full text-left border-separate border-spacing-y-2.5">
-                  <thead className="sticky top-0 bg-zinc-950/95 backdrop-blur-md z-10">
-                     <tr className="text-[9px] text-zinc-500 font-black tracking-widest uppercase">
-                        <th className="px-4 pb-3 border-b border-zinc-800/80">DATA</th>
-                        <th className="px-4 pb-3 border-b border-zinc-800/80 text-center">READINESS</th>
-                        <th className="px-4 pb-3 border-b border-zinc-800/80 text-center">SONO</th>
-                        <th className="px-4 pb-3 border-b border-zinc-800/80 text-center">MENTAL</th>
-                        <th className="px-4 pb-3 border-b border-zinc-800/80 text-center">FÍSICO</th>
-                     </tr>
-                  </thead>
-                  <tbody>
-                     {wellnessHistoryModal.history.map((record: any) => (
-                       <tr key={record.record_date} className="bg-zinc-900/30 hover:bg-zinc-800/60 transition-colors border border-zinc-800/50">
-                         <td className="p-4 rounded-l-xl text-[10px] font-bold text-zinc-300 tracking-widest border-y border-l border-zinc-800/30">{formatDate(record.record_date)}</td>
-                         <td className="p-4 text-center border-y border-zinc-800/30"><span className={`text-base font-black ${record.readiness_percent < 65 ? 'text-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]' : record.readiness_percent > 85 ? 'text-emerald-500 drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]' : 'text-amber-500'}`}>{record.readiness_percent}%</span></td>
-                         <td className="p-4 text-center text-xs text-white font-bold border-y border-zinc-800/30">{record.sleep_score}</td>
-                         <td className="p-4 text-center text-xs text-white font-bold border-y border-zinc-800/30">{record.mental_score}</td>
-                         <td className="p-4 text-center text-xs text-white font-bold rounded-r-xl border-y border-r border-zinc-800/30">{record.physical_score}</td>
-                       </tr>
-                     ))}
-                  </tbody>
-               </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DE GESTÃO DO ELENCO (ROSTER) */}
-      {isRosterModalOpen && isStaff && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
-          <div className="w-full max-w-3xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 shadow-2xl my-auto relative animate-[fadeInUp_0.3s_ease-out_forwards]">
-            
-            <div className="flex justify-between items-start border-b border-zinc-800/60 pb-5 mb-6">
-               <div>
-                  <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-2.5">
-                     <Users className="text-emerald-500" size={24} /> Gestão de Line-Up
-                  </h2>
-                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-1.5 uppercase">Elenco Ativo: {myTeamTag}</p>
-               </div>
-               <button onClick={() => setRosterModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors w-10 h-10 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 rounded-xl border border-zinc-800"><X size={20}/></button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-               
-               {/* LADO ESQUERDO: LISTA ATUAL */}
-               <div className="flex flex-col gap-3">
-                  <h4 className="text-[10px] text-zinc-400 font-black tracking-widest uppercase border-b border-zinc-800/50 pb-2 mb-1">Roster Atual</h4>
-                  <div className="max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-2 pr-2">
-                     {roster.map(p => (
-                        <div key={p.puuid} className="flex items-center justify-between bg-zinc-900/40 border border-zinc-800/50 p-2.5 rounded-xl">
-                           <div className="flex items-center gap-3">
-                              <img src={p.photo_url || p.photo} className="w-8 h-8 rounded-lg border border-zinc-700 object-cover" />
-                              <div className="flex flex-col">
-                                 <span className="text-xs font-black text-white uppercase leading-none">{p.nickname}</span>
-                                 <span className="text-[8px] font-bold text-emerald-400 uppercase tracking-widest mt-0.5">{String(p.primary_role).replace(/jug/i, 'JNG')}</span>
-                              </div>
-                           </div>
-                           <button onClick={() => handleRemoveFromRoster(p)} className="p-1.5 bg-red-500/10 hover:bg-red-600 border border-red-500/20 hover:border-red-500 text-red-400 hover:text-white rounded-lg transition-colors group/btn">
-                              <UserMinus size={14} className="group-hover/btn:scale-110 transition-transform" />
-                           </button>
-                        </div>
-                     ))}
-                  </div>
-               </div>
-
-               {/* LADO DIREITO: MERCADO E ADIÇÃO */}
-               <div className="flex flex-col gap-6">
-                  
-                  {/* TRAZER JOGADOR EXISTENTE */}
-                  <div className="bg-zinc-900/30 p-4 rounded-2xl border border-zinc-800/50">
-                     <h4 className="text-[10px] text-blue-400 font-black tracking-widest uppercase mb-3 flex items-center gap-1.5"><ListFilter size={12}/> Importar da Base de Dados</h4>
-                     <div className="flex flex-col gap-3">
-                        <select value={selectedPlayerToAdd} onChange={e => setSelectedPlayerToAdd(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white font-bold outline-none focus:border-blue-500 transition-colors shadow-inner text-xs cursor-pointer">
-                           <option value="" disabled>SELECIONAR JOGADOR LIVRE / OUTRA EQUIPA</option>
-                           {allPlayersList.filter(p => !String(p.team_acronym || '').toUpperCase().includes(myTeamTag)).map(p => (
-                              <option key={p.puuid} value={p.puuid}>{p.nickname} ({p.team_acronym || 'FA'} - {p.primary_role})</option>
-                           ))}
-                        </select>
-                        <button onClick={handleAddExistingPlayer} className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-colors shadow-[0_0_10px_rgba(37,99,235,0.3)] flex items-center justify-center gap-2">
-                           <Plus size={14}/> Contratar Jogador
-                        </button>
-                     </div>
-                  </div>
-
-                  {/* CRIAR JOGADOR NOVO */}
-                  <div className="bg-zinc-900/30 p-4 rounded-2xl border border-zinc-800/50">
-                     <h4 className="text-[10px] text-emerald-400 font-black tracking-widest uppercase mb-3 flex items-center gap-1.5"><UserPlus size={12}/> Criar Novo Jogador (Scouting)</h4>
-                     <div className="grid grid-cols-2 gap-3 mb-3">
-                        <input type="text" placeholder="NICKNAME" value={newPlayerForm.nickname} onChange={e => setNewPlayerForm({...newPlayerForm, nickname: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner text-xs uppercase" />
-                        <select value={newPlayerForm.role} onChange={e => setNewPlayerForm({...newPlayerForm, role: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner text-xs cursor-pointer">
-                           <option value="TOP">TOP</option><option value="JNG">JUNGLE</option><option value="MID">MID</option><option value="ADC">ADC</option><option value="SUP">SUPPORT</option>
-                        </select>
-                     </div>
-                     <button onClick={handleCreateNewPlayer} className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-colors shadow-[0_0_10px_rgba(16,185,129,0.3)] flex items-center justify-center gap-2">
-                        Promover à Equipa Principal
-                     </button>
-                  </div>
-
-               </div>
-            </div>
-          </div>
         </div>
       )}
 
