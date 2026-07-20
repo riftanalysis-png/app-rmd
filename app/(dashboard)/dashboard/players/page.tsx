@@ -135,7 +135,7 @@ function getScoreColor(score: number | null) {
   if (score >= 80) return "text-blue-500";     
   if (score >= 70) return "text-emerald-500"; 
   if (score >= 60) return "text-amber-500";  
-  return "text-red-500";                                 
+  return "text-red-500";                                  
 }
 
 function getRoleIcon(role: string, size: string = "w-5 h-5") {
@@ -165,8 +165,10 @@ export default function PlayersHubPage() {
   
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
   const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
-  
   const [scopeToRawMap, setScopeToRawMap] = useState<Record<string, string[]>>({});
   const [isMapLoaded, setIsMapLoaded] = useState(false);
 
@@ -223,14 +225,14 @@ export default function PlayersHubPage() {
 
   useEffect(() => { 
     if(isMapLoaded) fetchInitialData(); 
-  }, [globalTournaments, globalSplit, isMapLoaded]);
+  }, [globalTournaments, globalSplit, startDate, endDate, isMapLoaded]);
   
   useEffect(() => { 
     if (filterTeam !== "TODOS" && isMapLoaded) { 
       fetchPerformanceData(filterTeam); 
       fetchAnalysisData(filterTeam); 
     } 
-  }, [filterTeam, globalTournaments, globalSplit, isMapLoaded]);
+  }, [filterTeam, globalTournaments, globalSplit, startDate, endDate, isMapLoaded]);
 
   const dynamicAvailableSplits = useMemo(() => {
     const splits = new Set<string>();
@@ -284,7 +286,6 @@ export default function PlayersHubPage() {
     const t = tRes.data || [];
     const pRaw = pRes.data || [];
     
-    // FILTRAGEM JS PARA O ROSTER DE JOGADORES (Case-Insensitive seguríssima)
     const p = pRaw.filter((curr: any) => {
       if (globalTournaments.includes('ALL')) return true;
       const normalized = normalizeTournamentScope(curr.game_type);
@@ -360,7 +361,6 @@ export default function PlayersHubPage() {
       return prev;
     });
 
-    // FILTRAGEM JS PARA O RANKING GLOBAL DE BANS
     if (bansRes.data) {
        const validBans = bansRes.data.filter((curr: any) => {
           if (globalTournaments.includes('ALL')) return true;
@@ -385,10 +385,11 @@ export default function PlayersHubPage() {
   async function fetchPerformanceData(team: string) {
     let query = supabase.from('bff_hub_performance').select('*').ilike('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
     if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
+    if (startDate) query = query.gte('game_start_time', `${startDate} 00:00:00`);
+    if (endDate) query = query.lte('game_start_time', `${endDate} 23:59:59`);
 
     const { data } = await query;
     if (data) {
-      // FILTRAGEM JS PARA PERFORMANCE
       const validData = data.filter((curr: any) => {
         if (globalTournaments.includes('ALL')) return true;
         const normalized = normalizeTournamentScope(curr.game_type);
@@ -409,7 +410,6 @@ export default function PlayersHubPage() {
 
     const [obj, draft] = await Promise.all([objQuery, draftQuery]);
     
-    // BLINDAGEM DOS OBJETIVOS (JS Filter)
     if (obj.data) {
       const validObjs = obj.data.filter((curr: any) => {
         if (globalTournaments.includes('ALL')) return true;
@@ -434,7 +434,6 @@ export default function PlayersHubPage() {
       setTeamObjectiveWindows(Array.from(groupedObjMap.values()));
     }
 
-    // BLINDAGEM DO DRAFT (JS Filter + Numeração Estrita)
     if (draft.data) {
       const validDrafts = draft.data.filter((curr: any) => {
         if (globalTournaments.includes('ALL')) return true;
@@ -466,7 +465,6 @@ export default function PlayersHubPage() {
       setDraftStats(Array.from(groupedDraftMap.values()));
     }
     
-    // BLINDAGEM DAS WARDS (Visão)
     let allWards: any[] = [];
     let fetchMore = true;
     let from = 0;
@@ -701,14 +699,22 @@ export default function PlayersHubPage() {
   return (
     <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible relative">
       
-      {/* Sticky Header com Backdrop Blur */}
+      {/* Sticky Header com Backdrop Blur e Filtros Adicionados */}
       <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-4 pt-4 sticky top-0 bg-[#0a0a0a]/90 backdrop-blur-xl z-[999] rounded-b-xl shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5)] px-2 -mx-2">
         <div>
           <h1 className="text-4xl font-black text-white uppercase tracking-tight">SCOUTING <span className="text-blue-500">HUB</span></h1>
           <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DATABASE: {players.length} ACTIVE OPERATIVES</p>
         </div>
 
-        <div className="flex gap-4 items-end bg-transparent">
+        <div className="flex gap-4 items-end bg-transparent flex-wrap xl:flex-nowrap justify-start xl:justify-end">
+           <div className="flex flex-col">
+              <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">PERÍODO PERSONALIZADO</label>
+              <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 h-[34px] transition-colors hover:border-zinc-600 shadow-sm">
+                 <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent text-[10px] font-bold text-zinc-300 outline-none focus:text-blue-400 transition-colors uppercase tracking-widest cursor-pointer [&::-webkit-calendar-picker-indicator]:filter-[invert(1)]" />
+                 <span className="text-zinc-600 text-[10px] font-black uppercase">ATÉ</span>
+                 <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent text-[10px] font-bold text-zinc-300 outline-none focus:text-blue-400 transition-colors uppercase tracking-widest cursor-pointer [&::-webkit-calendar-picker-indicator]:filter-[invert(1)]" />
+              </div>
+           </div>
            <TournamentMultiSelector value={globalTournaments} onChange={setGlobalTournaments} />
            <SplitSelector value={globalSplit} onChange={setGlobalSplit} availableSplits={dynamicAvailableSplits} />
         </div>
@@ -1347,7 +1353,7 @@ function TournamentMultiSelector({ value, onChange }: { value: string[], onChang
       <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">ESCOPO DE LIGA</label>
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm h-[34px] ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
       >
         <span className="flex-1 text-left truncate">{currentLabel}</span>
         <span className={`text-[8px] transition-transform ${isOpen ? 'rotate-180 text-blue-500' : 'text-zinc-500'}`}>▼</span>
@@ -1413,7 +1419,7 @@ function CockpitDropdown({ label, value, onChange, options, isHighlighted = fals
       {label && <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">{label}</label>}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
+        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[140px] transition-colors text-[10px] font-bold uppercase shadow-sm h-[34px] ${isHighlighted ? 'border-amber-500/50 text-amber-500 hover:border-amber-400' : 'border-zinc-800 text-zinc-300 hover:border-zinc-600'}`}
       >
         <span className="flex-1 text-left truncate">{currentLabel}</span>
         <span className={`text-[8px] transition-transform ${isOpen ? (isHighlighted ? 'rotate-180 text-amber-500' : 'rotate-180 text-blue-500') : 'text-zinc-500'}`}>▼</span>
