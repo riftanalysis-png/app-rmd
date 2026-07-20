@@ -64,7 +64,7 @@ const getScoreColor = (score: number | null) => {
   if (score >= 80) return "text-blue-500";     
   if (score >= 70) return "text-emerald-500"; 
   if (score >= 60) return "text-amber-500";  
-  return "text-red-500";                                 
+  return "text-red-500";                                  
 };
 
 const getCurrentSplit = () => {
@@ -167,7 +167,7 @@ export default function DashboardPage() {
   const [profileForm, setProfileForm] = useState({ name: '', photo_url: '' });
   const [editMissionId, setEditMissionId] = useState<string | null>(null);
   const [editScrimId, setEditScrimId] = useState<string | null>(null);
-  const [wellnessForm, setWellnessForm] = useState({ puuid: '', sleep: 3, mental: 3, physical: 3, focus: 3 });
+  const [wellnessForm, setWellnessForm] = useState({ puuid: '', sleep: 3, mental: 3, physical: 3 });
   const [missionForm, setMissionForm] = useState({ date: '', time: '', opponent: '', customOpponent: '', type: 'SCRIM', gamesCount: '3 JOGOS', draftMode: 'PADRÃO' });
   const [scrimForm, setScrimForm] = useState({ date: '', opponent: '', result: 'W', score: '', mode: 'MD1', comp: '', difficulty: 'CONTROLADO', punctuality: 'PONTUAIS', remakes: 0, match_ids: '' });
   
@@ -396,7 +396,6 @@ export default function DashboardPage() {
     fetchDashboardData();
   }, [refreshTrigger]);
 
-  // ATUALIZADO: BUSCA OS DRAFTS E PERFORMANCE INDIVIDUAL DAS ÚLTIMAS 5 PARTIDAS
   const handleOpenTargetDrafts = async () => {
      if (nextTargetIntel.team === 'SEM ALVO') return;
      
@@ -441,7 +440,6 @@ export default function DashboardPage() {
          const matchPicks = picks.filter(p => String(p.match_id) === String(m.match_id));
          const matchBans = bans.filter(b => String(b.match_id) === String(m.match_id));
 
-         // Blindagem para separar quem é quem (ignorando diferenças nas tags)
          const bluePicks = matchPicks.filter(p => {
             const tag = String(p.team_acronym || p.team_tag || p.team || '').toUpperCase();
             const side = String(p.side || '').toLowerCase();
@@ -466,7 +464,6 @@ export default function DashboardPage() {
             return side === 'red' || side === '200' || tag === redTag || redTag.includes(tag) || tag.includes(redTag);
          }).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
 
-         // Formatador limpo de Data e Hora
          let safeDate = 'Data Desconhecida';
          if (m.game_start_time) {
             const d = new Date(String(m.game_start_time).replace(' ', 'T'));
@@ -1131,7 +1128,6 @@ export default function DashboardPage() {
          sleep_score: wellnessForm.sleep, 
          mental_score: wellnessForm.mental, 
          physical_score: wellnessForm.physical, 
-         focus_score: wellnessForm.focus, 
          readiness_percent: r 
      };
 
@@ -1582,7 +1578,7 @@ export default function DashboardPage() {
                                          <div className="flex items-center gap-2">
                                             <span className="bg-amber-500 text-white text-[7px] px-1.5 py-0.5 rounded font-black tracking-widest shadow-sm">BLIND</span>
                                             <span className="text-[8px] text-zinc-400 uppercase font-bold">Pickado B1/R1-R2</span>
-                                      </div>
+                                         </div>
                                       )}
                                       
                                       {champ.isFlex ? (
@@ -1965,10 +1961,10 @@ export default function DashboardPage() {
                    </div>
                  </>
                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
+                 <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
                      <PieChartIcon size={32} className="mb-2 text-zinc-600 opacity-50" />
                      <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest">Aguardando dados geográficos.</p>
-                  </div>
+                 </div>
                )}
              </div>
           </div>
@@ -2429,6 +2425,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* MODAL DE MISSION */}
       {isMissionModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
           <form onSubmit={handleSaveMission} className="w-full max-w-xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 space-y-6 shadow-2xl animate-[fadeInUp_0.3s_ease-out_forwards]">
@@ -2495,6 +2492,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* MODAL DE SCRIM MANUAL */}
       {isScrimModalOpen && isStaff && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
           <form onSubmit={handleSaveScrim} className="w-full max-w-2xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 space-y-6 shadow-2xl my-auto relative animate-[fadeInUp_0.3s_ease-out_forwards]">
@@ -2585,6 +2583,98 @@ export default function DashboardPage() {
               <button type="submit" className="flex-1 px-6 py-3.5 bg-amber-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-amber-500 transition-colors shadow-[0_0_15px_rgba(217,119,6,0.4)]">Guardar Registo</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* MODAL DE DAILY SYNC (BIOMETRIA WELLNESS) */}
+      {isWellnessModalOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md overflow-y-auto">
+          <form onSubmit={handleWellnessSubmit} className="w-full max-w-2xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-8 space-y-6 shadow-2xl my-auto relative animate-[fadeInUp_0.3s_ease-out_forwards]">
+            <h2 className="text-2xl font-black text-white uppercase tracking-tight text-center mb-6">
+              Daily Sync <span className="text-emerald-500">Biometria</span>
+            </h2>
+
+            <div className="space-y-6">
+              {isStaff && (
+                <div>
+                  <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Selecionar Atleta</label>
+                  <select
+                    required
+                    value={wellnessForm.puuid}
+                    onChange={e => setWellnessForm({ ...wellnessForm, puuid: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner uppercase"
+                  >
+                    <option value="" disabled>SELECIONE UM JOGADOR</option>
+                    {roster.map((p: any) => (
+                      <option key={p.puuid} value={p.puuid}>{p.nickname || p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <WellnessInput 
+                icon={<Moon size={20} className="text-purple-400" />} 
+                title="Qualidade do Sono" 
+                desc="Como foi sua recuperação nesta noite?" 
+                value={wellnessForm.sleep} 
+                onChange={(val: number) => setWellnessForm({ ...wellnessForm, sleep: val })} 
+              />
+              
+              <WellnessInput 
+                icon={<Brain size={20} className="text-amber-400" />} 
+                title="Estado Mental" 
+                desc="Nível de estresse e cansaço psicológico" 
+                value={wellnessForm.mental} 
+                onChange={(val: number) => setWellnessForm({ ...wellnessForm, mental: val })} 
+              />
+              
+              <WellnessInput 
+                icon={<Activity size={20} className="text-red-400" />} 
+                title="Condição Física" 
+                desc="Dores musculares, fadiga ou lesões" 
+                value={wellnessForm.physical} 
+                onChange={(val: number) => setWellnessForm({ ...wellnessForm, physical: val })} 
+              />
+            </div>
+
+            <div className="flex gap-4 pt-6 border-t border-zinc-800/60 mt-4">
+              <button type="button" onClick={() => setWellnessModalOpen(false)} className="px-6 py-3.5 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-zinc-800 hover:text-white transition-colors">Cancelar</button>
+              <button type="submit" className="flex-1 px-6 py-3.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.4)]">Registrar Sync</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL DE HISTÓRICO BIOMÉTRICO */}
+      {wellnessHistoryModal.isOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md">
+          <div className="w-full max-w-2xl bg-zinc-950 border border-zinc-800/80 rounded-[32px] p-6 md:p-8 shadow-2xl relative flex flex-col max-h-[90vh] animate-[fadeInUp_0.3s_ease-out_forwards]">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/60 shrink-0">
+               <div>
+                  <h2 className="text-xl font-black text-white uppercase tracking-tight leading-none">Histórico Biométrico</h2>
+                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-1.5 uppercase">Atleta: {wellnessHistoryModal.player?.name}</p>
+               </div>
+               <button onClick={() => setWellnessHistoryModal({ isOpen: false, player: null, history: [] })} className="text-zinc-500 hover:text-white transition-colors w-10 h-10 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 rounded-xl border border-zinc-800"><X size={20}/></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3">
+               {wellnessHistoryModal.history.length > 0 ? wellnessHistoryModal.history.map((h: any, i: number) => (
+                  <div key={i} className="bg-zinc-900/40 border border-zinc-800/60 rounded-xl p-4 flex items-center justify-between">
+                     <div className="flex flex-col">
+                        <span className="text-white font-black uppercase text-xs">{formatDate(h.record_date)}</span>
+                        <span className="text-[8px] text-zinc-500 font-bold tracking-widest">OVR: <span className={h.readiness_percent >= 80 ? 'text-emerald-400' : h.readiness_percent >= 60 ? 'text-amber-400' : 'text-red-400'}>{h.readiness_percent}%</span></span>
+                     </div>
+                     <div className="flex gap-4">
+                        <div className="flex flex-col items-center"><span className="text-[8px] text-zinc-600 font-bold uppercase mb-1">Sono</span><span className="text-purple-400 font-black text-sm">{h.sleep_score}/5</span></div>
+                        <div className="flex flex-col items-center"><span className="text-[8px] text-zinc-600 font-bold uppercase mb-1">Mental</span><span className="text-amber-400 font-black text-sm">{h.mental_score}/5</span></div>
+                        <div className="flex flex-col items-center"><span className="text-[8px] text-zinc-600 font-bold uppercase mb-1">Físico</span><span className="text-red-400 font-black text-sm">{h.physical_score}/5</span></div>
+                     </div>
+                  </div>
+               )) : (
+                  <div className="text-center text-zinc-600 font-bold uppercase tracking-widest text-[10px] py-10">Sem histórico registado.</div>
+               )}
+            </div>
+          </div>
         </div>
       )}
 
