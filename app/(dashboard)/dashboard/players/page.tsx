@@ -24,7 +24,7 @@ const SEQUENCE_LABELS: { [key: number]: string } = {
 };
 
 const OBJECTIVE_LABELS: { [key: string]: string } = {
-  'lvl1': '🔥 LEVEL 1 (0-1:59)',
+  'lvl1': '🔥 LEVEL 1 (0-1:00)',
   'dragon1': 'Dragão 1', 'horde': 'Vastilarvas', 'dragon2': 'Dragão 2', 'riftherald': 'Arauto',
   'dragon3': 'Dragão 3', 'dragon4': 'Dragão 4', 'BARON_NASHOR': 'Barão Nashor', 'dragon5': 'Ancião/D5'
 };
@@ -524,10 +524,12 @@ export default function PlayersHubPage() {
     });
 
     if (targetObj === 'lvl1') {
-       return wardsToDisplay.filter(w => Number(w.minute) <= 1);
+       // ALTERAÇÃO 1: Forçando estritamente wards do minuto 0 até o minuto 1 (inclusive)
+       return wardsToDisplay.filter(w => Number(w.minute) >= 0 && Number(w.minute) <= 1);
     }
 
     const window = teamObjectiveWindows.find(o => String(o.side).toLowerCase() === targetSide && String(o.objective_type).toLowerCase() === targetObj);
+    
 
     if (window) {
        const wMin = Number(window.min_minute) || 0;
@@ -947,23 +949,54 @@ export default function PlayersHubPage() {
                 <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                 
                 <div className="absolute inset-0 z-30 pointer-events-none">
+                  <div className="absolute inset-0 z-30 pointer-events-none">
                   {activeWards.map((w, index) => {
                     const rawX = Number(w.ward_x ?? w.player_x ?? 0);
                     const rawY = Number(w.ward_y ?? w.player_y ?? 0);
                     const posX = MAP_OFFSET + (rawX / GAME_MAX) * MAP_SCALE;
                     const posY = MAP_OFFSET + (rawY / GAME_MAX) * MAP_SCALE;
+                    
                     const isControl = String(w.type || w.ward_type || '').toLowerCase().includes('control');
                     const sensorColor = isControl ? '#ef4444' : '#eab308';
+                    const wardLabel = isControl ? 'CONTROL' : 'STEALTH';
+                    
+                    // ALTERAÇÃO 2: Puxando o player. Lembre-se de adicionar 'player_name' na view 'bff_hub_vision'
+                    const playerName = w.player_name || 'Desconhecido';
+
                     return (
-                      <div key={`sensor-${w.id || index}`} className="absolute w-3 h-3 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto" style={{ left: `${posX}%`, bottom: `${posY}%` }}>
-                        <div className="absolute inset-0 rounded-full animate-ping opacity-40" style={{ backgroundColor: sensorColor }} />
-                        <div className="relative w-full h-full rounded-full border-2 border-zinc-900 cursor-help" style={{ backgroundColor: sensorColor }} />
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] text-white opacity-0 group-hover/ward:opacity-100 transition-opacity whitespace-nowrap z-[9999] shadow-lg font-bold">
-                           <span className="text-zinc-400 font-mono">T+</span> {formatTime(Number(w.minute) || 0)} | {isControl ? 'CONTROL' : 'STEALTH'}
+                      // ALTERAÇÃO 3: hover:z-[9999] garante que a ward sob o mouse fique na frente das outras
+                      <div 
+                        key={`sensor-${w.id || index}`} 
+                        className="absolute w-6 h-6 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto hover:z-[9999] flex items-center justify-center cursor-crosshair" 
+                        style={{ left: `${posX}%`, bottom: `${posY}%` }}
+                      >
+                        {/* Hitbox Invisível: É maior que a ward visualmente, impedindo o mouse de "escorregar" */}
+                        <div className="absolute inset-0 rounded-full bg-transparent" />
+                        
+                        {/* Elementos Visuais da Ward */}
+                        <div className="absolute w-2.5 h-2.5 rounded-full animate-ping opacity-50" style={{ backgroundColor: sensorColor }} />
+                        <div className="relative w-2.5 h-2.5 rounded-full border-[1.5px] border-zinc-950 shadow-[0_0_4px_rgba(0,0,0,1)]" style={{ backgroundColor: sensorColor }} />
+                        
+                        {/* Novo Tooltip Redesenhado */}
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-lg text-white opacity-0 group-hover/ward:opacity-100 transition-all duration-200 pointer-events-none shadow-2xl flex flex-col min-w-[140px] overflow-hidden scale-90 group-hover/ward:scale-100 origin-bottom">
+                           
+                           {/* Cabeçalho do Tooltip: Player */}
+                           <div className="bg-zinc-900 px-2.5 py-1.5 border-b border-zinc-800 flex items-center gap-2">
+                             <div className="w-1.5 h-1.5 rounded-full shadow-[0_0_5px_rgba(255,255,255,0.2)]" style={{ backgroundColor: sensorColor }} />
+                             <span className="text-[10px] font-black uppercase tracking-tight truncate flex-1 text-left">{playerName}</span>
+                           </div>
+                           
+                           {/* Corpo do Tooltip: Tipo e Tempo */}
+                           <div className="px-2.5 py-1.5 flex justify-between items-center gap-3">
+                             <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">{wardLabel}</span>
+                             <span className="text-[9px] font-mono font-black text-blue-400">T+ {formatTime(Number(w.minute) || 0)}</span>
+                           </div>
+
                         </div>
                       </div>
                     );
                   })}
+                </div>
                 </div>
                 
                 {activeWards.length === 0 && (
