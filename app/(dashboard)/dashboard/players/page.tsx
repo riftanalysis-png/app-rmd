@@ -120,6 +120,16 @@ function getChampionImageUrl(championName: string | null) {
   return `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}/img/champion/${sanitized}.png`;
 }
 
+function getChampionCenteredUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  // Puxa o diretório "centered" que contém os recortes horizontais oficiais
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/${sanitized}_0.jpg`;
+}
+
 function getChampionSplashUrl(championName: string | null) {
   if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
     return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
@@ -162,6 +172,8 @@ export default function PlayersHubPage() {
   const [saving, setSaving] = useState(false);
   const [filterTeam, setFilterTeam] = useState<string>("TODOS");
   const [isAdmin, setIsAdmin] = useState(false);
+
+  const [recentStarters, setRecentStarters] = useState<string[]>([]);
   
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
@@ -266,26 +278,62 @@ export default function PlayersHubPage() {
     if (session?.user?.email === 'scartiezin@gmail.com') setIsAdmin(true);
   }
 
+  // --- FUNÇÃO DE SUPORTE: TRADUZ O FILTRO DO UI PARA O BANCO DE DADOS ---
+  const getRawGameTypes = () => {
+    if (globalTournaments.includes('ALL')) return [];
+    const raws = new Set<string>();
+    globalTournaments.forEach(t => {
+      if (scopeToRawMap[t]) scopeToRawMap[t].forEach(r => raws.add(r));
+    });
+    return Array.from(raws);
+  };
+
   async function fetchInitialData() {
     setLoading(true);
     
-    let query = supabase.from('bff_hub_players_roster').select('*');
-    if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
+    const rawTypes = getRawGameTypes();
 
-    let banQuery = supabase.from('bff_matches_bans').select('*').limit(200);
-    if (globalSplit !== 'ALL') banQuery = banQuery.ilike('split', globalSplit); 
+    let query = supabase.from('bff_hub_players_roster').select('*');
+    // Aumentamos o limite para garantir uma amostragem global de bans real
+    let banQuery = supabase.from('bff_matches_bans').select('*').limit(2000); 
+    let matchCountQuery = supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true });
+
+    // 1. Aplica o filtro de Split diretamente no Supabase
+    if (globalSplit !== 'ALL') {
+      query = query.ilike('split', globalSplit); 
+      banQuery = banQuery.ilike('split', globalSplit); 
+      matchCountQuery = matchCountQuery.ilike('split', globalSplit);
+    }
+
+    // 2. Aplica o filtro de Data (Recorte Temporal)
+    if (startDate) {
+      banQuery = banQuery.gte('game_start_time', `${startDate} 00:00:00`);
+      matchCountQuery = matchCountQuery.gte('game_start_time', `${startDate} 00:00:00`);
+    }
+    if (endDate) {
+      banQuery = banQuery.lte('game_start_time', `${endDate} 23:59:59`);
+      matchCountQuery = matchCountQuery.lte('game_start_time', `${endDate} 23:59:59`);
+    }
+
+    // 3. Aplica o filtro de Escopo de Liga (Torneios)
+    if (rawTypes.length > 0) {
+      query = query.in('game_type', rawTypes);
+      banQuery = banQuery.in('game_type', rawTypes);
+      matchCountQuery = matchCountQuery.in('game_type', rawTypes);
+    }
 
     const [pRes, tRes, bansRes, matchCountRes, playersTableRes] = await Promise.all([
       query,
       supabase.from('bff_matches_teams').select('*').order('acronym'),
       banQuery,
-      supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true }),
+      matchCountQuery,
       supabase.from('players').select('puuid, photo_url') 
     ]);
 
     const t = tRes.data || [];
     const pRaw = pRes.data || [];
     
+    // O JS filter continua aqui por segurança redobrada
     const p = pRaw.filter((curr: any) => {
       if (globalTournaments.includes('ALL')) return true;
       const normalized = normalizeTournamentScope(curr.game_type);
@@ -376,7 +424,7 @@ export default function PlayersHubPage() {
        setGlobalBans(banMap);
     }
 
-    const { data: sDetailed } = await supabase.from('core_player_stats').select('champion, team_tag, lane, role').limit(50000);
+    const { data: sDetailed } = await supabase.from('core_player_stats').select('puuid, champion, team_tag, lane, role').limit(50000);
     if (sDetailed) setStatsDetailed(sDetailed);
 
     setLoading(false);
@@ -384,9 +432,12 @@ export default function PlayersHubPage() {
 
   async function fetchPerformanceData(team: string) {
     let query = supabase.from('bff_hub_performance').select('*').ilike('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
+    const rawTypes = getRawGameTypes();
+
     if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
     if (startDate) query = query.gte('game_start_time', `${startDate} 00:00:00`);
     if (endDate) query = query.lte('game_start_time', `${endDate} 23:59:59`);
+    if (rawTypes.length > 0) query = query.in('game_type', rawTypes);
 
     const { data } = await query;
     if (data) {
@@ -395,25 +446,83 @@ export default function PlayersHubPage() {
         const normalized = normalizeTournamentScope(curr.game_type);
         return globalTournaments.includes(normalized);
       });
+
+      const matchIds = validData.map((m: any) => m.match_id);
+      if (matchIds.length > 0) {
+        const { data: champData } = await supabase
+          .from('core_player_stats')
+          .select('match_id, team_tag, champion')
+          .in('match_id', matchIds);
+          
+        if (champData) {
+          validData.forEach((match: any) => {
+             match.team_picks = champData
+                .filter((c: any) => c.match_id === match.match_id && String(c.team_tag).toUpperCase() === String(team).toUpperCase())
+                .map((c: any) => c.champion);
+             
+             match.opp_picks = champData
+                .filter((c: any) => c.match_id === match.match_id && String(c.team_tag).toUpperCase() !== String(team).toUpperCase())
+                .map((c: any) => c.champion);
+          });
+        }
+      }
+
       setTeamChartData(validData);
+
+      const last5Matches = validData.slice(-5).map((m: any) => m.match_id);
+      
+      if (last5Matches.length > 0) {
+        const { data: recentStats } = await supabase
+          .from('core_player_stats')
+          .select('puuid')
+          .in('match_id', last5Matches)
+          .ilike('team_tag', team);
+
+        if (recentStats) {
+          const counts: Record<string, number> = {};
+          recentStats.forEach((r: any) => {
+            if (r.puuid) counts[r.puuid] = (counts[r.puuid] || 0) + 1;
+          });
+
+          const top5Puuids = Object.entries(counts)
+            .sort((a, b) => b[1] - a[1]) 
+            .slice(0, 5) 
+            .map(entry => entry[0]);
+            
+          setRecentStarters(top5Puuids);
+        } else {
+          setRecentStarters([]);
+        }
+      } else {
+        setRecentStarters([]);
+      }
     }
   }
 
   async function fetchAnalysisData(team: string) {
-    let objQuery = supabase.from('bff_hub_objectives').select('*').ilike('team_acronym', team).limit(10000);
-    let draftQuery = supabase.from('bff_hub_draft').select('*').ilike('team_acronym', team).limit(10000);
+    // 1. Limpamos os estados imediatamente! Isso garante que a tela dê um 
+    // "refresh visual" quando você mudar o filtro, provando que funcionou.
+    setDraftStats([]);
+    setTeamObjectiveWindows([]);
+    setTeamWards([]);
 
-    if (globalSplit !== 'ALL') {
-      objQuery = objQuery.ilike('split', globalSplit);
-      draftQuery = draftQuery.ilike('split', globalSplit);
-    }
+    // 2. Buscamos a base do time sem filtros complexos de SQL para evitar crash
+    let objQuery = supabase.from('bff_hub_objectives').select('*').ilike('team_acronym', team).limit(15000);
+    let draftQuery = supabase.from('bff_hub_draft').select('*').ilike('team_acronym', team).limit(15000);
 
     const [obj, draft] = await Promise.all([objQuery, draftQuery]);
     
+    // --- PROCESSAMENTO DE OBJETIVOS ---
     if (obj.data) {
       const validObjs = obj.data.filter((curr: any) => {
-        if (globalTournaments.includes('ALL')) return true;
-        return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+        // Filtro de Torneio (Escopo de Liga)
+        if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+        // Filtro de Split
+        if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
+        // Filtro de Data In-Memory
+        if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
+        if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
+        return true;
       });
 
       const groupedObjMap = new Map();
@@ -434,16 +543,22 @@ export default function PlayersHubPage() {
       setTeamObjectiveWindows(Array.from(groupedObjMap.values()));
     }
 
+    // --- PROCESSAMENTO DE DRAFTS ---
     if (draft.data) {
       const validDrafts = draft.data.filter((curr: any) => {
-        if (globalTournaments.includes('ALL')) return true;
-        return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+        // Mesma lógica de filtragem à prova de falhas para os Drafts
+        if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+        if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
+        if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
+        if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
+        return true;
       });
 
       const groupedDraftMap = new Map();
       validDrafts.forEach((curr: any) => {
         const safeType = String(curr.type || '').toUpperCase().trim();
         const key = `${curr.sequence}_${curr.champion}_${safeType}`;
+        
         if (!groupedDraftMap.has(key)) {
           groupedDraftMap.set(key, { ...curr, type: safeType });
         } else {
@@ -465,28 +580,28 @@ export default function PlayersHubPage() {
       setDraftStats(Array.from(groupedDraftMap.values()));
     }
     
+    // --- PROCESSAMENTO DE VISÃO (WARDS) ---
     let allWards: any[] = [];
     let fetchMore = true;
     let from = 0;
     const step = 1000;
 
     while (fetchMore) {
-      let wardsQuery = supabase
+      const { data: wardsChunk, error } = await supabase
         .from('bff_hub_vision')
         .select('*')
         .ilike('team_acronym', team)
         .range(from, from + step - 1);
 
-      if (globalSplit !== 'ALL') wardsQuery = wardsQuery.ilike('split', globalSplit); 
-
-      const { data: wardsChunk, error } = await wardsQuery;
-
       if (error || !wardsChunk || wardsChunk.length === 0) {
         fetchMore = false;
       } else {
         const validWards = wardsChunk.filter((curr: any) => {
-           if (globalTournaments.includes('ALL')) return true;
-           return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+          if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+          if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
+          if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
+          if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
+          return true;
         });
 
         allWards = [...allWards, ...validWards];
@@ -524,13 +639,11 @@ export default function PlayersHubPage() {
     });
 
     if (targetObj === 'lvl1') {
-       // ALTERAÇÃO 1: Forçando estritamente wards do minuto 0 até o minuto 1 (inclusive)
        return wardsToDisplay.filter(w => Number(w.minute) >= 0 && Number(w.minute) <= 1);
     }
 
     const window = teamObjectiveWindows.find(o => String(o.side).toLowerCase() === targetSide && String(o.objective_type).toLowerCase() === targetObj);
     
-
     if (window) {
        const wMin = Number(window.min_minute) || 0;
        const wMax = Number(window.max_minute) || 0;
@@ -849,31 +962,68 @@ export default function PlayersHubPage() {
       ) : (
         <div className="space-y-6">
           
-          {/* GRÁFICO PERFORMANCE ANALYTICS COM SCROLL E LOGOS */}
-          <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 h-[380px] shadow-sm relative flex flex-col">
-            <div className="flex justify-between items-center mb-6 shrink-0">
-               <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
-                 <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
-                 Performance Analytics Timeline
-               </h3>
+          {/* GRÁFICO PERFORMANCE ANALYTICS COM ESTÉTICA DE TERMINAL TÁTICO (SLIM & CLEAN) */}
+          <div className="bg-[#121214] border border-zinc-800 rounded-2xl p-5 h-[320px] shadow-2xl relative flex flex-col group">
+            
+            {/* Camadas de Fundo Isoladas (o overflow-hidden fica só aqui, para não cortar o Tooltip!) */}
+            <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none">
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.12),transparent_70%)]" />
+              <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
+            </div>
+
+            <div className="flex justify-between items-center mb-6 shrink-0 relative z-10">
+               <div className="flex flex-col">
+                 <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-2">
+                   <div className="w-1.5 h-4 bg-blue-500 rounded-sm shadow-[0_0_10px_rgba(59,130,246,0.6)]" /> 
+                   Performance Analytics
+                 </h3>
+                 <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-widest mt-0.5 ml-3.5">
+                   Rastreamento de Eficiência Contínua
+                 </span>
+               </div>
             </div>
             
-            <div className="flex-1 min-h-0 overflow-x-auto custom-scrollbar pb-2">
-               <div style={{ minWidth: teamChartData.length > 15 ? `${teamChartData.length * 45}px` : '100%', height: '100%' }}>
+            {/* Container Livre: Removemos o overflow-x-auto, sem scrollbars nativas! */}
+            <div className="flex-1 min-h-0 relative z-10 w-full">
                  <ResponsiveContainer width="100%" height="100%">
-                   <LineChart data={teamChartData} margin={{ top: 5, right: 20, left: -20, bottom: 20 }}>
-                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                     <XAxis dataKey="match_id" tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} teamsList={teamsList} />} interval={0} stroke="#27272a" axisLine={false} tickLine={false} />
-                     <YAxis domain={[40, 100]} stroke="#71717a" fontSize={9} fontStyle="bold" axisLine={false} tickLine={false} />
-                     <Tooltip content={<CustomChartTooltip teamsList={teamsList} />} wrapperStyle={{ zIndex: 9999 }} cursor={{ stroke: '#3f3f46', strokeWidth: 1, strokeDasharray: '5 5' }} />
-                     <Legend verticalAlign="bottom" align="center" iconType="circle" wrapperStyle={{ paddingTop: '10px', fontSize: '10px', fontWeight: 'bold' }} />
-                     <Line type="monotone" dataKey="avg_lane" name="LANE" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#8b5cf6' }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
-                     <Line type="monotone" dataKey="avg_impact" name="IMPACTO" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#3b82f6' }} activeDot={{ r: 5, fill: '#3b82f6' }} />
-                     <Line type="monotone" dataKey="avg_conversion" name="CONV." stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#10b981' }} activeDot={{ r: 5, fill: '#10b981' }} />
-                     <Line type="monotone" dataKey="avg_vision" name="VISÃO" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#18181b', strokeWidth: 2, stroke: '#f59e0b' }} activeDot={{ r: 5, fill: '#f59e0b' }} />
+                   {/* Margin ajustada para garantir espaço no topo e laterais */}
+                   <LineChart data={teamChartData} margin={{ top: 20, right: 30, left: -25, bottom: 20 }}>
+                     
+                     <CartesianGrid stroke="#3f3f46" vertical={false} opacity={0.2} />
+                     
+                     {/* Padding Left e Right para os dados não grudarem nas quinas do card */}
+                     <XAxis 
+                       dataKey="match_id" 
+                       tick={(p) => <CustomXAxisTick {...p} teamChartData={teamChartData} teamsList={teamsList} />} 
+                       interval={0} 
+                       stroke="#27272a" 
+                       axisLine={false} 
+                       tickLine={false} 
+                       padding={{ left: 30, right: 30 }} 
+                     />
+                     
+                     <YAxis domain={[40, 100]} tick={{ fill: '#71717a', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                     
+                     {/* Wrapper do Tooltip com zIndex infinito para sempre sobrepor as outras Divs */}
+                     <Tooltip 
+                       content={<CustomChartTooltip teamsList={teamsList} />} 
+                       wrapperStyle={{ zIndex: 999999 }} 
+                       cursor={{ stroke: '#52525b', strokeWidth: 2, strokeDasharray: '4 4' }} 
+                     />
+                     
+                     <Legend 
+                        verticalAlign="top" 
+                        align="right" 
+                        iconType="circle" 
+                        wrapperStyle={{ top: -35, fontSize: '9px', fontWeight: '900', letterSpacing: '0.05em' }} 
+                     />
+                     
+                     <Line type="monotone" dataKey="avg_lane" name="LANE" stroke="#a855f7" strokeWidth={3} dot={{ r: 0 }} activeDot={{ r: 5, fill: '#fff', stroke: '#a855f7', strokeWidth: 3 }} style={{ filter: 'drop-shadow(0px 4px 6px rgba(168,85,247,0.5))' }} />
+                     <Line type="monotone" dataKey="avg_impact" name="IMPACTO" stroke="#3b82f6" strokeWidth={3} dot={{ r: 0 }} activeDot={{ r: 5, fill: '#fff', stroke: '#3b82f6', strokeWidth: 3 }} style={{ filter: 'drop-shadow(0px 4px 6px rgba(59,130,246,0.5))' }} />
+                     <Line type="monotone" dataKey="avg_conversion" name="CONV." stroke="#10b981" strokeWidth={3} dot={{ r: 0 }} activeDot={{ r: 5, fill: '#fff', stroke: '#10b981', strokeWidth: 3 }} style={{ filter: 'drop-shadow(0px 4px 6px rgba(16,185,129,0.5))' }} />
+                     <Line type="monotone" dataKey="avg_vision" name="VISÃO" stroke="#f59e0b" strokeWidth={3} dot={{ r: 0 }} activeDot={{ r: 5, fill: '#fff', stroke: '#f59e0b', strokeWidth: 3 }} style={{ filter: 'drop-shadow(0px 4px 6px rgba(245,158,11,0.5))' }} />
                    </LineChart>
                  </ResponsiveContainer>
-               </div>
             </div>
           </div>
 
@@ -882,15 +1032,33 @@ export default function PlayersHubPage() {
               <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
               Tactical Operations Unit
             </h2>
-            
+
             {(() => {
               const teamPlayers = sortPlayersByRole(players.filter(p => p.team_acronym === filterTeam));
               const maxTeamScore = Math.max(...teamPlayers.map(p => p.mvp_score || 0));
               
-              const maxTeamGames = Math.max(...teamPlayers.map(p => p.games_played || 0));
-              
-              const starters = teamPlayers.filter(p => p.games_played >= Math.max(3, maxTeamGames * 0.3));
-              const subs = teamPlayers.filter(p => p.games_played < Math.max(3, maxTeamGames * 0.3));
+              let starters = [];
+              let subs = [];
+
+              if (recentStarters.length > 0) {
+                 starters = teamPlayers.filter(p => recentStarters.includes(p.puuid));
+                 subs = teamPlayers.filter(p => !recentStarters.includes(p.puuid));
+              } else {
+                 const maxTeamGames = Math.max(...teamPlayers.map(p => p.games_played || 0));
+                 starters = teamPlayers.filter(p => p.games_played >= Math.max(3, maxTeamGames * 0.3));
+                 subs = teamPlayers.filter(p => p.games_played < Math.max(3, maxTeamGames * 0.3));
+              }
+
+              // Função para descobrir o campeão mais jogado do operativo
+              const getMostPlayedChamp = (puuid: string) => {
+                 if (!statsDetailed || statsDetailed.length === 0) return null;
+                 const pGames = statsDetailed.filter(s => s.puuid === puuid);
+                 if (pGames.length === 0) return null;
+                 const counts: Record<string, number> = {};
+                 pGames.forEach(g => { if (g.champion) counts[g.champion] = (counts[g.champion] || 0) + 1; });
+                 const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                 return sorted.length > 0 ? sorted[0][0] : null;
+              };
 
               return (
                 <div className="space-y-8">
@@ -903,6 +1071,7 @@ export default function PlayersHubPage() {
                         teams={teamsList} 
                         isAdmin={isAdmin} 
                         isTeamMVP={p.mvp_score === maxTeamScore && maxTeamScore > 0}
+                        mainChampion={getMostPlayedChamp(p.puuid)}
                         onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
                       />
                     ))}
@@ -923,6 +1092,7 @@ export default function PlayersHubPage() {
                             teams={teamsList} 
                             isAdmin={isAdmin} 
                             isTeamMVP={false}
+                            mainChampion={getMostPlayedChamp(p.puuid)}
                             onEdit={() => { setEditForm({ ...p }); setIsEditModalOpen(true); }} 
                           />
                         ))}
@@ -949,7 +1119,6 @@ export default function PlayersHubPage() {
                 <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                 
                 <div className="absolute inset-0 z-30 pointer-events-none">
-                  <div className="absolute inset-0 z-30 pointer-events-none">
                   {activeWards.map((w, index) => {
                     const rawX = Number(w.ward_x ?? w.player_x ?? 0);
                     const rawY = Number(w.ward_y ?? w.player_y ?? 0);
@@ -960,43 +1129,34 @@ export default function PlayersHubPage() {
                     const sensorColor = isControl ? '#ef4444' : '#eab308';
                     const wardLabel = isControl ? 'CONTROL' : 'STEALTH';
                     
-                    // ALTERAÇÃO 2: Puxando o player. Lembre-se de adicionar 'player_name' na view 'bff_hub_vision'
                     const playerName = w.player_name || 'Desconhecido';
 
                     return (
-                      // ALTERAÇÃO 3: hover:z-[9999] garante que a ward sob o mouse fique na frente das outras
                       <div 
                         key={`sensor-${w.id || index}`} 
                         className="absolute w-6 h-6 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto hover:z-[9999] flex items-center justify-center cursor-crosshair" 
                         style={{ left: `${posX}%`, bottom: `${posY}%` }}
                       >
-                        {/* Hitbox Invisível: É maior que a ward visualmente, impedindo o mouse de "escorregar" */}
                         <div className="absolute inset-0 rounded-full bg-transparent" />
                         
-                        {/* Elementos Visuais da Ward */}
                         <div className="absolute w-2.5 h-2.5 rounded-full animate-ping opacity-50" style={{ backgroundColor: sensorColor }} />
                         <div className="relative w-2.5 h-2.5 rounded-full border-[1.5px] border-zinc-950 shadow-[0_0_4px_rgba(0,0,0,1)]" style={{ backgroundColor: sensorColor }} />
                         
-                        {/* Novo Tooltip Redesenhado */}
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-lg text-white opacity-0 group-hover/ward:opacity-100 transition-all duration-200 pointer-events-none shadow-2xl flex flex-col min-w-[140px] overflow-hidden scale-90 group-hover/ward:scale-100 origin-bottom">
                            
-                           {/* Cabeçalho do Tooltip: Player */}
                            <div className="bg-zinc-900 px-2.5 py-1.5 border-b border-zinc-800 flex items-center gap-2">
                              <div className="w-1.5 h-1.5 rounded-full shadow-[0_0_5px_rgba(255,255,255,0.2)]" style={{ backgroundColor: sensorColor }} />
                              <span className="text-[10px] font-black uppercase tracking-tight truncate flex-1 text-left">{playerName}</span>
                            </div>
                            
-                           {/* Corpo do Tooltip: Tipo e Tempo */}
                            <div className="px-2.5 py-1.5 flex justify-between items-center gap-3">
                              <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">{wardLabel}</span>
                              <span className="text-[9px] font-mono font-black text-blue-400">T+ {formatTime(Number(w.minute) || 0)}</span>
                            </div>
-
                         </div>
                       </div>
                     );
                   })}
-                </div>
                 </div>
                 
                 {activeWards.length === 0 && (
@@ -1050,21 +1210,104 @@ export default function PlayersHubPage() {
                 </div>
               </div>
 
-              {/* CENTER (TOP PICKS) */}
-              <div className="lg:col-span-4 bg-zinc-900 border border-zinc-800 rounded-xl p-6 h-fit self-center flex flex-col">
-                <h4 className="text-[10px] text-center mb-6 text-zinc-500 font-bold uppercase tracking-widest border-b border-zinc-800 pb-3">Top Efficiency Pool</h4>
-                <div className="space-y-4">
-                  {mostPickedOverall.map((c: any) => (
-                    <div key={c.name} className="flex items-center justify-between group">
-                      <div className="flex items-center gap-3">
-                        <div className="relative w-10 h-10 rounded-lg border border-zinc-700 overflow-hidden shadow-sm">
-                           <img src={getChampionImageUrl(c.name)} className="absolute inset-0 w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt="" />
+              {/* CENTER (CORE CHAMPION POOL) */}
+              <div className="lg:col-span-4 flex flex-col">
+                <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-5 h-full flex flex-col shadow-sm relative overflow-hidden">
+                  
+                  {/* Glow de Fundo Sutil para dar profundidade ao centro da tela */}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-40 bg-blue-500/10 blur-[60px] pointer-events-none" />
+
+                  <h4 className="text-[10px] text-center mb-5 text-zinc-400 font-bold uppercase tracking-widest flex items-center justify-center gap-3 relative z-10">
+                    <span className="w-4 h-[1px] bg-zinc-700"></span>
+                    Core Champion Pool
+                    <span className="w-4 h-[1px] bg-zinc-700"></span>
+                  </h4>
+
+                  <div className="flex-1 flex flex-col gap-3 relative z-10">
+                    {mostPickedOverall.length > 0 ? (
+                      <>
+                        {/* SIGNATURE PICK (Top 1) */}
+                        {(() => {
+                          const topChamp: any = mostPickedOverall[0]; // <-- Só adicionar o ': any' aqui!
+                          const wr = topChamp.count > 0 ? (topChamp.wins / topChamp.count) * 100 : 0;
+                          const splash = getChampionSplashUrl(topChamp.name);
+                          
+                          return (
+                            <div className="relative rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900 group cursor-default mb-2 shadow-md">
+                              <div className="absolute inset-0 z-0">
+                                <img src={splash} className="w-full h-full object-cover object-[center_20%] opacity-40 group-hover:opacity-60 transition-opacity duration-500 grayscale-[30%]" alt="" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/60 to-transparent" />
+                              </div>
+                              
+                              <div className="relative z-10 p-4 pt-12 flex flex-col items-center text-center">
+                                <div className="absolute top-3 left-3 bg-blue-600/20 border border-blue-500/50 text-blue-400 text-[7px] px-2 py-0.5 rounded font-black uppercase tracking-widest backdrop-blur-sm shadow-lg">
+                                  Signature Pick
+                                </div>
+                                
+                                <h5 className="text-2xl font-black text-white uppercase tracking-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                                  {topChamp.name}
+                                </h5>
+                                
+                                <div className="flex items-center gap-3 mt-1.5 bg-zinc-950/60 px-3 py-1 rounded-full border border-zinc-800/80 backdrop-blur-md shadow-inner">
+                                  <span className={`text-[11px] font-black ${wr >= 50 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                    {wr.toFixed(1)}% WR
+                                  </span>
+                                  <span className="text-zinc-600 text-[10px]">|</span>
+                                  <span className="text-[9px] font-bold text-zinc-300 tracking-widest uppercase">
+                                    {topChamp.count} Matches
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* RUNNER UPS (Top 2-5) - Mini Progress Bars */}
+                        <div className="flex flex-col gap-2 mt-auto">
+                          {mostPickedOverall.slice(1).map((c: any, index: number) => {
+                            const wr = c.count > 0 ? (c.wins / c.count) * 100 : 0;
+                            return (
+                              <div key={c.name} className="flex items-center gap-3 bg-zinc-900/40 p-2 rounded-xl border border-zinc-800/50 hover:bg-zinc-800 transition-colors">
+                                <div className="relative">
+                                  <img src={getChampionImageUrl(c.name)} className="w-9 h-9 rounded-lg border border-zinc-700 object-cover shadow-sm" alt="" />
+                                  <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 bg-zinc-950 border border-zinc-800 rounded flex items-center justify-center text-[7px] font-black text-zinc-500 shadow-md">
+                                    #{index + 2}
+                                  </div>
+                                </div>
+                                
+                                <div className="flex-1 flex flex-col justify-center py-0.5 pr-2">
+                                  <div className="flex justify-between items-end mb-1.5">
+                                    <span className="text-[10px] font-black text-zinc-200 uppercase tracking-tight leading-none">
+                                      {c.name}
+                                    </span>
+                                    <div className="flex items-center gap-2 leading-none">
+                                      <span className="text-[8px] text-zinc-500 font-bold">{c.count}G</span>
+                                      <span className={`text-[9px] font-black ${wr >= 50 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                        {wr.toFixed(0)}%
+                                      </span>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Progress Bar (Leitura Rápida de Dados) */}
+                                  <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden shadow-inner">
+                                    <div 
+                                      className={`h-full transition-all duration-1000 ${wr >= 50 ? 'bg-emerald-500' : 'bg-red-500'}`} 
+                                      style={{ width: `${Math.min(100, Math.max(0, wr))}%` }} 
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <div><span className="text-xs font-black text-white uppercase">{c.name}</span><p className="text-[9px] font-bold text-zinc-500 uppercase">{c.count.toFixed(0)} JOGOS</p></div>
+                      </>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center text-zinc-600 opacity-50">
+                         <span className="text-4xl mb-2">📊</span>
+                         <span className="text-[9px] font-bold uppercase tracking-widest">Sem dados de Draft</span>
                       </div>
-                      <span className={`text-xs font-black ${c.count > 0 && c.wins/c.count >= 0.5 ? 'text-emerald-500' : 'text-red-500'}`}>{c.count > 0 ? ((c.wins/c.count)*100).toFixed(0) : 0}% WR</span>
-                    </div>
-                  ))}
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1135,67 +1378,149 @@ function ProgressBar({ label, value }: { label: string, value: number }) {
   );
 }
 
-function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
+function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP, mainChampion }: any) {
   const team = teams.find((t: any) => t.acronym.toUpperCase() === player.team_acronym.toUpperCase());
   const isGlobalMVP = player.is_mvp;
+  const splashUrl = getChampionSplashUrl(mainChampion);
   
-  let cardBorder = 'border-zinc-800 hover:border-blue-500';
+  let borderColor = 'border-zinc-800 hover:border-zinc-500';
   let nameColor = 'text-white';
+  let foilClass = '';
+  let badgeLabel = '';
+  let badgeColor = '';
   
   if (isGlobalMVP) {
-    cardBorder = 'border-yellow-400/50 hover:border-yellow-400';
+    borderColor = 'border-yellow-500/30 hover:border-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.05)]';
     nameColor = 'text-yellow-400';
+    foilClass = 'foil-stealth-royal';
+    badgeLabel = 'SEASON MVP';
+    badgeColor = 'bg-yellow-400 text-yellow-950';
   } else if (isTeamMVP) {
-    cardBorder = 'border-emerald-500/50 hover:border-emerald-500';
+    borderColor = 'border-emerald-500/30 hover:border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.05)]';
     nameColor = 'text-emerald-500';
+    foilClass = 'foil-stealth-royal';
+    badgeLabel = 'TEAM STAR';
+    badgeColor = 'bg-emerald-500 text-emerald-950';
   }
 
   return (
-    <div className="relative group h-full">
+    <div className="relative group h-[220px]">
+      {/* Estilos CSS Injetados: Foil Ultra-Sutil com Pausa Orgânica e Microtextura Premium */}
+      <style>{`
+        /*
+          CONCEITO PREMIUM: 
+          - Luz mais larga e difusa (imitando um reflexo real em metal escovado/vidro).
+          - A "pausa" agora é orgânica: feita por um grande espaço transparente no gradiente, 
+            evitando que a animação dê um tranco ao reiniciar o loop.
+        */
+        .foil-stealth-royal {
+          background-image: 
+            /* Faixa de luz Champagne/Platina, larga e com bordas muito suaves */
+            linear-gradient(
+              110deg,
+              transparent 0%,
+              transparent 35%, /* Grande espaço vazio para criar a pausa natural */
+              rgba(255, 255, 255, 0.01) 40%,
+              rgba(255, 255, 255, 0.07) 50%, /* Ponto de maior brilho */
+              rgba(255, 255, 255, 0.01) 60%,
+              transparent 65%,
+              transparent 100%
+            ),
+            /* Base ambiente com um levíssimo tom metálico quente */
+            linear-gradient(
+              to right, 
+              rgba(255, 245, 220, 0.015), 
+              rgba(255, 255, 255, 0.03), 
+              rgba(255, 245, 220, 0.015)
+            );
+          background-size: 250% 100%, 100% 100%;
+          /* Tempo estendido para 14s e movimento linear para uma passagem hipnótica e sem trancos */
+          animation: premium-sweep 14s linear infinite; 
+          mix-blend-mode: color-dodge;
+        }
+
+        /* Microtextura (Efeito Matte / Fibra de Carbono sutil) */
+        .foil-stealth-royal::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background-image: 
+            linear-gradient(45deg, rgba(255,255,255,0.015) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.015) 75%, rgba(255,255,255,0.015)),
+            linear-gradient(-45deg, rgba(255,255,255,0.015) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.015) 75%, rgba(255,255,255,0.015));
+          background-size: 4px 4px; /* Diminuído de 60px para 4px para um toque tátil caro */
+          mix-blend-mode: overlay;
+          pointer-events: none;
+          opacity: 0.7; 
+        }
+
+        /* Loop contínuo e perfeito da direita para a esquerda */
+        @keyframes premium-sweep {
+          0%   { background-position: 200% 0, 0% 0; }
+          100% { background-position: -100% 0, 0% 0; }
+        }
+
+        /* Shape Assimétrico (HUD) */
+        .clip-card { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 22px), calc(100% - 22px) 100%, 0 100%); }
+      `}</style>
+      
       {isAdmin && <button onClick={(e) => { e.preventDefault(); onEdit(); }} className="absolute -top-2 -right-2 z-50 bg-blue-600 hover:bg-blue-500 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs shadow-md">✏️</button>}
       
-      {isGlobalMVP && (
-        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-yellow-400 text-yellow-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
-          SEASON MVP
-        </div>
-      )}
-      {!isGlobalMVP && isTeamMVP && (
-        <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-40 bg-emerald-500 text-emerald-950 text-[8px] font-black px-3 py-0.5 rounded uppercase tracking-widest shadow-sm">
-          TEAM STAR
+      {badgeLabel && (
+        <div className={`absolute -top-2.5 left-4 z-40 ${badgeColor} text-[8px] font-black px-2.5 py-1 rounded shadow-lg tracking-widest`}>
+          {badgeLabel}
         </div>
       )}
 
-      <Link href={`/dashboard/players/${player.puuid}`} className={`bg-[#18181b] border transition-colors flex flex-col items-center block h-full p-5 rounded-2xl relative overflow-hidden shadow-sm ${cardBorder}`}>
+      <Link href={`/dashboard/players/${player.puuid}`} className={`bg-zinc-950 border transition-all duration-300 flex flex-col block h-full relative shadow-md clip-card group-hover:-translate-y-1 ${borderColor}`}>
         
-        <div className="relative mb-4 mt-2">
-          <div className={`p-0.5 rounded-xl transition-all duration-300 group-hover:scale-105 ${isGlobalMVP ? 'bg-yellow-400' : isTeamMVP ? 'bg-emerald-500' : 'bg-transparent'}`}>
-            <div className="relative w-16 h-16 bg-zinc-900 rounded-xl overflow-hidden border border-zinc-700 flex items-center justify-center">
-              {player.photo_url ? (
-                <img src={player.photo_url} alt={player.nickname} className="w-full h-full object-cover relative z-10" />
-              ) : (
-                <span className="text-xl font-black text-zinc-700 relative z-10">{player.nickname?.substring(0, 2).toUpperCase()}</span>
-              )}
+        {/* Camada 1: Splash Art Background */}
+        {mainChampion && (
+          <div className="absolute inset-0 z-0 opacity-80 transition-transform duration-700 group-hover:scale-105">
+            <img src={splashUrl} className="w-full h-full object-cover object-[center_20%]" alt="" />
+          </div>
+        )}
+        
+        {/* Camada 2: Gradiente APENAS NA BASE para ancorar os textos */}
+        <div className="absolute inset-0 z-0 bg-gradient-to-t from-zinc-950 via-zinc-950/80 to-transparent opacity-90" />
+        
+        {/* Camada 3: O Foil Stealth com Pausa */}
+        {(isGlobalMVP || isTeamMVP) && (
+          <div className={`absolute inset-0 z-10 pointer-events-none ${foilClass}`} />
+        )}
+
+        {/* Camada 4: Conteúdo da Carta */}
+        <div className="relative z-20 p-4 flex flex-col h-full">
+          
+          <div className="flex justify-between items-start mb-3">
+            <div className={`relative p-0.5 rounded-lg transition-transform duration-300 ${isGlobalMVP ? 'bg-yellow-400' : isTeamMVP ? 'bg-emerald-500' : 'bg-zinc-700'}`}>
+              <div className="w-11 h-11 bg-zinc-900 rounded-md overflow-hidden flex items-center justify-center shadow-inner">
+                {player.photo_url ? (
+                  <img src={player.photo_url} alt={player.nickname} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-sm font-black text-zinc-600">{player.nickname?.substring(0, 2).toUpperCase()}</span>
+                )}
+              </div>
+              <div className="absolute -bottom-2 -right-2 bg-zinc-950 p-1 rounded border border-zinc-800 shadow-md">
+                {getRoleIcon(String(player.primary_role), "w-2.5 h-2.5")}
+              </div>
+            </div>
+            
+            <div className="flex flex-col items-end gap-1.5 mt-1">
+               {team?.logo_url && <img src={team.logo_url} alt="" className="w-4 h-4 object-contain opacity-90 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]" />}
+               <span className="text-[8px] font-bold text-white tracking-widest drop-shadow-[0_1px_2px_rgba(0,0,0,1)] bg-black/40 px-1.5 rounded">{player.games_played} MATCHES</span>
             </div>
           </div>
-          <div className="absolute -bottom-2 -right-2 bg-zinc-950 p-1.5 rounded-lg border border-zinc-800 z-20">
-            {getRoleIcon(String(player.primary_role), "w-3 h-3")}
+
+          <h3 className={`text-[17px] font-black tracking-tight uppercase truncate drop-shadow-[0_2px_4px_rgba(0,0,0,1)] mt-auto ${nameColor}`}>
+            {player.nickname}
+          </h3>
+          
+          <div className="grid grid-cols-2 gap-1.5 mt-2">
+            <StatBadge label="LANE" value={player.median_lane} />
+            <StatBadge label="IMPACT" value={player.median_impact} />
+            <StatBadge label="CONV" value={player.median_conversion} />
+            <StatBadge label="VISION" value={player.median_vision} />
           </div>
-        </div>
-
-        <h3 className={`text-base font-black text-center truncate w-full mb-1 tracking-tight uppercase ${nameColor}`}>
-          {player.nickname}
-        </h3>
-        
-        <div className="flex items-center gap-2 mb-6 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded">
-          {team?.logo_url && <img src={team.logo_url} alt="" className="w-3 h-3 object-contain" />}
-          <p className="text-zinc-400 font-bold text-[9px] uppercase">{player.team_acronym} • {player.games_played}G</p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-1.5 w-full mt-auto relative z-10">
-          <StatBadge label="LANE" value={player.median_lane} />
-          <StatBadge label="IMPACT" value={player.median_impact} />
-          <StatBadge label="CONV" value={player.median_conversion} />
-          <StatBadge label="VISION" value={player.median_vision} />
         </div>
       </Link>
     </div>
@@ -1204,9 +1529,9 @@ function PlayerCard({ player, teams, isAdmin, onEdit, isTeamMVP }: any) {
 
 function StatBadge({ label, value }: { label: string, value: number | null }) {
   return (
-    <div className="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg bg-zinc-900 border border-zinc-800 transition-colors">
-      <span className="text-[7px] font-bold text-zinc-500 tracking-widest uppercase mb-0.5">{label}</span>
-      <span className={`text-[11px] font-black ${getScoreColor(value)}`}>{value ? Math.round(value) : '-'}</span>
+    <div className="flex flex-col items-center justify-center py-1.5 px-1 rounded bg-zinc-950/70 backdrop-blur-md border border-zinc-800/50 transition-colors shadow-inner">
+      <span className="text-[7px] font-bold text-zinc-400 tracking-widest uppercase mb-0.5">{label}</span>
+      <span className={`text-[11px] font-black drop-shadow-md ${getScoreColor(value)}`}>{value ? Math.round(value) : '-'}</span>
     </div>
   );
 }
@@ -1239,13 +1564,19 @@ function DraftBanThumbnail({ label, data, globalBans }: any) {
 function DraftPickCard({ label, data, side, mode }: any) {
   const isBlue = side === 'blue';
   
+  // Chamamos a nova URL com o recorte horizontal perfeito da Riot
+  const centeredSplash = data ? getChampionCenteredUrl(data.name) : '';
+  
   return (
     <div className="group relative">
       <div className={`h-16 rounded-xl border transition-all flex items-center relative overflow-hidden shadow-sm ${isBlue ? 'border-blue-900/30 bg-blue-900/10 hover:border-blue-500/50' : 'border-red-900/30 bg-red-900/10 hover:border-red-500/50 flex-row-reverse'}`}>
         
         {data && mode === 'champion' && (
            <div className={`absolute inset-0 w-full h-full ${!isBlue ? '-scale-x-100' : ''}`}>
-             <img src={data.splash} className="w-full h-full object-cover object-[center_20%] opacity-80 transition-transform duration-500 group-hover:scale-110" alt="" />
+             {/* A MÁGICA ACONTECE AQUI: 
+                 Substituímos 'object-center' por 'object-[center_20%]' 
+                 Isso faz a imagem focar no rosto (topo) em vez do peitoral (meio) */}
+             <img src={centeredSplash} className="w-full h-full object-cover object-[center_20%] opacity-80 transition-transform duration-500 group-hover:scale-110" alt="" />
            </div>
         )}
         
@@ -1568,14 +1899,22 @@ function SideSelector({ value, onChange }: { value: string, onChange: (val: stri
 const CustomXAxisTick = ({ x, y, payload, teamChartData, teamsList }: any) => {
   const match = teamChartData?.find((d: any) => d.match_id === payload.value);
   const opponentAcronym = String(match?.opponent_acronym || '').toUpperCase();
-  
   const opponentTeamData = teamsList?.find((t: any) => t.acronym === opponentAcronym);
   const logoUrl = opponentTeamData?.logo_url || match?.opponent_logo;
 
   return (
     <g transform={`translate(${x},${y})`}>
       {logoUrl ? (
-        <image href={logoUrl} x={-10} y={8} width="20" height="20" />
+        <image 
+          href={logoUrl} 
+          x={-10} 
+          y={8} 
+          width="20" 
+          height="20" 
+          preserveAspectRatio="xMidYMid meet"
+          // O drop-shadow com a cor branca cria o contorno/brilho no exato formato da logo
+          style={{ filter: 'drop-shadow(0px 0px 3px rgba(255, 255, 255, 0.6))' }}
+        />
       ) : (
         <text x={0} y={18} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">VS {opponentAcronym || '?'}</text>
       )}
@@ -1594,32 +1933,69 @@ const CustomChartTooltip = ({ active, payload, teamsList }: any) => {
     const opponentTeamData = teamsList?.find((t: any) => t.acronym === opponentAcronym);
     const oppLogo = opponentTeamData?.logo_url || data.opponent_logo;
 
+    // Formatação de Data e Hora
+    const dateStr = data.game_start_time 
+      ? new Date(data.game_start_time).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', ' às')
+      : 'Data Desconhecida';
+
+    // Placar
     let placarStr = resultText;
     if (data.team_score !== undefined && data.opponent_score !== undefined) {
       placarStr = `${data.team_score} x ${data.opponent_score}`;
-    } else if (data.team_kills !== undefined && data.opponent_kills !== undefined) {
-      placarStr = `${data.team_kills} x ${data.opponent_kills} (KILLS)`;
     }
 
     return (
-      <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg shadow-xl min-w-[170px] uppercase">
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-2 mb-2">
-           <div className="flex items-center gap-2">
-             {oppLogo && <img src={oppLogo} className="w-4 h-4 object-contain rounded-sm" alt="" />}
-             <span className="text-white text-[10px] font-black">VS {opponentAcronym}</span>
+      <div className="bg-zinc-950/95 backdrop-blur-md border border-zinc-700 p-3.5 rounded-xl shadow-2xl min-w-[240px] uppercase flex flex-col gap-3 z-[9999]">
+        
+        {/* Header: Split, Data e Resultado */}
+        <div className="flex justify-between items-start border-b border-zinc-800 pb-2">
+           <div className="flex flex-col">
+              <span className="text-[8px] text-zinc-500 font-bold tracking-widest">{data.split || 'MATCH HISTORY'}</span>
+              <span className="text-[10px] font-black text-zinc-300">{dateStr}</span>
            </div>
-           <span className={`text-[10px] font-black tracking-widest ${resultColor}`}>
-             {placarStr}
-           </span>
+           <span className={`text-[11px] font-black tracking-widest ${resultColor}`}>{placarStr}</span>
         </div>
-        <div className="space-y-1.5">
-          {payload.map((p: any) => (
-            <div key={p.dataKey} className="flex justify-between items-center gap-3 text-[9px] font-bold text-white">
-              <div className="flex items-center gap-1.5">
-                 <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: p.color }} />
-                 <span className="text-zinc-400">{p.name}</span>
+
+        {/* Confronto e Drafts */}
+        <div className="flex flex-col gap-2.5 bg-zinc-900/50 p-2.5 rounded-lg border border-zinc-800/50">
+           
+           {/* Nossa Composição */}
+           <div className="flex items-center justify-between">
+              <span className="text-[9px] font-bold text-blue-400">OUR COMP</span>
+              <div className="flex gap-1">
+                 {data.team_picks?.map((champ: string, i: number) => (
+                    <img key={i} src={getChampionImageUrl(champ)} className="w-5 h-5 rounded-full border border-zinc-700 shadow-sm" alt={champ} />
+                 ))}
+                 {(!data.team_picks || data.team_picks.length === 0) && <span className="text-[8px] text-zinc-600">N/A</span>}
               </div>
-              <span className="font-black">{p.value.toFixed(1)}</span>
+           </div>
+           
+           {/* Composição Inimiga */}
+           <div className="flex items-center justify-between mt-0.5">
+              <div className="flex items-center gap-1.5">
+                <div className="bg-zinc-200 p-0.5 rounded shadow-sm">
+                   {oppLogo && <img src={oppLogo} className="w-3.5 h-3.5 object-contain" alt="" />}
+                </div>
+                <span className="text-[9px] font-bold text-zinc-400">VS {opponentAcronym}</span>
+              </div>
+              <div className="flex gap-1">
+                 {data.opp_picks?.map((champ: string, i: number) => (
+                    <img key={i} src={getChampionImageUrl(champ)} className="w-5 h-5 rounded-full border border-zinc-800 grayscale opacity-70" alt={champ} />
+                 ))}
+                 {(!data.opp_picks || data.opp_picks.length === 0) && <span className="text-[8px] text-zinc-600">N/A</span>}
+              </div>
+           </div>
+        </div>
+
+        {/* Grid de Métricas (Bento Box) */}
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          {payload.map((p: any) => (
+            <div key={p.dataKey} className="flex justify-between items-center bg-zinc-900 px-2 py-1.5 rounded-md border border-zinc-800">
+              <div className="flex items-center gap-1.5">
+                 <div className="w-1.5 h-1.5 rounded-full shadow-[0_0_4px_rgba(255,255,255,0.2)]" style={{ backgroundColor: p.color }} />
+                 <span className="text-[8px] text-zinc-400 font-bold tracking-widest">{p.name}</span>
+              </div>
+              <span className="font-black text-[10px] text-white">{p.value.toFixed(1)}</span>
             </div>
           ))}
         </div>
