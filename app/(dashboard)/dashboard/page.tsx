@@ -58,6 +58,16 @@ const getChampImage = (champName: string) => {
   return `https://ddragon.leagueoflegends.com/cdn/14.5.1/img/champion/${name}.png`;
 };
 
+// URL para Banners e Cards Horizontais
+function getChampionCenteredUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/${sanitized}_0.jpg`;
+}
+
 const getScoreColor = (score: number | null) => {
   if (!score) return "text-zinc-600";
   if (score >= 90) return "text-purple-500"; 
@@ -275,10 +285,11 @@ export default function DashboardPage() {
 
       if (targetMission) {
          const nextOp = targetMission.opponent_acronym;
-         fetchPromises.push(supabase.from('bff_hub_draft').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('bff_hub_performance').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('bff_hub_players_roster').select('*').eq('team_acronym', nextOp));
-         fetchPromises.push(supabase.from('bff_hub_objectives').select('*').eq('team_acronym', nextOp));
+         // Trocamos .eq por .ilike para garantir que a busca nunca falhe por causa de siglas erradas
+         fetchPromises.push(supabase.from('bff_hub_draft').select('*').ilike('team_acronym', `%${nextOp}%`));
+         fetchPromises.push(supabase.from('bff_hub_performance').select('*').ilike('team_acronym', `%${nextOp}%`));
+         fetchPromises.push(supabase.from('bff_hub_players_roster').select('*').ilike('team_acronym', `%${nextOp}%`));
+         fetchPromises.push(supabase.from('bff_hub_objectives').select('*').ilike('team_acronym', `%${nextOp}%`));
       }
 
       const [wellnessDataRes, draftRes, perfRes, hubRosterRes, objRes] = await Promise.all(fetchPromises);
@@ -398,7 +409,6 @@ export default function DashboardPage() {
 
   const handleOpenTargetDrafts = async () => {
      if (nextTargetIntel.team === 'SEM ALVO') return;
-     
      setDraftsModalOpen(true);
      setDraftsLoading(true);
 
@@ -408,7 +418,7 @@ export default function DashboardPage() {
         .select('*')
         .or(`blue_team_tag.ilike.%${targetTeam}%,red_team_tag.ilike.%${targetTeam}%`)
         .order('game_start_time', { ascending: false })
-        .limit(5);
+        .limit(10); // Aumentamos o limite para garantir que pega pelo menos 5 jogos válidos
 
      if (!matches || matches.length === 0) {
         setTargetDraftsList([]);
@@ -416,7 +426,8 @@ export default function DashboardPage() {
         return;
      }
 
-     const matchIds = matches.map(m => m.match_id);
+     // Correção crítica: match_id || id
+     const matchIds = matches.map(m => String(m.match_id || m.id));
 
      const [picksRes, bansRes] = await Promise.all([
         supabase.from('bff_player_matches').select('*').in('match_id', matchIds),
@@ -426,7 +437,7 @@ export default function DashboardPage() {
      const picks = picksRes.data || [];
      const bans = bansRes.data || [];
 
-     const formattedDrafts = matches.map(m => {
+     const formattedDrafts = matches.slice(0, 5).map(m => {
          const blueTag = String(m.blue_team_tag || '').toUpperCase();
          const redTag = String(m.red_team_tag || '').toUpperCase();
          const isBlue = blueTag.includes(targetTeam);
@@ -437,53 +448,21 @@ export default function DashboardPage() {
          const isBlueWin = rawWinner === 'blue' || rawWinner === '100';
          const isWin = (isBlue && isBlueWin) || (!isBlue && !isBlueWin);
 
-         const matchPicks = picks.filter(p => String(p.match_id) === String(m.match_id));
-         const matchBans = bans.filter(b => String(b.match_id) === String(m.match_id));
+         const matchPicks = picks.filter(p => String(p.match_id) === String(m.match_id || m.id));
+         const matchBans = bans.filter(b => String(b.match_id) === String(m.match_id || m.id));
 
-         const bluePicks = matchPicks.filter(p => {
-            const tag = String(p.team_acronym || p.team_tag || p.team || '').toUpperCase();
-            const side = String(p.side || '').toLowerCase();
-            return side === 'blue' || side === '100' || tag === blueTag || blueTag.includes(tag) || tag.includes(blueTag);
-         });
-         
-         const redPicks = matchPicks.filter(p => {
-            const tag = String(p.team_acronym || p.team_tag || p.team || '').toUpperCase();
-            const side = String(p.side || '').toLowerCase();
-            return side === 'red' || side === '200' || tag === redTag || redTag.includes(tag) || tag.includes(redTag);
-         });
-
-         const blueBans = matchBans.filter(b => {
-            const tag = String(b.team_acronym || b.team_tag || b.team || '').toUpperCase();
-            const side = String(b.side || '').toLowerCase();
-            return side === 'blue' || side === '100' || tag === blueTag || blueTag.includes(tag) || tag.includes(blueTag);
-         }).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
-
-         const redBans = matchBans.filter(b => {
-            const tag = String(b.team_acronym || b.team_tag || b.team || '').toUpperCase();
-            const side = String(b.side || '').toLowerCase();
-            return side === 'red' || side === '200' || tag === redTag || redTag.includes(tag) || tag.includes(redTag);
-         }).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
+         const bluePicks = matchPicks.filter(p => String(p.side).toLowerCase() === 'blue' || String(p.side) === '100' || String(p.team_acronym).toUpperCase().includes(blueTag));
+         const redPicks = matchPicks.filter(p => String(p.side).toLowerCase() === 'red' || String(p.side) === '200' || String(p.team_acronym).toUpperCase().includes(redTag));
+         const blueBans = matchBans.filter(b => String(b.side).toLowerCase() === 'blue' || String(b.side) === '100' || String(b.team_acronym).toUpperCase().includes(blueTag)).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
+         const redBans = matchBans.filter(b => String(b.side).toLowerCase() === 'red' || String(b.side) === '200' || String(b.team_acronym).toUpperCase().includes(redTag)).sort((a,b) => (a.ban_turn || a.turn || 0) - (b.ban_turn || b.turn || 0));
 
          let safeDate = 'Data Desconhecida';
          if (m.game_start_time) {
             const d = new Date(String(m.game_start_time).replace(' ', 'T'));
-            if (!isNaN(d.getTime())) {
-               safeDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth()+1).padStart(2, '0')} às ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-            }
+            if (!isNaN(d.getTime())) safeDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth()+1).padStart(2, '0')} às ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
          }
 
-         return {
-             match_id: m.match_id,
-             date: safeDate,
-             targetSide,
-             oppName,
-             isWin,
-             bluePicks: sortPicks(bluePicks),
-             redPicks: sortPicks(redPicks),
-             blueBans,
-             redBans,
-             patch: m.patch
-         };
+         return { match_id: m.match_id || m.id, date: safeDate, targetSide, oppName, isWin, bluePicks: sortPicks(bluePicks), redPicks: sortPicks(redPicks), blueBans, redBans, patch: m.patch };
      });
 
      setTargetDraftsList(formattedDrafts);
@@ -634,21 +613,20 @@ export default function DashboardPage() {
         
         // 1. CARREGA OS REGISTROS MANUAIS
         const manualPastEvents = scrimReportsManual.filter(s => s.scrim_date === dateStr).map(s => {
-            // Tenta puxar a hora original do evento automático (se existir), para não ficar apenas "MANUAL"
             const autoMatch = groupedSeries.find(g => g.calendarDate === dateStr && String(g.opp).toUpperCase() === String(s.opponent_acronym).toUpperCase());
             const eventTime = autoMatch ? autoMatch.time : 'MANUAL';
 
             return { id: s.id, time: eventTime, opp: s.opponent_acronym, type: 'SCRIM', resultText: `${s.score} ${s.result}`, isWin: s.result === 'W', isPast: true, isAuto: false, logo: getTeamLogo(s.opponent_acronym), rawScrim: s };
         });
 
-        // 2. CARREGA OS AUTOMÁTICOS (MAS IGNORA SE JÁ EXISTIR UM MANUAL POR CIMA)
+        // 2. CARREGA OS AUTOMÁTICOS
         const pastEvents = groupedSeries.filter(g => g.calendarDate === dateStr).map(g => {
             const isOverridden = scrimReportsManual.some(s => s.scrim_date === dateStr && String(s.opponent_acronym).toUpperCase() === String(g.opp).toUpperCase());
             
-            if (isOverridden) return null; // Se você já editou, não renderiza o automático
+            if (isOverridden) return null; 
 
             return { id: g.id, time: g.time, opp: g.opp, type: g.isScrim ? 'SCRIM' : 'OFICIAL', resultText: `${g.ourWins} - ${g.theirWins} ${g.ourWins > g.theirWins ? 'W' : g.theirWins > g.ourWins ? 'L' : 'D'}`, isWin: g.ourWins > g.theirWins, isPast: true, isAuto: true, logo: getTeamLogo(String(g.opp)) };
-        }).filter(Boolean); // Remove os nulos da array
+        }).filter(Boolean); 
 
         const allPastEvents = [...pastEvents, ...manualPastEvents];
         const opponentsPlayedToday = allPastEvents.map(ev => String(ev.opp).toUpperCase().trim());
@@ -1487,7 +1465,7 @@ export default function DashboardPage() {
 
                        <ul className="flex-1 flex flex-col justify-center gap-2.5">
                          {nextTargetIntel.winConditions.filter(wc => wc.type !== 'pressure').length > 0 ?
-                            nextTargetIntel.winConditions.filter(wc => wc.type !== 'pressure').map((wc: any, i) => (
+                            nextTargetIntel.winConditions.filter(wc => wc.type !== 'pressure').map((wc: any, i: number) => (
                            <li key={i} className="text-xs text-zinc-300 font-bold flex flex-col justify-center leading-snug">
                              {wc.type === 'wr' && (
                                 <div className="flex items-center gap-3">
@@ -1527,15 +1505,28 @@ export default function DashboardPage() {
                                 const p = target.player;
                                 return (
                                    <>
-                                      <div className="flex items-center gap-3 mb-2.5">
-                                         <div className="relative">
-                                            <img src={p.photo_url || `https://ui-avatars.com/api/?name=${p.nickname}&background=18181b&color=ef4444`} className="w-10 h-10 rounded-full border-2 border-red-500/50 object-cover shadow-md" alt={p.nickname} />
+                                      <div className="flex items-center gap-3 mb-2.5 relative group/carry cursor-help">
+                                         <div className="relative shrink-0">
+                                            <img src={p.photo_url || `https://ui-avatars.com/api/?name=${p.nickname}&background=18181b&color=ef4444`} className="w-10 h-10 rounded-full border-2 border-red-500/50 object-cover shadow-md group-hover/carry:border-red-400 transition-colors" alt={p.nickname} />
                                             <div className="absolute -bottom-1 -right-1 bg-red-600 rounded-full p-0.5 shadow-sm"><Crosshair size={10} className="text-white"/></div>
                                          </div>
-                                         <div className="flex flex-col">
-                                            <span className="text-white font-black text-xs uppercase tracking-tight leading-none truncate w-[100px] block">{p.nickname}</span>
+                                         <div className="flex flex-col flex-1 min-w-0">
+                                            <span className="text-white font-black text-xs uppercase tracking-tight leading-none truncate block group-hover/carry:text-red-400 transition-colors">{p.nickname}</span>
                                             <span className="text-red-400 font-bold text-[8px] tracking-widest uppercase mt-0.5">{String(p.primary_role).replace(/jug/i, 'JNG')}</span>
                                          </div>
+
+                                         {/* TOOLTIP DOS CAMPEÕES DO CARRY (SÓ APARECE NO HOVER) */}
+                                         {p.topChamps && p.topChamps.length > 0 && (
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 p-2.5 rounded-xl shadow-2xl opacity-0 pointer-events-none group-hover/carry:opacity-100 group-hover/carry:pointer-events-auto transition-all duration-300 z-[999] flex flex-col items-center w-max transform translate-y-2 group-hover/carry:translate-y-0">
+                                               <span className="text-[8px] font-black text-red-400 uppercase tracking-widest mb-1.5 border-b border-zinc-800 pb-1 w-full text-center flex items-center gap-1"><Flame size={10}/> Best Picks</span>
+                                               <div className="flex gap-2">
+                                                  {p.topChamps.map((c: string, idx: number) => (
+                                                     <img key={idx} src={getChampImage(c)} className="w-8 h-8 rounded-lg border border-zinc-700 object-cover hover:border-red-500 transition-colors" alt={c} title={c} />
+                                                  ))}
+                                               </div>
+                                               <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-zinc-950 border-b border-r border-zinc-700 rotate-45"></div>
+                                            </div>
+                                         )}
                                       </div>
                                       <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 bg-zinc-950/50 p-2 rounded-lg border border-zinc-800/50">
                                          <div className="flex flex-col"><span className="text-[6px] font-black text-zinc-500 uppercase tracking-widest">Lane</span><span className="text-[10px] font-black text-emerald-400">{Math.round(p.median_lane || 0)}</span></div>
@@ -1552,70 +1543,63 @@ export default function DashboardPage() {
                      </div>
                    </div>
 
-                   <div className="grid grid-cols-2 gap-4 shrink-0 mt-3">
-                     <div className="bg-zinc-900/30 p-3.5 rounded-xl border border-zinc-800/50 flex flex-col justify-center">
-                       <p className="text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] mb-2">PRIORITY PICKS</p>
-                       <div className="grid grid-cols-3 gap-2.5 w-full">
-                         {nextTargetIntel.topPicks.length > 0 ? nextTargetIntel.topPicks.map((champ: any, i) => (
-                           <div key={i} className="relative flex items-center gap-2.5 bg-blue-500/5 border border-blue-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-blue-500/10 hover:border-blue-500/50 hover:scale-105 transition-all duration-200 cursor-default group/champ min-w-0">
-                               
-                               <div className="relative shrink-0">
-                                  <img src={getChampImage(champ.name)} className="w-7 h-7 rounded-md border border-blue-500/30 object-cover shadow-sm group-hover/champ:border-blue-400 transition-colors" alt={champ.name} onError={(e: any) => { e.target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/0.jpg'; }} />
-                                  {champ.isBlind && <div className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-amber-500 border-[1.5px] border-zinc-900 rounded-full"></div>}
-                                  {champ.isFlex && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-purple-500 border-[1.5px] border-zinc-900 rounded-full"></div>}
-                               </div>
-
-                               <div className="flex flex-col min-w-0 flex-1 gap-0.5">
-                                  <span className="text-[10px] text-blue-300 font-black tracking-wider uppercase truncate">{champ.name}</span>
-                                  <span className="text-[8px] text-blue-500/80 font-bold uppercase leading-none">{champ.winRate}% WR</span>
-                               </div>
-
-                               <div className="absolute bottom-[115%] left-1/2 -translate-x-1/2 w-[160px] bg-zinc-950 border border-zinc-700/80 p-3 rounded-xl shadow-2xl opacity-0 pointer-events-none group-hover/champ:opacity-100 group-hover/champ:pointer-events-auto transition-all duration-200 z-[100] transform translate-y-2 group-hover/champ:translate-y-0">
-                                   <p className="text-[11px] font-black text-white uppercase border-b border-zinc-800 pb-1.5 mb-2 text-center">{champ.name}</p>
-                                   
-                                   <div className="flex flex-col gap-2">
-                                      {champ.isBlind && (
-                                         <div className="flex items-center gap-2">
-                                            <span className="bg-amber-500 text-white text-[7px] px-1.5 py-0.5 rounded font-black tracking-widest shadow-sm">BLIND</span>
-                                            <span className="text-[8px] text-zinc-400 uppercase font-bold">Pickado B1/R1-R2</span>
-                                         </div>
-                                      )}
-                                      
-                                      {champ.isFlex ? (
-                                         <div>
-                                            <div className="flex items-center gap-2 mb-1.5">
-                                               <span className="bg-purple-500 text-white text-[7px] px-1.5 py-0.5 rounded font-black tracking-widest shadow-sm">FLEX</span>
-                                               <span className="text-[8px] text-zinc-400 uppercase font-bold">Rotas:</span>
-                                            </div>
-                                            <div className="flex flex-wrap gap-1">
-                                               {champ.roles.map((r: string) => (
-                                                  <span key={r} className="bg-zinc-800 border border-zinc-700 text-[7px] text-zinc-300 font-black px-1.5 py-0.5 rounded uppercase">{r}</span>
-                                               ))}
-                                            </div>
-                                         </div>
-                                      ) : (
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0 mt-3 relative z-10">
+                      {/* PRIORITY PICKS - BENTO BANNERS */}
+                      <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner">
+                        <p className="text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] mb-1 pl-1 flex items-center gap-1.5"><Target size={10}/> PRIORITY PICKS</p>
+                        <div className="flex flex-col gap-2">
+                          {nextTargetIntel.topPicks.length > 0 ? nextTargetIntel.topPicks.map((champ: any, i: number) => (
+                             <div key={i} className="group relative h-[46px] rounded-lg border border-blue-900/30 bg-blue-900/10 overflow-hidden flex items-center shadow-sm hover:border-blue-500/50 hover:shadow-[0_0_15px_rgba(59,130,246,0.15)] transition-all cursor-default">
+                                <div className="absolute inset-0 w-full h-full">
+                                   <img src={getChampionCenteredUrl(champ.name)} className="w-full h-full object-cover object-[center_20%] opacity-50 transition-transform duration-500 group-hover:scale-110 group-hover:opacity-80" alt="" />
+                                </div>
+                                <div className="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-transparent" />
+                                <div className="absolute top-0 bottom-0 left-0 w-1 bg-blue-500 z-20" />
+                                
+                                <div className="relative z-20 flex w-full items-center justify-between px-3">
+                                   <div className="flex items-center gap-3">
+                                      <span className="text-[10px] font-black text-blue-400 uppercase w-3 drop-shadow-md">B{i+1}</span>
+                                      <div className="flex flex-col">
                                          <div className="flex items-center gap-1.5">
-                                            <span className="text-[8px] text-zinc-500 uppercase font-bold">Main Role:</span>
-                                            <span className="text-[8px] text-zinc-300 font-black uppercase">{champ.roles[0] || 'Desconhecido'}</span>
+                                            <span className="text-xs font-black text-white uppercase tracking-tight leading-none drop-shadow-md">{champ.name}</span>
+                                            {champ.isBlind && <span className="bg-amber-500 text-white text-[6px] px-1 py-0.5 rounded font-black tracking-widest shadow-sm">BLIND</span>}
+                                            {champ.isFlex && <span className="bg-purple-500 text-white text-[6px] px-1 py-0.5 rounded font-black tracking-widest shadow-sm">FLEX</span>}
                                          </div>
-                                      )}
+                                         <div className="flex items-center gap-2 text-[8px] font-bold mt-1">
+                                            <span className={champ.winRate >= 50 ? 'text-emerald-400 drop-shadow-[0_0_2px_rgba(16,185,129,0.8)]' : 'text-red-400'}>{champ.winRate}% WR</span>
+                                            <span className="text-zinc-600">|</span>
+                                            <span className="text-zinc-300 uppercase tracking-widest">{champ.roles.join(', ').replace(/jug/i, 'JNG')}</span>
+                                         </div>
+                                      </div>
                                    </div>
-                               </div>
-                            </div>
-                          )) : <span className="text-[9px] text-zinc-600 font-bold uppercase col-span-3">N/A</span>}
-                       </div>
-                     </div>
-                     <div className="bg-zinc-900/30 p-3.5 rounded-xl border border-zinc-800/50 flex flex-col justify-center">
-                       <p className="text-[8px] font-black text-red-400 uppercase tracking-[0.2em] mb-2">MUST BANS</p>
-                       <div className="grid grid-cols-3 gap-2.5 w-full">
-                         {nextTargetIntel.topBans.length > 0 ? nextTargetIntel.topBans.map((champ: any, i) => (
-                           <div key={i} className="flex items-center gap-2.5 bg-red-500/5 border border-red-500/20 pr-2 pl-1.5 py-1.5 rounded-lg hover:bg-red-500/10 hover:border-red-500/50 hover:scale-105 transition-all duration-200 cursor-default group/ban min-w-0 overflow-hidden">
-                               <img src={getChampImage(champ.name)} className="w-7 h-7 rounded-md border border-red-500/30 object-cover grayscale opacity-80 shrink-0 shadow-sm group-hover/ban:grayscale-0 group-hover/ban:opacity-100 group-hover/ban:border-red-400 transition-all" alt={champ.name} onError={(e: any) => { e.target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/0.jpg'; }} />
-                               <span className="text-[10px] text-red-300 font-black tracking-wider uppercase line-through truncate flex-1 min-w-0">{champ.name}</span>
-                            </div>
-                          )) : <span className="text-[9px] text-zinc-600 font-bold uppercase col-span-3">N/A</span>}
-                       </div>
-                     </div>
+                                </div>
+                             </div>
+                          )) : <span className="text-[9px] text-zinc-600 font-bold uppercase p-2">Sem Dados</span>}
+                        </div>
+                      </div>
+
+                      {/* MUST BANS - BENTO BANNERS */}
+                      <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner">
+                        <p className="text-[8px] font-black text-red-400 uppercase tracking-[0.2em] mb-1 pl-1 flex items-center gap-1.5"><Shield size={10}/> MUST BANS</p>
+                        <div className="flex flex-col gap-2">
+                          {nextTargetIntel.topBans.length > 0 ? nextTargetIntel.topBans.map((champ: any, i: number) => (
+                             <div key={i} className="group relative h-[46px] rounded-lg border border-red-900/30 bg-red-900/10 overflow-hidden flex items-center shadow-sm hover:border-red-500/50 hover:shadow-[0_0_15px_rgba(239,68,68,0.15)] transition-all cursor-default">
+                                <div className="absolute inset-0 w-full h-full">
+                                   <img src={getChampionCenteredUrl(champ.name)} className="w-full h-full object-cover object-[center_20%] opacity-30 grayscale transition-all duration-500 group-hover:scale-110 group-hover:grayscale-0 group-hover:opacity-70" alt="" />
+                                </div>
+                                <div className="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-transparent" />
+                                <div className="absolute top-0 bottom-0 left-0 w-1 bg-red-500 z-20" />
+                                
+                                <div className="relative z-20 flex w-full items-center justify-between px-3">
+                                   <div className="flex items-center gap-3">
+                                      <span className="text-[9px] font-black text-red-500 uppercase w-5 line-through decoration-red-500">BAN</span>
+                                      <span className="text-xs font-black text-zinc-400 group-hover:text-white uppercase tracking-tight leading-none line-through decoration-red-500/50 group-hover:decoration-red-500 transition-colors drop-shadow-md">{champ.name}</span>
+                                   </div>
+                                </div>
+                             </div>
+                          )) : <span className="text-[9px] text-zinc-600 font-bold uppercase p-2">Sem Dados</span>}
+                        </div>
+                      </div>
                    </div>
                  </>
                ) : (
@@ -1804,8 +1788,9 @@ export default function DashboardPage() {
           
           {/* WIN / LOSS / WR STACKED BAR CHART */}
           <div className="animate-fade-in-up lg:col-span-8 bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 md:p-8 shadow-2xl relative flex flex-col h-[400px] overflow-hidden group hover-lift" style={{ opacity: 0, animationDelay: '0.55s' }}>
+             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
              <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
-             <div className="flex items-center justify-between mb-4 shrink-0 border-b border-zinc-800/60 pb-4">
+             <div className="flex items-center justify-between mb-4 shrink-0 border-b border-zinc-800/60 pb-4 z-10">
                 <div>
                    <h3 className="text-[13px] font-black text-white uppercase tracking-tight flex items-center gap-2"><Swords size={16} className="text-amber-500" /> Confrontos Diretos</h3>
                    <p className="text-[8px] text-zinc-500 font-bold tracking-widest mt-1 uppercase">Desempenho contra organizações</p>
@@ -1816,65 +1801,30 @@ export default function DashboardPage() {
                 </div>
              </div>
              
-             <div className="flex-1 w-full min-h-0 relative mt-1">
+             <div className="flex-1 w-full min-h-0 relative mt-1 z-10">
                 {opponentStatsData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={opponentStatsData} margin={{ top: 25, right: 20, left: -10, bottom: 50 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                      
-                      <XAxis 
-                        dataKey="opponent" 
-                        axisLine={false} 
-                        tickLine={false}
-                        interval={0}
-                        tick={(props: any) => {
-                          const { x, y, payload } = props;
-                          const logoUrl = getTeamLogo(payload.value);
-                          
-                          return (
-                            <g transform={`translate(${x},${y})`}>
-                              {logoUrl ? (
-                                <>
-                                  <image x={-12} y={5} width={24} height={24} href={logoUrl} />
-                                  <text x={0} y={40} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">{payload.value}</text>
-                                </>
-                              ) : (
-                                <text x={0} y={20} textAnchor="middle" fill="#71717a" fontSize={9} fontWeight="bold">{payload.value}</text>
-                              )}
-                            </g>
-                          );
-                        }}
-                      />
-                      
-                      <YAxis 
-                        tick={{ fill: '#52525b', fontSize: 10, fontWeight: 'bold' }} 
-                        axisLine={false} 
-                        tickLine={false} 
-                        allowDecimals={false}
-                      />
-                      
-                      <Tooltip 
-                         cursor={{ fill: 'rgba(255,255,255,0.02)' }} 
-                         wrapperStyle={{ zIndex: 9999, outline: 'none' }}
-                         content={<CustomMatchupTooltip />}
-                      />
-                      
+                      <XAxis dataKey="opponent" axisLine={false} tickLine={false} interval={0} tick={(props: any) => { const { x, y, payload } = props; const logoUrl = getTeamLogo(payload.value); return ( <g transform={`translate(${x},${y})`}> {logoUrl ? ( <> <image x={-12} y={5} width={24} height={24} href={logoUrl} /> <text x={0} y={40} textAnchor="middle" fill="#71717a" fontSize={8} fontWeight="bold">{payload.value}</text> </> ) : ( <text x={0} y={20} textAnchor="middle" fill="#71717a" fontSize={9} fontWeight="bold">{payload.value}</text> )} </g> ); }} />
+                      <YAxis tick={{ fill: '#52525b', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip cursor={{ fill: 'rgba(255,255,255,0.02)' }} wrapperStyle={{ zIndex: 9999, outline: 'none' }} content={<CustomMatchupTooltip />} />
                       {oppChartMode === 'COUNT' && <Legend wrapperStyle={{ fontSize: '9px', fontWeight: 'bold', bottom: -5 }} iconType="circle" />}
                       
                       {oppChartMode === 'COUNT' ? (
                         <>
-                           <Bar dataKey="wins" name="Vitórias" stackId="a" fill="#10b981" maxBarSize={45}>
+                           <Bar dataKey="wins" name="Vitórias" stackId="a" fill="#10b981" maxBarSize={35} style={{ filter: 'drop-shadow(0px 0px 8px rgba(16,185,129,0.5))' }}>
                               <LabelList dataKey="wins" position="center" fill="#ffffff" fontSize={11} fontWeight="black" formatter={(val: number) => val > 0 ? val : ''} />
                            </Bar>
-                           <Bar dataKey="losses" name="Derrotas" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={45}>
+                           <Bar dataKey="losses" name="Derrotas" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={35} style={{ filter: 'drop-shadow(0px 0px 8px rgba(239,68,68,0.5))' }}>
                               <LabelList dataKey="losses" position="center" fill="#ffffff" fontSize={11} fontWeight="black" formatter={(val: number) => val > 0 ? val : ''} />
                            </Bar>
                         </>
                       ) : (
-                        <Bar dataKey="winRate" name="Win Rate (%)" radius={[4, 4, 0, 0]} maxBarSize={50}>
+                        <Bar dataKey="winRate" name="Win Rate (%)" radius={[4, 4, 0, 0]} maxBarSize={45}>
                            <LabelList dataKey="winRate" position="top" fill="#a1a1aa" fontSize={10} fontWeight="black" formatter={(val: number) => `${val}%`} />
                            {opponentStatsData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.winRate >= 50 ? '#10b981' : '#ef4444'} />
+                              <Cell key={`cell-${index}`} fill={entry.winRate >= 50 ? '#10b981' : '#ef4444'} style={{ filter: entry.winRate >= 50 ? 'drop-shadow(0px 0px 8px rgba(16,185,129,0.5))' : 'drop-shadow(0px 0px 8px rgba(239,68,68,0.5))' }} />
                            ))}
                         </Bar>
                       )}
@@ -1891,37 +1841,29 @@ export default function DashboardPage() {
 
           {/* DONUT CHART: CAMPEONATOS */}
           <div className="lg:col-span-4 animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 shadow-xl relative flex flex-col h-[400px] hover-lift" style={{ opacity: 0, animationDelay: '0.6s' }}>
-             <div className="flex items-center justify-between mb-2 border-b border-zinc-800/60 pb-3 shrink-0">
+             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
+             <div className="flex items-center justify-between mb-2 border-b border-zinc-800/60 pb-3 shrink-0 z-10">
                 <div>
                    <h3 className="text-[11px] font-black text-white uppercase tracking-tight">Distribuição de Ligas</h3>
                    <p className="text-[8px] text-zinc-500 font-bold tracking-widest mt-1 uppercase">Oponentes por Campeonato/Região</p>
                 </div>
              </div>
              
-             <div className="flex-1 w-full min-h-0 relative flex flex-col">
+             <div className="flex-1 w-full min-h-0 relative flex flex-col z-10">
                {championshipStatsData.length > 0 ? (
                  <>
                    <div className="h-[170px] w-full relative shrink-0 mt-2 z-0">
                      <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                            <Pie 
-                              data={championshipStatsData} 
-                              innerRadius={55} 
-                              outerRadius={80} 
-                              paddingAngle={4} 
-                              dataKey="value"
-                              stroke="none"
-                              cornerRadius={4}
+                              data={championshipStatsData} innerRadius={55} outerRadius={80} paddingAngle={6} dataKey="value"
+                              stroke="#121214" strokeWidth={3} cornerRadius={6}
                            >
                               {championshipStatsData.map((entry, index) => (
-                                 <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                 <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} style={{ filter: `drop-shadow(0px 0px 8px ${CHART_COLORS[index % CHART_COLORS.length]}80)` }} />
                               ))}
                            </Pie>
-                           <Tooltip 
-                             cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                             wrapperStyle={{ zIndex: 9999, outline: 'none' }}
-                             content={<CustomDonutTooltip totalGames={championshipStatsData.reduce((acc, curr) => acc + curr.value, 0)} />} 
-                           />
+                           <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} wrapperStyle={{ zIndex: 9999, outline: 'none' }} content={<CustomDonutTooltip totalGames={championshipStatsData.reduce((acc, curr) => acc + curr.value, 0)} />} />
                         </PieChart>
                      </ResponsiveContainer>
                      
@@ -1987,6 +1929,7 @@ export default function DashboardPage() {
           
           {/* RADAR GIGANTE (4 COLUNAS) */}
           <div className="animate-fade-in-up lg:col-span-4 bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative overflow-hidden group flex flex-col h-[380px] hover-lift" style={{ opacity: 0, animationDelay: '0.7s' }}>
+             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
              <div className="absolute top-0 left-0 w-full h-1 bg-purple-500 opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
              <div className="flex justify-between items-start mb-2 shrink-0 border-b border-zinc-800/60 pb-3 z-10">
                 <div>
@@ -2010,27 +1953,25 @@ export default function DashboardPage() {
                     name={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Oficial' : myTeamTag} 
                     dataKey={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Oficial' : myTeamTag} 
                     stroke="#3b82f6" 
-                    strokeWidth={2.5} 
+                    strokeWidth={3} 
                     fill="#3b82f6" 
                     fillOpacity={0.2} 
-                    dot={{ r: 4, fill: '#18181b', strokeWidth: 2, stroke: '#3b82f6' }}
-                    activeDot={{ r: 6, fill: '#fff', stroke: '#3b82f6', strokeWidth: 2 }}
+                    dot={{ r: 0 }}
+                    activeDot={{ r: 6, fill: '#fff', stroke: '#3b82f6', strokeWidth: 3 }}
                     isAnimationActive={true}
-                    animationDuration={1000}
-                    animationEasing="ease-out"
+                    style={{ filter: 'drop-shadow(0px 0px 8px rgba(59,130,246,0.6))' }}
                   />
                   <Radar 
                     name={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Scrim' : 'Oponentes'} 
                     dataKey={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'Scrim' : 'Oponentes'} 
                     stroke={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444"} 
-                    strokeWidth={2.5} 
+                    strokeWidth={3} 
                     fill={radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444"} 
                     fillOpacity={0.2}
-                    dot={{ r: 4, fill: '#18181b', strokeWidth: 2, stroke: radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444" }}
-                    activeDot={{ r: 6, fill: '#fff', stroke: radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444", strokeWidth: 2 }}
+                    dot={{ r: 0 }}
+                    activeDot={{ r: 6, fill: '#fff', stroke: radarCompareMode === 'OFFICIAL_VS_SCRIM' ? "#f59e0b" : "#ef4444", strokeWidth: 3 }}
                     isAnimationActive={true}
-                    animationDuration={1000}
-                    animationEasing="ease-out"
+                    style={{ filter: radarCompareMode === 'OFFICIAL_VS_SCRIM' ? 'drop-shadow(0px 0px 8px rgba(245,158,11,0.6))' : 'drop-shadow(0px 0px 8px rgba(239,68,68,0.6))' }}
                   />
                   
                   <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '15px', fontWeight: 'bold' }} />
@@ -2047,6 +1988,7 @@ export default function DashboardPage() {
 
           {/* EFICIÊNCIA DE SCRIMS (4 COLUNAS) */}
           <div className="animate-fade-in-up lg:col-span-4 bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative overflow-hidden group flex flex-col h-[380px] hover-lift" style={{ opacity: 0, animationDelay: '0.75s' }}>
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
             <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500 opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
             <div className="flex items-center justify-between mb-2 z-10 shrink-0 border-b border-zinc-800/60 pb-3">
                <div>
@@ -2054,27 +1996,21 @@ export default function DashboardPage() {
                   <p className="text-[8px] text-zinc-500 font-bold tracking-widest mt-0.5 uppercase">Dificuldade vs Nível do Oponente</p>
                </div>
             </div>
-            <div className="flex-1 w-full min-h-0 mt-3">
+            <div className="flex-1 w-full min-h-0 mt-3 z-10">
                <ResponsiveContainer width="100%" height="100%">
-                 <BarChart data={chartIntelligence.efficiencyData} margin={{ top: 5, right: 5, left: -15, bottom: 0 }} stackOffset="none">
+                 <BarChart data={chartIntelligence.efficiencyData} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                   
                    <XAxis dataKey="name" tick={{ fill: '#d4d4d8', fontSize: 10, fontWeight: '900' }} tickFormatter={(val) => String(val).toUpperCase()} axisLine={false} tickLine={false} dy={10} />
                    <YAxis tick={{ fill: '#52525b', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                   
-                   <Tooltip 
-                     cursor={{ fill: 'rgba(255,255,255,0.03)' }} 
-                     wrapperStyle={{ zIndex: 9999, outline: 'none' }}
-                     content={<CustomEfficiencyTooltip />} 
-                   />
-
-                   <Bar dataKey="STOMPADOS" stackId="a" fill="#7f1d1d" maxBarSize={45} />
-                   <Bar dataKey="MT DIFÍCIL" stackId="a" fill="#dc2626" maxBarSize={45} />
-                   <Bar dataKey="DIFÍCIL" stackId="a" fill="#f87171" maxBarSize={45} />
-                   <Bar dataKey="CONTROLADO" stackId="a" fill="#52525b" maxBarSize={45} />
-                   <Bar dataKey="FÁCIL" stackId="a" fill="#60a5fa" maxBarSize={45} />
-                   <Bar dataKey="MUITO FÁCIL" stackId="a" fill="#2563eb" maxBarSize={45} />
-                   <Bar dataKey="STOMPAMOS" stackId="a" fill="#1e3a8a" maxBarSize={45} />
+                   <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} wrapperStyle={{ zIndex: 9999, outline: 'none' }} content={<CustomEfficiencyTooltip />} />
+                   <Bar dataKey="STOMPADOS" stackId="a" fill="#7f1d1d" maxBarSize={40} />
+                   <Bar dataKey="MT DIFÍCIL" stackId="a" fill="#dc2626" maxBarSize={40} />
+                   <Bar dataKey="DIFÍCIL" stackId="a" fill="#f87171" maxBarSize={40} />
+                   <Bar dataKey="CONTROLADO" stackId="a" fill="#52525b" maxBarSize={40} />
+                   <Bar dataKey="FÁCIL" stackId="a" fill="#60a5fa" maxBarSize={40} />
+                   <Bar dataKey="MUITO FÁCIL" stackId="a" fill="#2563eb" maxBarSize={40} />
+                   {/* O último item do Stack ganha o Radius (borda arredondada no topo) e um Drop Shadow brilhante azul */}
+                   <Bar dataKey="STOMPAMOS" stackId="a" fill="#1e3a8a" maxBarSize={40} radius={[4, 4, 0, 0]} style={{ filter: 'drop-shadow(0px -4px 6px rgba(59,130,246,0.3))' }} />
                  </BarChart>
                </ResponsiveContainer>
             </div>
@@ -2082,6 +2018,7 @@ export default function DashboardPage() {
 
           {/* EARLY GAME MOMENTUM (4 COLUNAS) */}
           <div className="animate-fade-in-up lg:col-span-4 bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative overflow-hidden group flex flex-col h-[380px] hover-lift" style={{ opacity: 0, animationDelay: '0.8s' }}>
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
             <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
             <div className="flex items-center justify-between mb-4 z-10 shrink-0 border-b border-zinc-800/60 pb-3">
                <div>
@@ -2089,7 +2026,7 @@ export default function DashboardPage() {
                   <p className="text-[8px] text-zinc-500 font-bold tracking-widest mt-0.5 uppercase">Diferencial de Ouro aos 12 Minutos</p>
                </div>
             </div>
-            <div className="flex-1 w-full min-h-0 mt-2">
+            <div className="flex-1 w-full min-h-0 mt-2 z-10">
                {earlyGameSnowball.length > 0 ? (
                  <ResponsiveContainer width="100%" height="100%">
                    <BarChart data={earlyGameSnowball} margin={{ top: 5, right: 5, left: -15, bottom: 50 }}>
@@ -2132,10 +2069,11 @@ export default function DashboardPage() {
                         wrapperStyle={{ zIndex: 9999, outline: 'none' }}
                         content={<CustomEarlyGameTooltip />} 
                      />
-                     <Bar dataKey="goldDiff" radius={[2, 2, 2, 2]}>
-                       {earlyGameSnowball.map((entry, index) => (
-                         <Cell key={`cell-${index}`} fill={entry.goldDiff >= 0 ? '#3b82f6' : '#ef4444'} />
-                       ))}
+                     <Bar dataKey="goldDiff" maxBarSize={40}>
+                       {earlyGameSnowball.map((entry, index) => {
+                         const isPos = entry.goldDiff >= 0;
+                         return <Cell key={`cell-${index}`} fill={isPos ? '#3b82f6' : '#ef4444'} radius={[4, 4, 0, 0] as any} style={{ filter: isPos ? 'drop-shadow(0px 0px 8px rgba(59,130,246,0.5))' : 'drop-shadow(0px 0px 8px rgba(239,68,68,0.5))' }} />
+                       })}
                      </Bar>
                    </BarChart>
                  </ResponsiveContainer>
@@ -2152,8 +2090,9 @@ export default function DashboardPage() {
 
         {/* ADVANCED SCRIM REPORT (TABELA FULL WIDTH) */}
         <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[32px] p-8 shadow-2xl relative w-full overflow-hidden group hover-lift h-[500px] flex flex-col mt-6" style={{ opacity: 0, animationDelay: '0.85s' }}>
+           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
            <div className="absolute top-0 left-0 w-full h-1 bg-white opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
-           <div className="flex justify-between items-center mb-6 border-b border-zinc-800/60 pb-4 shrink-0">
+           <div className="flex justify-between items-center mb-6 border-b border-zinc-800/60 pb-4 shrink-0 z-10">
               <div>
                  <h3 className="text-sm font-black text-white uppercase tracking-tight flex items-center gap-2">
                     <div className="w-1.5 h-4 bg-zinc-400 rounded-full shadow-[0_0_12px_rgba(255,255,255,0.4)] animate-pulse"></div> Advanced Logs
@@ -2182,7 +2121,7 @@ export default function DashboardPage() {
               )}
            </div>
            
-           <div className="flex-1 overflow-auto custom-scrollbar pr-2">
+           <div className="flex-1 overflow-auto custom-scrollbar pr-2 z-10">
               <table className="w-full text-left border-separate border-spacing-y-2.5 min-w-[700px]">
                  <thead className="sticky top-0 bg-[#121214]/95 backdrop-blur-md z-10 text-[8px] text-zinc-500 font-black tracking-[0.2em] uppercase">
                     <tr><th className="px-4 pb-2 border-b border-zinc-800/80">DATA / OPONENTE</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">RES / PLACAR</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">COMP TESTADA</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">DIFICULDADE</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">REMAKES</th></tr>
