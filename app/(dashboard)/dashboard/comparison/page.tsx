@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase/client';
 import { 
   Swords, Shield, Crosshair, Target, Clock, Zap, 
   Activity, TrendingUp, TrendingDown, Scale, BarChart2, User, Ban, Flame,
-  ChevronDown, ListFilter, X, Eye, Coins
+  ChevronDown, ListFilter, X, Eye, Coins, Trophy
 } from 'lucide-react';
 import { 
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, 
@@ -33,6 +33,15 @@ function getChampionCenteredUrl(championName: string | null) {
   let sanitized = String(championName).replace(/['\s\.,]/g, '');
   if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
   return `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/${sanitized}_0.jpg`;
+}
+
+function getChampionSplashUrl(championName: string | null) {
+  if (!championName || championName === '777' || String(championName).toLowerCase() === 'none' || String(championName).toLowerCase() === 'unknown') {
+    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/-1/-1.jpg'; 
+  }
+  let sanitized = String(championName).replace(/['\s\.,]/g, '');
+  if (sanitized.toLowerCase() === 'wukong') sanitized = 'MonkeyKing';
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${sanitized}_0.jpg`;
 }
 
 function normalizeRole(lane: string | null, role: string | null = null): string {
@@ -604,7 +613,6 @@ export default function ScoutingReportPage() {
      return { A: getPool(statsA), B: getPool(statsB) };
   }, [entityStats, viewMode]);
 
-  // --- CÁLCULOS EXCLUSIVOS DO MODO PLAYER ---
   const playerAdvStats = useMemo(() => {
      if (viewMode !== 'PLAYERS') return null;
      const { statsA, statsB } = entityStats;
@@ -659,8 +667,161 @@ export default function ScoutingReportPage() {
      return { combatData, resourceData, econData, utilityData };
   }, [entityStats, viewMode, playerA, playerB]);
 
+  // Extração Inteligente dos Dados do Jogador para as Cartas (Trading Cards)
+  const playerCardData = useMemo(() => {
+      if (viewMode !== 'PLAYERS') return null;
+
+      const getCardInfo = (statsArray: any[], name: string, pools: any[], teamTag: string) => {
+          if (!statsArray || statsArray.length === 0) return null;
+          const firstStat = statsArray[0] || {};
+          const role = normalizeRole(firstStat.lane, firstStat.role);
+          const topChamps = pools ? pools.slice(0, 3) : [];
+
+          const games = statsArray.length;
+          const wins = statsArray.filter(s => s.win).length;
+          const winRate = games > 0 ? (wins / games) * 100 : 0;
+
+          const k = statsArray.reduce((acc, c) => acc + MathSafe(c.kills), 0);
+          const d = statsArray.reduce((acc, c) => acc + MathSafe(c.deaths), 0);
+          const a = statsArray.reduce((acc, c) => acc + MathSafe(c.assists), 0);
+          const kda = d === 0 ? (k + a) : (k + a) / d;
+
+          // Validação Exclusiva de MVP (Foil Effect)
+          const teamPlayersStats = corePlayerStats.filter(p => p.team_tag === teamTag);
+          const playerScores: Record<string, { sum: number, count: number }> = {};
+          teamPlayersStats.forEach(p => {
+             if (!playerScores[p.player_name]) playerScores[p.player_name] = { sum: 0, count: 0 };
+             const score = p.perf_score || ((MathSafe(p.lane_rating) + MathSafe(p.impact_rating) + MathSafe(p.conversion_rating) + MathSafe(p.vision_rating)) / 4);
+             playerScores[p.player_name].sum += score;
+             playerScores[p.player_name].count += 1;
+          });
+          
+          let isMVP = false;
+          if (playerScores[name] && playerScores[name].count > 0) {
+             const myAvg = playerScores[name].sum / playerScores[name].count;
+             let isHighest = true;
+             for (const pName in playerScores) {
+                 const other = playerScores[pName];
+                 if (other.count > 0) {
+                     const otherAvg = other.sum / other.count;
+                     if (otherAvg > myAvg && pName !== name) {
+                         isHighest = false; break;
+                     }
+                 }
+             }
+             isMVP = isHighest;
+          }
+
+          return { name, teamTag, role, topChamps, kda, winRate, games_played: games, isMVP };
+      };
+
+      return {
+          A: getCardInfo(entityStats.statsA, playerA, playerPools?.A || [], teamA),
+          B: getCardInfo(entityStats.statsB, playerB, playerPools?.B || [], teamB)
+      };
+  }, [viewMode, entityStats, playerA, playerB, playerPools, corePlayerStats, teamA, teamB]);
+
 
   // --- COMPONENTES AUXILIARES ---
+
+  // O componente da Carta Estilo Super Trunfo
+  const PlayerTradingCard = ({ playerInfo, photoUrl, color, allTeams }: any) => {
+     if (!playerInfo) return (
+         <div className="w-[190px] aspect-[3/4] bg-zinc-900 border border-zinc-800 rounded-[24px] flex items-center justify-center">
+             <span className="text-zinc-600 text-[10px] font-bold uppercase tracking-widest">Sem Registros</span>
+         </div>
+     );
+
+     const isBlue = color === 'blue';
+     const shadowColor = isBlue ? 'rgba(59,130,246,0.3)' : 'rgba(239,68,68,0.3)';
+     const glowClass = isBlue ? 'group-hover:shadow-[0_0_40px_rgba(59,130,246,0.4)]' : 'group-hover:shadow-[0_0_40px_rgba(239,68,68,0.4)]';
+     const borderClass = isBlue ? 'border-blue-500/30' : 'border-red-500/30';
+     const nameColor = isBlue ? 'text-blue-400' : 'text-red-400';
+     const teamObj = allTeams.find((t: any) => t.acronym === playerInfo.teamTag);
+     const mainChampion = playerInfo.topChamps?.[0]?.champ || null;
+     
+     // NOVA ROTA PARA IMAGEM (Usando o Centered para focar no campeão)
+     const centeredSplash = getChampionCenteredUrl(mainChampion);
+     const isMVP = playerInfo.isMVP;
+
+     return (
+        <div className={`w-[190px] aspect-[3/4] bg-zinc-950 border transition-all duration-500 flex flex-col relative shadow-md clip-card group hover:-translate-y-2 ${borderClass} ${glowClass}`} style={{ boxShadow: `0 10px 30px -10px ${shadowColor}` }}>
+           {/* Camada 1: Splash Art Background */}
+           {mainChampion && (
+              <div className="absolute inset-0 z-0 opacity-80 transition-transform duration-700 group-hover:scale-105 pointer-events-none">
+                 <img src={centeredSplash} className="w-full h-full object-cover object-center grayscale-[20%]" alt="" />
+              </div>
+           )}
+
+           {/* Camada 2: Gradiente APENAS NA BASE para ancorar os textos */}
+           <div className="absolute inset-0 z-0 bg-gradient-to-t from-zinc-950 via-zinc-950/80 to-transparent opacity-90 pointer-events-none" />
+
+           {/* Camada 3: O Foil Stealth com Pausa (SÓ PARA O MVP) */}
+           {isMVP && (
+              <div className="absolute inset-0 z-10 pointer-events-none foil-stealth-royal opacity-60 group-hover:opacity-100 transition-opacity duration-700" />
+           )}
+
+           {/* Selo MVP */}
+           {isMVP && (
+              <div className={`absolute top-2.5 left-3 z-30 ${isBlue ? 'bg-blue-500 text-blue-950' : 'bg-red-500 text-red-950'} text-[7px] font-black px-1.5 py-0.5 rounded shadow-lg tracking-widest uppercase`}>
+                 TEAM MVP
+              </div>
+           )}
+
+           {/* KDA Mini Badge */}
+           <div className="absolute top-3 right-3 z-20 pointer-events-none">
+              <div className="bg-zinc-950/80 px-2 py-1 rounded-md border border-zinc-800 flex flex-col items-center backdrop-blur-md">
+                 <span className="text-[6px] font-black text-zinc-500 uppercase tracking-widest">KDA</span>
+                 <span className="text-[10px] font-black text-white">{playerInfo.kda.toFixed(2)}</span>
+              </div>
+           </div>
+
+           {/* Camada 4: Conteúdo da Carta */}
+           <div className="relative z-20 p-3 flex flex-col h-full pointer-events-none">
+              
+              <div className="flex justify-between items-start mb-2">
+                 <div className={`relative p-0.5 rounded-lg transition-transform duration-300 mt-5 ${isBlue ? 'bg-blue-600' : 'bg-red-600'}`}>
+                    <div className="w-10 h-10 bg-zinc-900 rounded-md overflow-hidden flex items-center justify-center shadow-inner">
+                       {photoUrl ? (
+                          <img src={photoUrl} alt={playerInfo.name} className="w-full h-full object-cover filter contrast-110" />
+                       ) : (
+                          <span className="text-xs font-black text-zinc-600">{playerInfo.name?.substring(0, 2).toUpperCase()}</span>
+                       )}
+                    </div>
+                    <div className="absolute -bottom-1.5 -right-1.5 bg-zinc-950 p-1 rounded border border-zinc-800 shadow-md">
+                       {getRoleIcon(String(playerInfo.role), "w-2.5 h-2.5")}
+                    </div>
+                 </div>
+              </div>
+
+              <div className="mt-auto flex flex-col">
+                 <div className="flex items-center gap-1.5 mb-1">
+                    {teamObj?.logo_url && <img src={teamObj.logo_url} alt="" className="w-3.5 h-3.5 object-contain opacity-90 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]" />}
+                    <span className="text-[7px] font-bold text-white tracking-widest drop-shadow-[0_1px_2px_rgba(0,0,0,1)] bg-black/40 px-1 py-0.5 rounded">{playerInfo.games_played} MATCHES</span>
+                 </div>
+
+                 <h3 className={`text-xl font-black tracking-tight uppercase truncate drop-shadow-[0_2px_4px_rgba(0,0,0,1)] leading-none ${nameColor}`}>
+                    {playerInfo.name}
+                 </h3>
+
+                 <div className="flex justify-between items-end border-t border-zinc-800/60 pt-2 mt-2">
+                    <div className="flex gap-1">
+                       {playerInfo.topChamps.map((c: any, i: number) => (
+                          <img key={i} src={getChampionImageUrl(c.champ)} className="w-6 h-6 rounded-full border border-zinc-700 shadow-sm object-cover" title={`${c.champ} (${c.picks} picks)`} alt={c.champ} />
+                       ))}
+                       {playerInfo.topChamps.length === 0 && <span className="text-[8px] text-zinc-600 italic font-bold">Sem picks</span>}
+                    </div>
+                    <div className="text-right flex flex-col items-end">
+                       <span className="text-[6px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-0.5"><Trophy size={6}/> WIN RATE</span>
+                       <span className="text-xs font-black text-white drop-shadow-md">{Math.round(playerInfo.winRate)}%</span>
+                    </div>
+                 </div>
+              </div>
+           </div>
+        </div>
+     );
+  };
+
   const TugOfWarBar = ({ label, valA, valB, format = (v: number) => v.toFixed(1), reverseColors = false, icon: Icon }: any) => {
      const numA = Number(valA) || 0; const numB = Number(valB) || 0;
      const total = Math.abs(numA) + Math.abs(numB) || 1;
@@ -797,6 +958,9 @@ export default function ScoutingReportPage() {
           0%   { background-position: 200% 0, 0% 0; }
           100% { background-position: -100% 0, 0% 0; }
         }
+
+        /* Shape Assimétrico para Cartinhas (HUD) */
+        .clip-card { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 22px), calc(100% - 22px) 100%, 0 100%); }
       `}} />
 
       {/* HEADER STICKY (Z-INDEX SUPER ALTO PARA DROPDOWNS) */}
@@ -836,7 +1000,7 @@ export default function ScoutingReportPage() {
          {/* ARENA HERO (Z-INDEX 50 PARA DROPDOWNS SOBREPOR GRID) */}
          <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[32px] p-8 lg:p-12 shadow-2xl relative z-[50] group flex flex-col md:flex-row items-center justify-between gap-8 hover-lift" style={{ opacity: 0, animationDelay: '0.1s' }}>
            <div className="absolute inset-0 rounded-[32px] overflow-hidden pointer-events-none">
-              <div className={`absolute inset-0 z-10 pointer-events-none foil-stealth-royal`} />
+              {/* Removido o foil-stealth-royal daqui para não poluir o fundo */}
               <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
               <div className={`absolute -top-32 -left-32 ${viewMode==='TEAMS'?'bg-blue-600/10':'bg-purple-600/10'} w-[400px] h-[400px] rounded-full blur-[100px] pointer-events-none`}></div>
               <div className={`absolute -bottom-32 -right-32 bg-red-600/10 w-[400px] h-[400px] rounded-full blur-[100px] pointer-events-none`}></div>
@@ -844,8 +1008,11 @@ export default function ScoutingReportPage() {
            
            {/* LADO A */}
            <div className="flex-1 flex flex-col items-center relative w-full">
-               {viewMode === 'TEAMS' ? <img src={getTeamLogo(teamA)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-contain drop-shadow-[0_0_30px_rgba(59,130,246,0.3)] transition-transform hover:scale-110 duration-500" alt="A" />
-               : <img src={getPlayerPhoto(playerA)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-cover rounded-full border-4 border-zinc-800 drop-shadow-[0_0_30px_rgba(168,85,247,0.3)] transition-transform hover:scale-110 duration-500" alt="A" />}
+               {viewMode === 'TEAMS' ? (
+                  <img src={getTeamLogo(teamA)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-contain drop-shadow-[0_0_30px_rgba(59,130,246,0.3)] transition-transform hover:scale-110 duration-500" alt="A" />
+               ) : (
+                  <div className="mb-6"><PlayerTradingCard playerInfo={playerCardData?.A} photoUrl={getPlayerPhoto(playerA)} color="blue" allTeams={allTeams} /></div>
+               )}
                <PremiumEntitySelector value={viewMode === 'TEAMS' ? teamA : playerA} onChange={viewMode === 'TEAMS' ? setTeamA : setPlayerA} options={viewMode === 'TEAMS' ? allTeams : allPlayers} type={viewMode} align="left" color="blue" />
                <div className="mt-4"><SideFilter value={sideA} onChange={setSideA} /></div>
            </div>
@@ -882,8 +1049,11 @@ export default function ScoutingReportPage() {
            
            {/* LADO B */}
            <div className="flex-1 flex flex-col items-center relative w-full">
-               {viewMode === 'TEAMS' ? <img src={getTeamLogo(teamB)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-contain drop-shadow-[0_0_30px_rgba(239,68,68,0.3)] transition-transform hover:scale-110 duration-500" alt="B" />
-               : <img src={getPlayerPhoto(playerB)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-cover rounded-full border-4 border-zinc-800 drop-shadow-[0_0_30px_rgba(239,68,68,0.3)] transition-transform hover:scale-110 duration-500" alt="B" />}
+               {viewMode === 'TEAMS' ? (
+                  <img src={getTeamLogo(teamB)} className="w-32 h-32 md:w-40 md:h-40 mb-6 object-contain drop-shadow-[0_0_30px_rgba(239,68,68,0.3)] transition-transform hover:scale-110 duration-500" alt="B" />
+               ) : (
+                  <div className="mb-6"><PlayerTradingCard playerInfo={playerCardData?.B} photoUrl={getPlayerPhoto(playerB)} color="red" allTeams={allTeams} /></div>
+               )}
                <PremiumEntitySelector value={viewMode === 'TEAMS' ? teamB : playerB} onChange={viewMode === 'TEAMS' ? setTeamB : setPlayerB} options={viewMode === 'TEAMS' ? allTeams : allPlayers} type={viewMode} align="right" color="red" />
                <div className="mt-4"><SideFilter value={sideB} onChange={setSideB} /></div>
            </div>
@@ -960,7 +1130,7 @@ export default function ScoutingReportPage() {
                  </div>
               </div>
 
-              {/* Resiliência / Champion Pool */}
+              {/* Resiliência / Champion Pool (TEAMS ONLY) */}
               <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative z-10 hover:z-[100] group hover-lift" style={{ opacity: 0, animationDelay: '0.3s' }}>
                  <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
                     <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
@@ -1008,13 +1178,13 @@ export default function ScoutingReportPage() {
                          <Crosshair size={18} className="text-fuchsia-500" />
                          <div>
                            <h3 className="text-lg font-black text-white uppercase tracking-tight leading-none">Champion Pool</h3>
-                           <p className="text-[8px] font-bold text-zinc-500 tracking-[0.2em] mt-1 uppercase">Top 6 Picks</p>
+                           <p className="text-[8px] font-bold text-zinc-500 tracking-[0.2em] mt-1 uppercase">Top 6 Picks Expandido</p>
                          </div>
                        </div>
                        <div className="flex gap-4">
                           <div className="flex-1 flex flex-wrap gap-2 justify-start">
                              {playerPools.A.map(c => (
-                                <div key={c.champ} className="relative group/pick cursor-help hover:scale-110 transition-transform hover:z-[100]">
+                                <div key={c.champ} className="relative group/pick cursor-help transition-transform hover:scale-110 hover:z-[100]">
                                    <img src={getChampionImageUrl(c.champ)} className="w-10 h-10 rounded-lg border border-blue-500/30 object-cover shadow-sm" alt={c.champ} />
                                    <span className="absolute -bottom-1 -right-1 bg-zinc-950 border border-blue-500/50 text-[8px] font-black text-blue-400 px-1.5 rounded-sm z-10">{c.picks}</span>
                                 </div>
@@ -1023,7 +1193,7 @@ export default function ScoutingReportPage() {
                           <div className="w-px bg-zinc-800"></div>
                           <div className="flex-1 flex flex-wrap gap-2 justify-end">
                              {playerPools.B.map(c => (
-                                <div key={c.champ} className="relative group/pick cursor-help hover:scale-110 transition-transform hover:z-[100]">
+                                <div key={c.champ} className="relative group/pick cursor-help transition-transform hover:scale-110 hover:z-[100]">
                                    <img src={getChampionImageUrl(c.champ)} className="w-10 h-10 rounded-lg border border-red-500/30 object-cover shadow-sm" alt={c.champ} />
                                    <span className="absolute -bottom-1 -right-1 bg-zinc-950 border border-red-500/50 text-[8px] font-black text-red-400 px-1.5 rounded-sm z-10">{c.picks}</span>
                                 </div>
@@ -1259,7 +1429,6 @@ export default function ScoutingReportPage() {
                                    <YAxis yAxisId="left" stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} />
                                    <YAxis yAxisId="right" orientation="right" hide domain={[0, 'dataMax + 2']} />
                                    <RechartsTooltip content={<CustomCombatTooltip />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
-                                   <Legend wrapperStyle={{ fontSize: '10px', fontWeight: '900', paddingTop: '10px' }} iconType="circle" />
                                    
                                    {/* FIX: Cores fixadas pela Métrica (Não pelo jogador) para a Legenda funcionar perfeitamente */}
                                    <Bar yAxisId="left" dataKey="Kills" name="Kills" stackId="a" maxBarSize={55} radius={[0, 0, 4, 4] as any} fill="#3b82f6" />
@@ -1267,6 +1436,21 @@ export default function ScoutingReportPage() {
                                    <Line yAxisId="right" type="monotone" dataKey="Deaths" name="Deaths" stroke="#ef4444" strokeWidth={3} dot={{ r: 5, fill: '#ef4444', strokeWidth: 2, stroke: '#fff' }} />
                                 </ComposedChart>
                               </ResponsiveContainer>
+                           </div>
+                           {/* Custom Legend at bottom */}
+                           <div className="flex justify-center gap-6 mt-3 mb-1 shrink-0 relative z-10">
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">KILLS</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">ASSISTS</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">DEATHS</span>
+                              </div>
                            </div>
                         </div>
 
@@ -1301,61 +1485,111 @@ export default function ScoutingReportPage() {
                      </div>
 
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-0 relative z-10">
-                        {/* 3. DPM vs GPM (GROUPED BAR) */}
+                        {/* 3. DPM vs GPM (SPLIT VERTICAL BARS) */}
                         <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative z-10 hover:z-[100] group flex flex-col hover-lift h-[320px]" style={{ opacity: 0, animationDelay: '0.55s' }}>
                            <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
                               <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
                            </div>
-                           <div className="flex items-center justify-between mb-4 relative z-10 border-b border-zinc-800/60 pb-3">
+                           <div className="flex items-center justify-between mb-2 relative z-10 border-b border-zinc-800/60 pb-3">
                               <div>
                                  <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
                                  <Coins size={14} className="text-yellow-500" /> Motor Econômico
-                                 <InfoTooltip text="Mostra o lado mais mecânico do jogador: O Dano por Minuto (DPM) justificado pelo Ouro por Minuto (GPM) que ele farma." />
+                                 <InfoTooltip text="DPM e GPM separados. Mostra o Dano por Minuto causado justificado pelo Ouro por Minuto farmado." />
                                  </h3>
                               </div>
                            </div>
-                           <div className="flex-1 w-full min-h-0 relative z-10 -ml-4 mt-2">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={playerAdvStats.econData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                                   <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
-                                   <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} />
-                                   <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
-                                   <Legend wrapperStyle={{ fontSize: '10px', fontWeight: '900', paddingTop: '10px' }} iconType="circle" />
-                                   
-                                   <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={45} />
-                                   <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={45} />
-                                </BarChart>
-                              </ResponsiveContainer>
+                           
+                           <div className="flex-1 w-full min-h-0 relative z-10 flex mt-2">
+                              <div className="w-1/2 h-full -ml-4">
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={[playerAdvStats.econData[0]]} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
+                                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                                       <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                                       <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} width={40} />
+                                       <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
+                                       <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                       <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                    </BarChart>
+                                 </ResponsiveContainer>
+                              </div>
+                              <div className="w-1/2 h-full -ml-4">
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={[playerAdvStats.econData[1]]} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                                       <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                                       <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} width={40} />
+                                       <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
+                                       <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                       <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                    </BarChart>
+                                 </ResponsiveContainer>
+                              </div>
+                           </div>
+                           
+                           {/* Manual Legend */}
+                           <div className="flex justify-center gap-6 mt-3 mb-1 shrink-0 relative z-10">
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{playerA || 'A'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{playerB || 'B'}</span>
+                              </div>
                            </div>
                         </div>
 
-                        {/* 4. VISÃO E UTILIDADE (GROUPED BAR) */}
+                        {/* 4. VISÃO E UTILIDADE (SPLIT VERTICAL BARS) */}
                         <div className="animate-fade-in-up bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative z-10 hover:z-[100] group flex flex-col hover-lift h-[320px]" style={{ opacity: 0, animationDelay: '0.6s' }}>
                            <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
                               <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
                            </div>
-                           <div className="flex items-center justify-between mb-4 relative z-10 border-b border-zinc-800/60 pb-3">
+                           <div className="flex items-center justify-between mb-2 relative z-10 border-b border-zinc-800/60 pb-3">
                               <div>
                                  <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
                                  <Eye size={14} className="text-fuchsia-500" /> Utilidade e Controle
-                                 <InfoTooltip text="Visão e Eficiência. VSPM avalia quem ilumina e limpa melhor o mapa. Eficiência de Ouro calcula o % de Dano devolvido para cada moeda ganha." />
+                                 <InfoTooltip text="Visão e Eficiência isoladas em suas próprias escalas. VSPM avalia mapas. Gold Eff calcula Dano devolvido para cada moeda ganha." />
                                  </h3>
                               </div>
                            </div>
-                           <div className="flex-1 w-full min-h-0 relative z-10 -ml-4 mt-2">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={playerAdvStats.utilityData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
-                                   <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
-                                   <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} />
-                                   <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
-                                   <Legend wrapperStyle={{ fontSize: '10px', fontWeight: '900', paddingTop: '10px' }} iconType="circle" />
-                                   
-                                   <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={45} />
-                                   <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={45} />
-                                </BarChart>
-                              </ResponsiveContainer>
+                           
+                           <div className="flex-1 w-full min-h-0 relative z-10 flex mt-2">
+                              <div className="w-1/2 h-full -ml-4">
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={[playerAdvStats.utilityData[0]]} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
+                                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                                       <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                                       <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} width={40} />
+                                       <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
+                                       <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                       <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                    </BarChart>
+                                 </ResponsiveContainer>
+                              </div>
+                              <div className="w-1/2 h-full -ml-4">
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={[playerAdvStats.utilityData[1]]} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
+                                       <XAxis dataKey="metric" stroke="#52525b" tick={{ fill: '#a1a1aa', fontSize: 10, fontWeight: '900' }} axisLine={false} tickLine={false} />
+                                       <YAxis stroke="#52525b" tick={{ fill: '#71717a', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} width={40} />
+                                       <RechartsTooltip content={<CustomComparativeBarTooltip playerA={playerA} playerB={playerB} />} wrapperStyle={{ zIndex: 999999, outline: 'none' }} cursor={{fill: 'rgba(255,255,255,0.03)'}} />
+                                       <Bar dataKey="A" name={playerA || 'A'} fill="#3b82f6" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                       <Bar dataKey="B" name={playerB || 'B'} fill="#ef4444" radius={[4, 4, 0, 0] as any} maxBarSize={35} />
+                                    </BarChart>
+                                 </ResponsiveContainer>
+                              </div>
+                           </div>
+                           
+                           {/* Manual Legend */}
+                           <div className="flex justify-center gap-6 mt-3 mb-1 shrink-0 relative z-10">
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{playerA || 'A'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                 <div className="w-2.5 h-2.5 rounded bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                                 <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{playerB || 'B'}</span>
+                              </div>
                            </div>
                         </div>
                      </div>
