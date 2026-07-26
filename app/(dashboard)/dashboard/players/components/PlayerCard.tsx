@@ -1,7 +1,7 @@
 // app/(dashboard)/players-v2/components/PlayerCard.tsx
 import Link from 'next/link';
 import { getRoleIcon, getScoreColor } from '@/lib/utils/formatters';
-import { getChampionSplashUrl } from '../utils.ts';
+import { getChampionSplashUrl } from '../utils';
 
 export function StatBadge({ label, value }: { label: string, value: number | null }) {
   return (
