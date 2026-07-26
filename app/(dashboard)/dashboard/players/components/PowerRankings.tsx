@@ -1,7 +1,7 @@
 // app/(dashboard)/players-v2/components/PowerRankings.tsx
 import Link from 'next/link';
 import { getRoleIcon, getScoreColor } from '@/lib/utils/formatters';
-import { ROLES_ORDER, DEFAULT_AVATAR } from '../utils.ts';
+import { ROLES_ORDER, DEFAULT_AVATAR } from '../utils';
 
 function ProgressBar({ label, value }: { label: string, value: number }) {
   const numValue = Math.round(value || 0);
