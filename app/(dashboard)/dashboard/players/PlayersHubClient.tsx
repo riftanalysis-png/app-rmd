@@ -587,8 +587,8 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
             })()}
           </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-visible">
-            <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col items-center relative shadow-sm">
+          {/* === INÍCIO DO BLOCO VISION RADAR === */}
+            <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col items-center relative shadow-sm hover:z-50 transition-all">
               <div className="w-full flex justify-between mb-6 items-center border-b border-zinc-800 pb-4">
                 <span className="text-white text-lg font-black uppercase tracking-tight">Tactical Vision Radar</span>
                 <div className="flex gap-2">
@@ -596,9 +596,16 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
                   <ObjectiveSelector value={heatmapObjective} onChange={setHeatmapObjective} />
                 </div>
               </div>
-              <div className="relative w-full max-w-[400px] aspect-square bg-zinc-950 rounded-xl overflow-hidden border border-zinc-800">
-                <img src="https://pbs.twimg.com/media/G7GGWYIXgAEx4SP?format=jpg&name=medium" className="absolute inset-0 w-full h-full object-cover opacity-60" alt="" />
-                <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+              
+              {/* Tiramos o overflow-hidden daqui e colocamos um z-10 para ficar acima do fundo */}
+              <div className="relative w-full max-w-[400px] aspect-square bg-zinc-950 rounded-xl border border-zinc-800 z-10">
+                
+                {/* O background (imagem + grid) ganha uma 'capa' de overflow-hidden pra arredondar as quinas sem cortar o tooltip */}
+                <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
+                  <img src="https://pbs.twimg.com/media/G7GGWYIXgAEx4SP?format=jpg&name=medium" className="absolute inset-0 w-full h-full object-cover opacity-60" alt="" />
+                  <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                </div>
+                
                 <div className="absolute inset-0 z-30 pointer-events-none">
                   {activeWards.map((w, index) => {
                     const rawX = Number(w.ward_x ?? w.player_x ?? 0); const rawY = Number(w.ward_y ?? w.player_y ?? 0);
@@ -608,11 +615,13 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
                     const wardLabel = isControl ? 'CONTROL' : 'STEALTH';
                     const playerName = w.player_name || 'Desconhecido';
                     return (
-                      <div key={`sensor-${w.id || index}`} className="absolute w-6 h-6 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto hover:z-[9999] flex items-center justify-center cursor-crosshair" style={{ left: `${posX}%`, bottom: `${posY}%` }}>
+                      <div key={`sensor-${w.id || index}`} className="absolute w-6 h-6 transform -translate-x-1/2 translate-y-1/2 group/ward pointer-events-auto hover:z-[99999] flex items-center justify-center cursor-crosshair" style={{ left: `${posX}%`, bottom: `${posY}%` }}>
                         <div className="absolute inset-0 rounded-full bg-transparent" />
                         <div className="absolute w-2.5 h-2.5 rounded-full animate-ping opacity-50" style={{ backgroundColor: sensorColor }} />
                         <div className="relative w-2.5 h-2.5 rounded-full border-[1.5px] border-zinc-950 shadow-[0_0_4px_rgba(0,0,0,1)]" style={{ backgroundColor: sensorColor }} />
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-lg text-white opacity-0 group-hover/ward:opacity-100 transition-all duration-200 pointer-events-none shadow-2xl flex flex-col min-w-[140px] overflow-hidden scale-90 group-hover/ward:scale-100 origin-bottom">
+                        
+                        {/* A caixinha do Tooltip ganha z-[99999] para furar todas as camadas! */}
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-lg text-white opacity-0 group-hover/ward:opacity-100 transition-all duration-200 pointer-events-none shadow-2xl flex flex-col min-w-[140px] overflow-hidden scale-90 group-hover/ward:scale-100 origin-bottom z-[99999]">
                            <div className="bg-zinc-900 px-2.5 py-1.5 border-b border-zinc-800 flex items-center gap-2">
                              <div className="w-1.5 h-1.5 rounded-full shadow-[0_0_5px_rgba(255,255,255,0.2)]" style={{ backgroundColor: sensorColor }} />
                              <span className="text-[10px] font-black uppercase tracking-tight truncate flex-1 text-left">{playerName}</span>
@@ -627,26 +636,13 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
                   })}
                 </div>
                 {activeWards.length === 0 && (
-                  <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"><span className="bg-zinc-900/90 text-zinc-500 text-[9px] font-bold px-3 py-1.5 rounded uppercase tracking-widest border border-zinc-800 shadow-md">Nenhuma visão nesta janela</span></div>
+                  <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
+                    <span className="bg-zinc-900/90 text-zinc-500 text-[9px] font-bold px-3 py-1.5 rounded uppercase tracking-widest border border-zinc-800 shadow-md">Nenhuma visão nesta janela</span>
+                  </div>
                 )}
               </div>
             </div>
-
-            <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col shadow-sm">
-               <h3 className="text-lg font-black text-white uppercase tracking-tight mb-6 border-b border-zinc-800 pb-4">Objective Execution Strategy</h3>
-               <div className="flex-1 min-h-[300px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={boxPlotData} margin={{ bottom: 30, left: -20 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} vertical={true} />
-                      <XAxis dataKey="key" tick={<ObjectiveAxisTick />} interval={0} height={40} axisLine={false} tickLine={false} />
-                      <YAxis domain={[0, 45]} stroke="#71717a" fontSize={10} fontStyle="bold" tickFormatter={(v) => `${v}m`} axisLine={false} tickLine={false} />
-                      <Tooltip content={<CustomObjectiveTooltip />} cursor={{ fill: '#27272a', opacity: 0.4 }} wrapperStyle={{ zIndex: 9999 }} />
-                      <Bar dataKey="window" radius={[4, 4, 4, 4]} barSize={20} fill={String(heatmapSide).toLowerCase() === 'blue' ? "#3b82f6" : "#ef4444"} />
-                    </BarChart>
-                  </ResponsiveContainer>
-               </div>
-            </div>
-          </div>
+            {/* === FIM DO BLOCO VISION RADAR === */}
 
           <section className="bg-[#18181b] border border-zinc-800 rounded-2xl p-8 shadow-sm relative">
             <div className="flex justify-between items-center mb-10 border-b border-zinc-800 pb-6">
