@@ -34,19 +34,44 @@ export default async function DashboardV2Page() {
     }
   }
 
+  // --- FILTRO INTELIGENTE DE DATA (Evita baixar anos de dados mortos) ---
+  const cutoffDateObj = new Date();
+  cutoffDateObj.setMonth(cutoffDateObj.getMonth() - 4); // Limita aos últimos 4 meses
+  const cutoffDate = cutoffDateObj.toISOString().split('T')[0];
+
+  // --- BUSCA ULTRARRÁPIDA (Com os índices do banco ativados) ---
   const [
     { data: playerStats }, { data: radarStats }, { data: h2hStats }, { data: roster },
     { data: teams }, { data: rawMatches }, { data: rawMissions }, { data: rawScrims }, { data: teamWellness }
   ] = await Promise.all([
-    supabase.from('vw_dashboard_player_stats').select('*'),
-    supabase.from('vw_dashboard_radar_stats').select('*'),
-    supabase.from('vw_dashboard_h2h_stats').select('*'),
+    // Filtrado pela equipe
+    supabase.from('vw_dashboard_player_stats').select('*').ilike('team_acronym', `%${myTeamTag}%`),
+    supabase.from('vw_dashboard_radar_stats').select('*').ilike('team_acronym', `%${myTeamTag}%`),
+    supabase.from('vw_dashboard_h2h_stats').select('*'), // H2H já costuma ser leve
+    
     supabase.from('bff_admin_players').select('*'),
     supabase.from('bff_admin_teams').select('*'),
-    supabase.from('bff_matches_history').select('*').order('game_start_time', { ascending: false }).limit(2000), 
-    supabase.from('missions').select('*'),
-    supabase.from('scrim_reports').select('*'),
-    supabase.from('player_wellness').select('*').order('record_date', { ascending: false }).limit(500)
+    
+    // Filtrado pela equipe (Azul ou Vermelho) E com limite de carga
+    supabase.from('bff_matches_history')
+      .select('*')
+      .or(`blue_team_tag.ilike.%${myTeamTag}%,red_team_tag.ilike.%${myTeamTag}%`)
+      .order('game_start_time', { ascending: false })
+      .limit(150), 
+    
+    // Scrims e Missões limitadas à equipe e aos últimos 4 meses
+    supabase.from('missions')
+      .select('*')
+      .ilike('team_acronym', `%${myTeamTag}%`)
+      .gte('mission_date', cutoffDate),
+      
+    supabase.from('scrim_reports')
+      .select('*')
+      .ilike('team_acronym', `%${myTeamTag}%`)
+      .gte('scrim_date', cutoffDate),
+      
+    // Wellness limitado apenas aos últimos registros úteis
+    supabase.from('player_wellness').select('*').order('record_date', { ascending: false }).limit(100)
   ]);
 
   const activeRoster = (roster || []).filter((p: any) => String(p.team_acronym || p.team || '').toUpperCase().includes(myTeamTag));
