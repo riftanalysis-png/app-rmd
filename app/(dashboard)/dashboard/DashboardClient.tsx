@@ -14,6 +14,8 @@ import MatchupAnalytics from './components/MatchupAnalytics';
 import TacticalMetrics from './components/TacticalMetrics';
 import AdvancedLogs from './components/AdvancedLogs';
 
+
+
 // --- FUNÇÕES UTILITÁRIAS GLOBAIS ---
 function getSafeTimestamp(dateString: any) {
   if (!dateString) return 0;
@@ -77,6 +79,7 @@ interface DashboardClientProps {
   rawMissions: any[];
   rawScrims: any[];
   teamWellness: any[];
+  preloadedTargetIntel?: any;
 }
 
 export default function DashboardClient(props: DashboardClientProps) {
@@ -86,6 +89,7 @@ export default function DashboardClient(props: DashboardClientProps) {
   const [selectedPeriod, setSelectedPeriod] = useState(currentSplitObj.id);
   const [filterStartDate, setFilterStartDate] = useState(currentSplitObj.start);
   const [filterEndDate, setFilterEndDate] = useState(currentSplitObj.end);
+  
   const [filterPatch, setFilterPatch] = useState('');
   
   const splitOptions = useMemo(() => {
@@ -107,7 +111,7 @@ export default function DashboardClient(props: DashboardClientProps) {
   const [wellnessDataRaw, setWellnessDataRaw] = useState<any[]>(props.teamWellness || []);
 
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [nextTargetIntel, setNextTargetIntel] = useState({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [], date: null });
+  const [nextTargetIntel, setNextTargetIntel] = useState(props.preloadedTargetIntel || { team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [], date: null });
   const [radarCompareMode, setRadarCompareMode] = useState<'OFFICIAL_VS_SCRIM' | 'US_VS_OPP'>('OFFICIAL_VS_SCRIM');
 
   // --- ESTADOS DOS MODAIS (Agenda, Logs e Wellness) ---
@@ -516,106 +520,8 @@ export default function DashboardClient(props: DashboardClientProps) {
       };
   }, [advancedScrims, props.teams]);
 
-  // --- 5. TARGET INTEL FETCH ---
-  useEffect(() => {
-    async function fetchTargetIntelData() {
-      const today = new Date();
-      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-      const safeMissions = missionsRaw || [];
-      const nextOfficial = safeMissions
-        .filter(m => m.mission_date >= todayStr && m.mission_type === 'OFFICIAL')
-        .sort((a,b) => `${a.mission_date}T${a.mission_time||'00:00'}`.localeCompare(`${b.mission_date}T${b.mission_time||'00:00'}`));
-      
-      let targetMission = nextOfficial.length > 0 ? nextOfficial[0] : null;
-      if (!targetMission) {
-         const upcoming = safeMissions.filter(m => m.mission_date >= todayStr).sort((a,b) => `${a.mission_date}T${a.mission_time||'00:00'}`.localeCompare(`${b.mission_date}T${b.mission_time||'00:00'}`));
-         if (upcoming.length > 0) targetMission = upcoming[0];
-      }
-
-      if (!targetMission) {
-         setNextTargetIntel({ team: 'SEM ALVO', topPicks: [], topBans: [], winConditions: [], date: null });
-         return;
-      }
-
-      const nextOp = targetMission.opponent_acronym;
-      
-      try {
-         const [draftRes, perfRes, hubRosterRes, objRes] = await Promise.all([
-            supabase.from('bff_hub_draft').select('*').ilike('team_acronym', `%${nextOp}%`),
-            supabase.from('bff_hub_performance').select('*').ilike('team_acronym', `%${nextOp}%`),
-            supabase.from('bff_hub_players_roster').select('*').ilike('team_acronym', `%${nextOp}%`),
-            supabase.from('bff_hub_objectives').select('*').ilike('team_acronym', `%${nextOp}%`)
-         ]);
-
-         let topPicks: any[] = []; 
-         let topBans: any[] = [];
-         
-         if (draftRes && draftRes.data) {
-             const picksRaw = draftRes.data.filter((d: any) => String(d.type||'').toLowerCase() === 'pick');
-             const champGroups: Record<string, any> = {};
-             picksRaw.forEach((p: any) => {
-                 if (!champGroups[p.champion]) champGroups[p.champion] = { roles: new Set(), total: 0, wins: 0, minSeq: 99 };
-                 champGroups[p.champion].roles.add(p.role);
-                 champGroups[p.champion].total += Number(p.total_picks) || 0;
-                 champGroups[p.champion].wins += (Number(p.total_picks) || 0) * ((Number(p.win_rate) || 0) / 100);
-                 if (p.sequence < champGroups[p.champion].minSeq) champGroups[p.champion].minSeq = p.sequence;
-             });
-
-             topPicks = Object.entries(champGroups)
-                 .sort((a: any, b: any) => b[1].total - a[1].total)
-                 .slice(0, 3)
-                 .map(([name, data]: any) => ({ 
-                     name, 
-                     winRate: data.total > 0 ? Math.round((data.wins / data.total) * 100) : 0,
-                     isFlex: data.roles.size > 1,
-                     roles: Array.from(data.roles),
-                     isBlind: data.minSeq <= 3 
-                 }));
-             
-             const bans = draftRes.data.filter((d: any) => String(d.type||'').toLowerCase() === 'ban').sort((a: any, b: any) => b.total_picks - a.total_picks);
-             topBans = bans.slice(0, 3).map((b: any) => ({ name: b.champion }));
-         }
-         
-         const kpis: any[] = [];
-         if (perfRes && perfRes.data && perfRes.data.length > 0) {
-             let bW=0, bT=0, rW=0, rT=0;
-             perfRes.data.forEach((m: any) => {
-                const side = String(m.side).toLowerCase();
-                const wStatus = String(m.win_status).toLowerCase();
-                const isWin = wStatus === 'w' || wStatus === 'win';
-                if (side.includes('blue') || side === '100') { bT++; if(isWin) bW++; }
-                else if (side.includes('red') || side === '200') { rT++; if(isWin) rW++; }
-             });
-             const bWR = bT > 0 ? Math.round((bW/bT)*100) : 0;
-             const rWR = rT > 0 ? Math.round((rW/rT)*100) : 0;
-             kpis.push({ type: 'wr', blue: bWR, red: rWR });
-             
-             const totalLane = perfRes.data.reduce((acc: number, curr: any) => acc + (Number(curr.avg_lane)||0), 0);
-             const avgLane = totalLane / perfRes.data.length;
-             kpis.push({ type: avgLane >= 50 ? 'early' : 'scaling', text: avgLane >= 50 ? `Early Game Forte (Lane Score: ${Math.round(avgLane)})` : `Estilo Scaling (Lane Score: ${Math.round(avgLane)})` });
-         }
-         
-         if (hubRosterRes && hubRosterRes.data && hubRosterRes.data.length > 0) {
-             const carry = [...hubRosterRes.data].sort((a: any, b: any) => (Number(b.median_impact) || 0) - (Number(a.median_impact) || 0))[0];
-             if (carry) kpis.push({ type: 'pressure', text: `Foco de Pressão: Anular ${String(carry.primary_role).toUpperCase()} (${carry.nickname})`, player: carry });
-         }
-
-         if (objRes && objRes.data && objRes.data.length > 0) {
-             const firstDrake = objRes.data.find((o:any) => o.objective_type === 'DRAGON' && o.avg_minute > 4 && o.avg_minute < 10);
-             const firstGrubs = objRes.data.find((o:any) => o.objective_type === 'HORDE' || o.objective_type === 'GRUBS');
-             if (firstDrake || firstGrubs) kpis.push({ type: 'macro', drakeTime: firstDrake ? Number(firstDrake.avg_minute).toFixed(1) : '-', grubsTime: firstGrubs ? Number(firstGrubs.avg_minute).toFixed(1) : '-' });
-         }
-
-         if (kpis.length === 0) kpis.push({ type: 'empty', text: 'Aguardando coleta de dados.' });
-
-         setNextTargetIntel({ team: nextOp, topPicks, topBans, winConditions: kpis, date: targetMission.mission_date as any });
-      } catch (error) {
-         console.error("Erro ao buscar Target Intel", error);
-      }
-    }
-    fetchTargetIntelData();
-  }, [missionsRaw]);
+  
+  
 
   // --- 6. HANDLERS DOS MODAIS E AÇÕES GLOBAIS ---
 

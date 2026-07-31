@@ -2,7 +2,6 @@
 
 import { Target, Swords, Zap, Flame, Hourglass, Crosshair, Shield } from 'lucide-react';
 
-// --- FUNÇÕES UTILITÁRIAS EMBUTIDAS ---
 const getChampImage = (champName: string) => {
   if (!champName) return '';
   let name = String(champName).trim().replace(/['\s.]/g, '');
@@ -30,14 +29,13 @@ function getChampionCenteredUrl(championName: string | null) {
 export default function TargetIntel({ nextTargetIntel, currentTargetH2H, onOpenTargetDrafts, teamsList }: any) {
   if (!nextTargetIntel) return null;
 
-  // A função agora acessa o 'teamsList' que vem via Props perfeitamente!
   const getTeamLogo = (acronym: string) => {
     const t = teamsList?.find((t: any) => String(t.acronym || '').toUpperCase() === String(acronym || '').toUpperCase());
     return t?.logo_url || null;
   };
 
   return (
-    <div className="bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative overflow-hidden hover-lift flex flex-col h-[450px] group">
+    <div className="bg-[#121214] border border-zinc-800/80 rounded-[24px] p-6 shadow-xl relative overflow-hidden hover-lift flex flex-col h-full group">
       <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 rounded-full blur-3xl pointer-events-none"></div>
       
       <div className="flex justify-between items-start mb-4 border-b border-zinc-800/60 pb-4 shrink-0 z-10">
@@ -126,7 +124,7 @@ export default function TargetIntel({ nextTargetIntel, currentTargetH2H, onOpenT
                             <>
                               <div className="flex items-center gap-3 mb-2.5 relative group/carry cursor-help">
                                   <div className="relative shrink-0">
-                                    <img src={p.photo_url || `https://ui-avatars.com/api/?name=${p.nickname}&background=18181b&color=ef4444`} className="w-10 h-10 rounded-full border-2 border-red-500/50 object-cover shadow-md group-hover/carry:border-red-400 transition-colors" alt={p.nickname} />
+                                    <img src={p.photo_url || `https://ui-avatars.com/api/?name=${p.nickname}&background=18181b&color=ef4444&bold=true&font-size=0.33`} className="w-10 h-10 rounded-full border-2 border-red-500/50 object-cover shadow-md group-hover/carry:border-red-400 transition-colors" alt={p.nickname} />
                                     <div className="absolute -bottom-1 -right-1 bg-red-600 rounded-full p-0.5 shadow-sm"><Crosshair size={10} className="text-white"/></div>
                                   </div>
                                   <div className="flex flex-col flex-1 min-w-0">
@@ -160,13 +158,12 @@ export default function TargetIntel({ nextTargetIntel, currentTargetH2H, onOpenT
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0 mt-3 relative z-10">
-              {/* PRIORITY PICKS - BENTO BANNERS */}
-              <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0 mt-3 relative z-10 flex-1 min-h-0">
+              <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner h-full overflow-y-auto custom-scrollbar">
                 <p className="text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] mb-1 pl-1 flex items-center gap-1.5"><Target size={10}/> PRIORITY PICKS</p>
                 <div className="flex flex-col gap-2">
                   {nextTargetIntel.topPicks?.length > 0 ? nextTargetIntel.topPicks.map((champ: any, i: number) => (
-                      <div key={i} className="group relative h-[46px] rounded-lg border border-blue-900/30 bg-blue-900/10 overflow-hidden flex items-center shadow-sm hover:border-blue-500/50 transition-all cursor-default">
+                      <div key={i} className="group relative h-[46px] rounded-lg border border-blue-900/30 bg-blue-900/10 overflow-hidden flex items-center shadow-sm hover:border-blue-500/50 transition-all cursor-default shrink-0">
                         <div className="absolute inset-0 w-full h-full">
                             <img src={getChampionCenteredUrl(champ.name)} className="w-full h-full object-cover object-[center_20%] opacity-50 transition-transform duration-500 group-hover:scale-110" alt="" />
                         </div>
@@ -194,12 +191,11 @@ export default function TargetIntel({ nextTargetIntel, currentTargetH2H, onOpenT
                 </div>
               </div>
 
-              {/* MUST BANS - BENTO BANNERS */}
-              <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner">
+              <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col gap-2 shadow-inner h-full overflow-y-auto custom-scrollbar">
                 <p className="text-[8px] font-black text-red-400 uppercase tracking-[0.2em] mb-1 pl-1 flex items-center gap-1.5"><Shield size={10}/> MUST BANS</p>
                 <div className="flex flex-col gap-2">
                   {nextTargetIntel.topBans?.length > 0 ? nextTargetIntel.topBans.map((champ: any, i: number) => (
-                      <div key={i} className="group relative h-[46px] rounded-lg border border-red-900/30 bg-red-900/10 overflow-hidden flex items-center shadow-sm hover:border-red-500/50 transition-all cursor-default">
+                      <div key={i} className="group relative h-[46px] rounded-lg border border-red-900/30 bg-red-900/10 overflow-hidden flex items-center shadow-sm hover:border-red-500/50 transition-all cursor-default shrink-0">
                         <div className="absolute inset-0 w-full h-full">
                             <img src={getChampionCenteredUrl(champ.name)} className="w-full h-full object-cover object-[center_20%] opacity-30 grayscale transition-all duration-500 group-hover:scale-110 group-hover:grayscale-0" alt="" />
                         </div>
