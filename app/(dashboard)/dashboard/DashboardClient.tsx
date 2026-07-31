@@ -761,7 +761,9 @@ export default function DashboardClient(props: DashboardClientProps) {
         <div className="lg:col-span-5">
            <AgendaCalendar 
              isStaff={isStaff} 
-             calendarGrid={calendarGrid} 
+             calendarGrid={calendarGrid}
+             currentDate={currentDate}         // <-- ADICIONE ESTA LINHA
+             setCurrentDate={setCurrentDate}   // <-- ADICIONE ESTA LINHA
              onDayClick={handleDayClick}
              onEditEvent={handleEditCalendarEvent}
              onDeleteEvent={handleDeleteCalendarEvent}

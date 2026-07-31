@@ -1,10 +1,19 @@
-import { useState } from 'react';
 import { CalendarIcon, ChevronLeft, ChevronRight, Edit2, Trash2, Shield } from 'lucide-react';
 
-export default function AgendaCalendar({ calendarGrid, isStaff, onDayClick, onEditEvent, onDeleteEvent }: any) {
-  const [currentDate, setCurrentDate] = useState(new Date());
+// 1. Adicionamos currentDate e setCurrentDate nas props
+export default function AgendaCalendar({ 
+  calendarGrid, 
+  isStaff, 
+  onDayClick, 
+  onEditEvent, 
+  onDeleteEvent,
+  currentDate,    // NOVO
+  setCurrentDate  // NOVO
+}: any) {
+  
+  // 2. REMOVEMOS a linha abaixo, pois agora vem do pai!
+  // const [currentDate, setCurrentDate] = useState(new Date());
 
-  // Sub-componente interno restaurado
   const CalendarEventItem = ({ ev, isStaff, onEdit, onDelete }: any) => {
     const isScrim = ev.type === 'SCRIM';
     const isTryout = ev.type === 'TRYOUT';
