@@ -70,7 +70,7 @@ export default function MatchupAnalytics({ opponentStatsData, championshipStatsD
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch mt-6">
-      <div className="lg:col-span-8 bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 md:p-8 shadow-2xl relative flex flex-col h-[400px] overflow-hidden group hover-lift">
+      <div className="lg:col-span-8 bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 md:p-8 shadow-2xl relative flex flex-col min-h-[400px] overflow-hidden group hover-lift">
           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
           <div className="absolute top-0 left-0 w-full h-1 bg-amber-500 opacity-10 group-hover:opacity-100 transition-all duration-500"></div>
           
@@ -149,7 +149,7 @@ export default function MatchupAnalytics({ opponentStatsData, championshipStatsD
           </div>
       </div>
 
-      <div className="lg:col-span-4 bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 shadow-xl relative flex flex-col h-[400px] hover-lift">
+      <div className="lg:col-span-4 bg-[#121214] border border-zinc-800/80 rounded-[32px] p-6 shadow-xl relative flex flex-col min-h-[400px] hover-lift">
           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none [mask-image:linear-gradient(to_bottom,white,transparent_80%)]" />
           <div className="flex items-center justify-between mb-2 border-b border-zinc-800/60 pb-3 shrink-0 z-10">
             <div>
@@ -180,27 +180,23 @@ export default function MatchupAnalytics({ opponentStatsData, championshipStatsD
                   </div>
                 </div>
 
-                <div className="flex-1 w-full overflow-y-auto custom-scrollbar mt-4 pr-2 pb-2 flex flex-col gap-3 relative z-0">
+                {/* NOVA LEGENDA EM FORMATO DE TAGS SEM SCROLLBAR */}
+                <div className="w-full mt-6 flex flex-wrap justify-center content-start gap-2.5 relative z-10 pb-2">
                   {championshipStatsData.map((entry: any, index: number) => {
                       const total = championshipStatsData.reduce((acc: number, curr: any) => acc + curr.value, 0);
                       const pct = total > 0 ? Math.round((entry.value / total) * 100) : 0;
                       const color = CHART_COLORS[index % CHART_COLORS.length];
                       
                       return (
-                        <div key={index} className="relative flex items-center justify-between bg-zinc-900/40 border border-zinc-800/50 py-3 px-4 rounded-xl hover:bg-zinc-800/80 transition-all duration-300 group cursor-default hover:scale-[1.02] shadow-sm shrink-0">
-                           <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
-                               <div className="h-full opacity-[0.08] transition-all duration-1000 group-hover:opacity-[0.15]" style={{ width: `${pct}%`, backgroundColor: color }}></div>
-                           </div>
-                            <div className="flex items-center gap-3 min-w-0 relative z-10">
-                              <div className="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-[#121214] group-hover:ring-zinc-800 transition-all" style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}80` }}></div>
-                              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest truncate group-hover:text-white transition-colors">{entry.name}</span>
-                            </div>
-                            <div className="flex flex-col items-end shrink-0 pl-3 relative z-10">
-                              <div className="flex items-center gap-1.5 mb-1">
-                                 <span className="text-[13px] font-black text-white drop-shadow-sm">{entry.value}</span>
-                                 <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">JGs</span>
-                              </div>
-                              <span className="text-[9px] font-black tracking-widest drop-shadow-md" style={{ color: color }}>{pct}% SHARE</span>
+                        <div key={index} className="flex items-center gap-2 bg-zinc-900/60 border border-zinc-800 hover:bg-zinc-800 hover:border-zinc-600 transition-all duration-300 px-3 py-1.5 rounded-xl cursor-default group shadow-sm hover:-translate-y-0.5">
+                            <div className="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-zinc-950 group-hover:ring-zinc-900 transition-all" style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}80` }}></div>
+                            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest group-hover:text-white transition-colors">{entry.name}</span>
+                            
+                            <div className="w-px h-3 bg-zinc-800 group-hover:bg-zinc-700 transition-colors mx-0.5"></div>
+                            
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] font-black drop-shadow-sm" style={{ color: color }}>{pct}%</span>
+                              <span className="text-[9px] font-bold text-zinc-600 group-hover:text-zinc-400 transition-colors">({entry.value})</span>
                             </div>
                         </div>
                       )

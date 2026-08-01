@@ -10,6 +10,34 @@ const formatDate = (dateString: string) => {
   return p.length >= 3 ? `${p[2]}/${p[1]}` : dateString; 
 };
 
+// 1. TOOLTIP CUSTOMIZADO (Visual HUD)
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-zinc-950/95 border border-zinc-800 p-3.5 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.8)] backdrop-blur-md">
+        <p className="text-zinc-500 font-black text-[10px] mb-2.5 border-b border-zinc-800/80 pb-1.5 uppercase tracking-[0.2em]">
+          DATA: <span className="text-white">{formatDate(label)}</span>
+        </p>
+        <div className="space-y-2">
+          {payload.map((entry: any, index: number) => (
+            <div key={index} className="flex items-center justify-between gap-8">
+              <div className="flex items-center gap-2.5">
+                <div className="w-2 h-2 rounded-full shadow-sm" style={{ backgroundColor: entry.color, boxShadow: `0 0 10px ${entry.color}` }}></div>
+                <span className="text-[9px] text-zinc-300 font-bold uppercase tracking-widest">{entry.name}</span>
+              </div>
+              <span className="text-[12px] font-black drop-shadow-md" style={{ color: entry.color }}>
+                {entry.value !== null && entry.value !== undefined ? entry.value : '--'}
+                {entry.name.includes('%') && entry.value !== null ? '%' : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function SquadReadiness({ teamWellness, isStaff, currentUser, onOpenDailySync, filteredMatches, playerStats, filterStartDate, filterEndDate }: any) {
   const [expandedWellnessId, setExpandedWellnessId] = useState<string | null>(null);
   const [expandedChartMode, setExpandedChartMode] = useState<'OVERVIEW' | 'BIO' | 'TACTICAL' | 'CORRELATION'>('OVERVIEW');
@@ -21,8 +49,9 @@ export default function SquadReadiness({ teamWellness, isStaff, currentUser, onO
   }, [teamWellness, expandedWellnessId]);
 
   const wellnessChartData = useMemo(() => {
-    if (!expandedPlayer || !expandedPlayer.history) return [];
+    if (!expandedPlayer) return [];
     
+    // Mapeamento exato do seu código (Funciona perfeitamente para o seu backend)
     const matchDates: Record<string, string> = {};
     filteredMatches.forEach((m: any) => {
       if (m.game_start_time) {
@@ -39,7 +68,6 @@ export default function SquadReadiness({ teamWellness, isStaff, currentUser, onO
 
     const statsByDate: Record<string, {l:number[], i:number[], c:number[], v:number[], o:number[]}> = {};
     
-    // Processamento dos dados que agora vêm do bff_player_matches!
     playerStats.forEach((s: any) => {
       if (String(s.puuid).toLowerCase() === String(expandedPlayer.puuid).toLowerCase() && matchDates[String(s.match_id)]) {
         const dateStr = matchDates[String(s.match_id)];
@@ -47,7 +75,7 @@ export default function SquadReadiness({ teamWellness, isStaff, currentUser, onO
         const i = Number(s.impact_rating)||0; 
         const c = Number(s.conversion_rating)||0; 
         const v = Number(s.vision_rating)||0; 
-        const o = Number(s.perf_score) || ((l+i+c+v)/4); // Utiliza o Score do banco ou calcula a média segura
+        const o = Number(s.perf_score) || ((l+i+c+v)/4); 
         
         if (!statsByDate[dateStr]) statsByDate[dateStr] = {l:[], i:[], c:[], v:[], o:[]};
         statsByDate[dateStr].l.push(l); statsByDate[dateStr].i.push(i); statsByDate[dateStr].c.push(c); statsByDate[dateStr].v.push(v); statsByDate[dateStr].o.push(o);
@@ -56,20 +84,38 @@ export default function SquadReadiness({ teamWellness, isStaff, currentUser, onO
 
     const avg = (arr: number[]) => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
 
-    const filteredHistory = expandedPlayer.history.filter((record: any) => {
-        if (filterStartDate && record.record_date < filterStartDate) return false;
-        if (filterEndDate && record.record_date > filterEndDate) return false;
-        return true;
+    // 2. A CORREÇÃO: Junta os dias que ele jogou COM os dias que ele preencheu o form
+    const allDates = new Set<string>();
+    
+    const safeHistory = expandedPlayer.history || [];
+    safeHistory.forEach((r: any) => {
+        if (filterStartDate && r.record_date < filterStartDate) return;
+        if (filterEndDate && r.record_date > filterEndDate) return;
+        allDates.add(r.record_date);
+    });
+    
+    Object.keys(statsByDate).forEach(dateStr => {
+        if (filterStartDate && dateStr < filterStartDate) return;
+        if (filterEndDate && dateStr > filterEndDate) return;
+        allDates.add(dateStr);
     });
 
-    return [...filteredHistory].reverse().map((record: any) => ({
-      ...record,
-      perf_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].o) || 0) : null,
-      lane_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].l) || 0) : null,
-      impact_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].i) || 0) : null,
-      conv_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].c) || 0) : null,
-      vision_score: statsByDate[record.record_date] ? Math.round(avg(statsByDate[record.record_date].v) || 0) : null,
-    }));
+    // Ordena as datas do passado para o presente para o gráfico não ficar bagunçado
+    const sortedDates = Array.from(allDates).sort();
+
+    return sortedDates.map(dateStr => {
+      const record = safeHistory.find((r: any) => r.record_date === dateStr) || {};
+      
+      return {
+        ...record,
+        record_date: dateStr, // Garante que o dia sempre existe no eixo X
+        perf_score: statsByDate[dateStr] ? Math.round(avg(statsByDate[dateStr].o) || 0) : null,
+        lane_score: statsByDate[dateStr] ? Math.round(avg(statsByDate[dateStr].l) || 0) : null,
+        impact_score: statsByDate[dateStr] ? Math.round(avg(statsByDate[dateStr].i) || 0) : null,
+        conv_score: statsByDate[dateStr] ? Math.round(avg(statsByDate[dateStr].c) || 0) : null,
+        vision_score: statsByDate[dateStr] ? Math.round(avg(statsByDate[dateStr].v) || 0) : null,
+      };
+    });
   }, [expandedPlayer, filteredMatches, playerStats, filterStartDate, filterEndDate]);
 
   const getBioName = (key: string) => { if (key === 'sleep_score') return 'Qualidade do Sono'; if (key === 'mental_score') return 'Estado Mental'; if (key === 'physical_score') return 'Estado Físico'; return 'Readiness Geral (%)'; };
@@ -175,9 +221,13 @@ export default function SquadReadiness({ teamWellness, isStaff, currentUser, onO
                   <LineChart data={wellnessChartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} opacity={0.5} />
                     <XAxis dataKey="record_date" tickFormatter={formatDate} tick={{ fill: '#71717a', fontSize: 9, fontWeight: 'bold' }} axisLine={false} tickLine={false} dy={10} />
-                    <Tooltip cursor={{ stroke: '#27272a', strokeWidth: 2, strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: 'rgba(24,24,27,0.95)', backdropFilter: 'blur(8px)', borderColor: '#27272a', fontSize: '9px', borderRadius: '8px', color: '#fff', fontWeight: 'bold', padding: '8px' }} />
+                    
+                    {/* 3. APLICAÇÃO DO TOOLTIP CUSTOMIZADO AQUI */}
+                    <Tooltip cursor={{ stroke: '#27272a', strokeWidth: 2, strokeDasharray: '3 3' }} content={<CustomTooltip />} />
+                    
                     <Legend wrapperStyle={{ fontSize: '8px', fontWeight: 'bold', paddingTop: '10px' }} iconType="circle" />
                     
+                    {/* TODAS AS LINHAS AGORA TÊM connectNulls PARA NÃO SUMIR QUANDO HOUVER BURACO NOS DADOS */}
                     {expandedChartMode === 'OVERVIEW' && (
                         <>
                           <YAxis yAxisId="left" hide domain={[0, 100]} />

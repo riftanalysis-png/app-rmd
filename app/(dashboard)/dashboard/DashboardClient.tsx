@@ -14,8 +14,6 @@ import MatchupAnalytics from './components/MatchupAnalytics';
 import TacticalMetrics from './components/TacticalMetrics';
 import AdvancedLogs from './components/AdvancedLogs';
 
-
-
 // --- FUNÇÕES UTILITÁRIAS GLOBAIS ---
 function getSafeTimestamp(dateString: any) {
   if (!dateString) return 0;
@@ -27,16 +25,16 @@ function getCurrentSplit() {
   const month = new Date().getMonth() + 1;
   const year = new Date().getFullYear();
   if (month >= 1 && month <= 5) return { id: `SPLIT 1 ${year}`, start: `${year}-01-01`, end: `${year}-05-31` };
-  if (month >= 6 && month <= 11) return { id: `SPLIT 2 ${year}`, start: `${year}-06-01`, end: `${year}-11-30` };
+  // Ajuste fino: cobrindo de Junho a Novembro para não haver "buracos" no calendário
+  if (month >= 6 && month <= 11) return { id: `SPLIT 2 ${year}`, start: `${year}-07-08`, end: `${year}-11-30` };
   return { id: `OFF-SEASON ${year}`, start: `${year}-12-01`, end: `${year}-12-31` };
 }
 
-// NOVO: Função infalível para conversão pro Horário de Brasília
+// Função infalível para conversão pro Horário de Brasília
 function getBrasiliaTime(dateString: any) {
   if (!dateString) return null;
   
   let safeString = String(dateString).replace(' ', 'T');
-  // Se a string vier sem timezone info, garantimos que ela seja lida como UTC
   if (!safeString.includes('Z') && !safeString.includes('+') && !safeString.includes('-')) {
       safeString += 'Z'; 
   }
@@ -44,7 +42,6 @@ function getBrasiliaTime(dateString: any) {
   const d = new Date(safeString);
   if (isNaN(d.getTime())) return null;
 
-  // Converte para Brasília independente de onde o usuário esteja acessando
   const formatter = new Intl.DateTimeFormat('pt-BR', {
       timeZone: 'America/Sao_Paulo',
       year: 'numeric', month: '2-digit', day: '2-digit',
@@ -89,14 +86,13 @@ export default function DashboardClient(props: DashboardClientProps) {
   const [selectedPeriod, setSelectedPeriod] = useState(currentSplitObj.id);
   const [filterStartDate, setFilterStartDate] = useState(currentSplitObj.start);
   const [filterEndDate, setFilterEndDate] = useState(currentSplitObj.end);
-  
   const [filterPatch, setFilterPatch] = useState('');
   
   const splitOptions = useMemo(() => {
     const yr = new Date().getFullYear();
     return [
       { label: `SPLIT 1 ${yr}`, value: `SPLIT 1 ${yr}`, start: `${yr}-01-01`, end: `${yr}-05-31` },
-      { label: `SPLIT 2 ${yr}`, value: `SPLIT 2 ${yr}`, start: `${yr}-06-01`, end: `${yr}-11-30` },
+      { label: `SPLIT 2 ${yr}`, value: `SPLIT 2 ${yr}`, start: `${yr}-07-08`, end: `${yr}-11-30` },
       { label: `ANO ${yr}`, value: `ANO ${yr}`, start: `${yr}-01-01`, end: `${yr}-12-31` },
       { label: 'TODO O HISTÓRICO', value: 'ALL', start: '', end: '' },
       { label: 'CUSTOMIZADO', value: 'CUSTOM', start: filterStartDate, end: filterEndDate }
@@ -131,7 +127,7 @@ export default function DashboardClient(props: DashboardClientProps) {
 
   // --- O GRANDE FILTRO DA EQUIPE ---
   const myTeamMatches = useMemo(() => {
-    return props.rawMatches.filter((m: any) => {
+    return (props.rawMatches || []).filter((m: any) => {
       const b = String(m.blue_team_tag || '').toUpperCase();
       const r = String(m.red_team_tag || '').toUpperCase();
       return b.includes(myTeamTag) || r.includes(myTeamTag);
@@ -167,31 +163,214 @@ export default function DashboardClient(props: DashboardClientProps) {
   // Recupera as estatísticas vitais do Hub
   useEffect(() => {
     async function fetchMissingStats() {
-         const activeMatchIds = myTeamMatches.map((m: any) => String(m.match_id || m.id)).slice(0, 200);
+         const activeMatchIds = [...myTeamMatches].reverse().map((m: any) => String(m.match_id || m.id)).slice(0, 200);
+         
          if (activeMatchIds.length > 0) {
-             // 1. Busca os stats do time (Radar, Snowball, etc)
              const { data: teamData } = await supabase.from('bff_dashboard_team_stats')
                  .select('*')
                  .in('match_id', activeMatchIds);
              if (teamData) setTeamStatsRaw(teamData);
 
-             // 2. Busca os stats individuais (Para o Gráfico de Evolução do Squad Readiness)
-             const { data: playerData } = await supabase.from('bff_player_matches')
-                 .select('match_id, puuid, lane_rating, impact_rating, conversion_rating, vision_rating, perf_score')
+             // CORREÇÃO CRÍTICA: A coluna no banco é "champion" e não "champion_name".
+             // Sem isso o supabase negava o envio dos dados!
+             const { data: playerData, error } = await supabase.from('bff_player_matches')
+                 .select('match_id, puuid, lane_rating, impact_rating, conversion_rating, vision_rating, perf_score, champion')
                  .in('match_id', activeMatchIds);
+                 
+             if (error) console.error("Erro no Supabase (Player Stats):", error);
              if (playerData) setPlayerStatsRaw(playerData);
          }
     }
     if (myTeamMatches.length > 0) fetchMissingStats();
   }, [myTeamMatches]);
 
-  // --- 1. LÓGICA DE MATCHUPS ---
+  // --- LÓGICA DA AGENDA ---
+  const groupedSeries = useMemo(() => {
+    const groups: { [key: string]: any } = {};
+    calendarMatches.forEach(m => {
+      const isScrim = String(m.game_type || '').toUpperCase().includes('SCRIM');
+      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+      const opp = weAreBlue ? m.red_team_tag : m.blue_team_tag;
+      
+      let dateRaw = 'unknown-date'; let timeRaw = '00:00';
+      if (m.game_start_time) {
+          const brt = getBrasiliaTime(m.game_start_time);
+          if (brt) {
+              dateRaw = brt.dateRaw;
+              timeRaw = brt.timeRaw;
+              if (isScrim && parseInt(brt.timeRaw.substring(0, 2)) < 5) {
+                  const adjustDate = new Date(`${dateRaw}T12:00:00`);
+                  adjustDate.setDate(adjustDate.getDate() - 1);
+                  dateRaw = adjustDate.toISOString().split('T')[0];
+              }
+          }
+      }
+      
+      let sId = isScrim ? `SCRIM_${dateRaw}_${opp}` : `OFICIAL_${dateRaw}_${opp}`;
+      if (!groups[sId]) groups[sId] = { id: sId, isScrim: isScrim, calendarDate: dateRaw, time: timeRaw, opp: opp || 'UNKNOWN', ourWins: 0, theirWins: 0, games: [] };
+      groups[sId].games.push(m);
+      
+      const isOurWin = (weAreBlue && String(m.winner_side).toLowerCase() === 'blue') || (!weAreBlue && String(m.winner_side).toLowerCase() === 'red');
+      if (isOurWin) groups[sId].ourWins++; else groups[sId].theirWins++;
+    });
+    return Object.values(groups);
+  }, [calendarMatches, myTeamTag]);
+
+  const getTeamLogo = (acronym: string) => { 
+      const t = (props.teams || []).find((t: any) => String(t.acronym || '').toUpperCase() === String(acronym || '').toUpperCase()); 
+      return t?.logo_url || null; 
+  };
+
+  const calendarGrid = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    
+    const grid = [];
+    for(let i = firstDayIndex - 1; i >= 0; i--) { 
+        grid.push({ day: daysInPrevMonth - i, isGhost: true, events: [] }); 
+    }
+    
+    for(let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+        
+        const manualPastEvents = scrimReportsManual.filter(s => s.scrim_date === dateStr).map(s => {
+            const autoMatch = groupedSeries.find((g: any) => g.calendarDate === dateStr && String(g.opp).toUpperCase() === String(s.opponent_acronym).toUpperCase());
+            const computedType = s.match_type ? s.match_type : (autoMatch && !autoMatch.isScrim ? 'OFFICIAL' : 'SCRIM');
+            
+            return { 
+                id: s.id, 
+                time: autoMatch ? autoMatch.time : 'MANUAL', 
+                opp: s.opponent_acronym, 
+                type: computedType, 
+                resultText: `${s.score} ${s.result}`, 
+                isWin: s.result === 'W', 
+                isPast: true, 
+                isAuto: false, 
+                logo: getTeamLogo(s.opponent_acronym), 
+                rawScrim: s 
+            };
+        });
+
+        const pastEvents = groupedSeries.filter((g: any) => g.calendarDate === dateStr).map((g: any) => {
+            const isOverridden = scrimReportsManual.some(s => s.scrim_date === dateStr && String(s.opponent_acronym).toUpperCase() === String(g.opp).toUpperCase());
+            if (isOverridden) return null; 
+            return { 
+                id: g.id, 
+                time: g.time, 
+                opp: g.opp, 
+                type: g.isScrim ? 'SCRIM' : 'OFFICIAL', 
+                resultText: `${g.ourWins} - ${g.theirWins} ${g.ourWins > g.theirWins ? 'W' : g.theirWins > g.ourWins ? 'L' : 'D'}`, 
+                isWin: g.ourWins > g.theirWins, 
+                isPast: true, 
+                isAuto: true, 
+                logo: getTeamLogo(String(g.opp)), 
+                games: g.games 
+            };
+        }).filter(Boolean); 
+
+        const allPastEvents = [...pastEvents, ...manualPastEvents];
+        const opponentsPlayedToday = allPastEvents.map((ev: any) => String(ev.opp).toUpperCase().trim());
+
+        const futureEvents = missionsRaw.filter(m => m.mission_date === dateStr).map(m => {
+            const info = m.status ? m.status.split('|') : [];
+            return { 
+                id: m.id, 
+                time: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', 
+                opp: m.opponent_acronym, 
+                type: m.mission_type, 
+                mode: info[1] ? info[1].trim() : 'TBD', 
+                isPast: false, 
+                isAuto: false, 
+                rawMission: m, 
+                logo: getTeamLogo(String(m.opponent_acronym)) 
+            };
+        }).filter(mission => !opponentsPlayedToday.some(playedOpp => playedOpp.includes(String(mission.opp).toUpperCase().trim()) || String(mission.opp).toUpperCase().trim().includes(playedOpp)));
+
+        grid.push({ 
+            day: i, 
+            dateStr, 
+            isToday: dateStr === new Date().toISOString().split('T')[0], 
+            events: [...allPastEvents, ...futureEvents].sort((a: any, b: any) => a.time.localeCompare(b.time)), 
+            isGhost: false 
+        });
+    }
+    
+    let nextMonthDay = 1;
+    while(grid.length % 7 !== 0) { 
+        grid.push({ day: nextMonthDay++, isGhost: true, events: [] }); 
+    }
+    
+    return grid;
+  }, [currentDate, groupedSeries, missionsRaw, scrimReportsManual, props.teams]);
+
+  // --- ADVANCED SCRIMS (O Motor dos Logs) ---
+  const advancedScrims = useMemo(() => {
+    const autoScrimBlocks = new Map();
+    filteredMatches.filter(m => String(m.game_type || '').toUpperCase().includes('SCRIM')).forEach(m => {
+       let dateRaw = 'unknown';
+       if (m.game_start_time) {
+           const brt = getBrasiliaTime(m.game_start_time);
+           if (brt) {
+               dateRaw = brt.dateRaw;
+               if (String(m.game_type || '').toUpperCase().includes('SCRIM') && parseInt(brt.timeRaw.substring(0, 2)) < 5) {
+                   const adjustDate = new Date(`${dateRaw}T12:00:00`);
+                   adjustDate.setDate(adjustDate.getDate() - 1);
+                   dateRaw = adjustDate.toISOString().split('T')[0];
+               }
+           }
+       }
+
+       const opp = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag) ? m.red_team_tag : m.blue_team_tag;
+       const key = `${dateRaw}_${opp}`;
+       
+       if (!autoScrimBlocks.has(key)) autoScrimBlocks.set(key, { date: dateRaw, opp, wins: 0, losses: 0, games: [] });
+       const block = autoScrimBlocks.get(key); block.games.push(m);
+       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
+       const rawWinner = String(m.winner_side || '').toLowerCase();
+       if ((weAreBlue && (rawWinner === 'blue' || rawWinner === '100')) || (!weAreBlue && (rawWinner === 'red' || rawWinner === '200'))) block.wins++; else block.losses++;
+    });
+
+    const finalList: any[] = [];
+    
+    autoScrimBlocks.forEach((block, key) => {
+       const manual = scrimReportsManual.find(sm => sm.scrim_date === block.date && sm.opponent_acronym === block.opp) || {};
+       finalList.push({ id: manual.id || `auto_${key}`, date: block.date, opponent: block.opp, result: block.wins > block.losses ? 'W' : block.losses > block.wins ? 'L' : 'D', score: manual.score || `${block.wins} - ${block.losses}`, mode: manual.mode || `MD${block.games.length}`, comp: manual.comp_tested || 'AUTOMATIC LOG', difficulty: manual.difficulty || 'CONTROLADO', punctuality: manual.punctuality || 'PONTUAIS', remakes: manual.remakes || 0, isManual: !!manual.id, isMission: false, match_type: manual.match_type || 'SCRIM' });
+    });
+    
+    scrimReportsManual.forEach(sm => { 
+        if (!finalList.find(f => f.id === sm.id)) {
+            if (filterStartDate && sm.scrim_date < filterStartDate) return;
+            if (filterEndDate && sm.scrim_date > filterEndDate) return;
+            finalList.push({ id: sm.id, date: sm.scrim_date, opponent: sm.opponent_acronym, result: sm.result, score: sm.score, mode: sm.mode, comp: sm.comp_tested, difficulty: sm.difficulty || 'CONTROLADO', punctuality: sm.punctuality || 'PONTUAIS', remakes: sm.remakes || 0, isManual: true, isMission: false, match_type: sm.match_type || 'SCRIM' }); 
+        }
+    });
+
+    missionsRaw.forEach(m => {
+        if (filterStartDate && m.mission_date < filterStartDate) return;
+        if (filterEndDate && m.mission_date > filterEndDate) return;
+
+        const info = m.status ? m.status.split('|') : [];
+        const mode = info.length >= 2 ? info[1].trim() : 'TBD';
+        
+        finalList.push({ id: m.id, date: m.mission_date, opponent: m.opponent_acronym, result: 'AGEND.', score: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', mode: mode, comp: m.mission_type, difficulty: 'AGUARDANDO', punctuality: '-', remakes: 0, isManual: true, isMission: true, rawObj: m });
+    });
+
+    return finalList.sort((a,b) => getSafeTimestamp(b.date) - getSafeTimestamp(a.date));
+  }, [filteredMatches, scrimReportsManual, missionsRaw, myTeamTag, filterStartDate, filterEndDate]);
+
+  // --- LÓGICA DE MATCHUPS E CAMPEONATO ---
   const opponentStatsData = useMemo(() => {
     const stats: Record<string, any> = {};
-    filteredMatches.forEach(m => {
+
+    const officialMatches = filteredMatches.filter(m => !String(m.game_type || '').toUpperCase().includes('SCRIM'));
+    
+    officialMatches.forEach(m => {
       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
       const opp = weAreBlue ? String(m.red_team_tag) : String(m.blue_team_tag);
-      const oppKey = opp.toUpperCase() || 'UNKNOWN';
+      const oppKey = String(opp || 'UNKNOWN').toUpperCase().trim();
 
       if (!stats[oppKey]) stats[oppKey] = { opponent: oppKey, wins: 0, losses: 0, total: 0 };
       
@@ -203,10 +382,33 @@ export default function DashboardClient(props: DashboardClientProps) {
       else stats[oppKey].losses++;
     });
 
+    const validScrims = advancedScrims.filter(s => !s.isMission && s.result !== 'AGEND.');
+
+    validScrims.forEach(scrim => {
+      const oppKey = String(scrim.opponent || 'UNKNOWN').toUpperCase().trim();
+      if (!stats[oppKey]) stats[oppKey] = { opponent: oppKey, wins: 0, losses: 0, total: 0 };
+
+      let w = 0;
+      let l = 0;
+
+      if (scrim.score && String(scrim.score).includes('-')) {
+          const parts = String(scrim.score).split('-');
+          w = parseInt(parts[0].trim()) || 0;
+          l = parseInt(parts[1].trim()) || 0;
+      } else {
+          if (scrim.result === 'W') w = 1;
+          else if (scrim.result === 'L') l = 1;
+      }
+
+      stats[oppKey].wins += w;
+      stats[oppKey].losses += l;
+      stats[oppKey].total += (w + l);
+    });
+
     return Object.values(stats)
       .map((s: any) => ({ ...s, winRate: s.total > 0 ? Math.round((s.wins / s.total) * 100) : 0 }))
       .sort((a: any, b: any) => b.total - a.total);
-  }, [filteredMatches, myTeamTag]);
+  }, [filteredMatches, advancedScrims, myTeamTag]);
 
   const currentTargetH2H = useMemo(() => {
        if (nextTargetIntel.team === 'SEM ALVO') return null;
@@ -215,25 +417,114 @@ export default function DashboardClient(props: DashboardClientProps) {
 
   const championshipStatsData = useMemo(() => {
     const stats: Record<string, number> = {};
-    filteredMatches.forEach(m => {
+    
+    const addRegionCount = (oppKey: string, gamesCount: number) => {
+        const teamObj = (props.teams || []).find((t: any) => String(t.acronym).toUpperCase() === oppKey);
+        const region = teamObj ? String(teamObj.tier || teamObj.league || teamObj.region || 'OUTROS').toUpperCase() : 'OUTROS';
+        if (!stats[region]) stats[region] = 0;
+        stats[region] += gamesCount;
+    };
+
+    filteredMatches.filter(m => !String(m.game_type || '').toUpperCase().includes('SCRIM')).forEach(m => {
       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
       const opp = weAreBlue ? String(m.red_team_tag) : String(m.blue_team_tag);
-      const oppKey = opp.toUpperCase() || 'UNKNOWN';
+      addRegionCount(String(opp || 'UNKNOWN').toUpperCase().trim(), 1);
+    });
 
-      const teamObj = props.teams.find((t: any) => String(t.acronym).toUpperCase() === oppKey);
-      const region = teamObj ? String(teamObj.tier || teamObj.league || teamObj.region || 'OUTROS').toUpperCase() : 'OUTROS';
-
-      if (!stats[region]) stats[region] = 0;
-      stats[region]++;
+    advancedScrims.filter(s => !s.isMission && s.result !== 'AGEND.').forEach(scrim => {
+      let games = 1;
+      if (scrim.score && String(scrim.score).includes('-')) {
+          const parts = String(scrim.score).split('-');
+          games = (parseInt(parts[0].trim()) || 0) + (parseInt(parts[1].trim()) || 0);
+      }
+      if (games === 0) games = 1; 
+      addRegionCount(String(scrim.opponent || 'UNKNOWN').toUpperCase().trim(), games);
     });
 
     return Object.entries(stats).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [filteredMatches, myTeamTag, props.teams]);
+  }, [filteredMatches, advancedScrims, myTeamTag, props.teams]);
 
-  // --- 2. LÓGICA DA BIOMETRIA ---
+  // --- LÓGICA DO GRÁFICO DE EFICIÊNCIA ---
+  const chartIntelligence = useMemo(() => {
+      const diffOrder = ['STOMPAMOS', 'MUITO FÁCIL', 'FÁCIL', 'CONTROLADO', 'DIFÍCIL', 'MT DIFÍCIL', 'STOMPADOS'];
+      const diffCounts: Record<string, number> = {};
+      diffOrder.forEach(d => diffCounts[d] = 0);
+
+      const tierCounts: Record<string, Record<string, number>> = { 'Bad': {}, 'Average': {}, 'Good': {}, 'Excellent': {} };
+      ['Bad', 'Average', 'Good', 'Excellent'].forEach(t => { diffOrder.forEach(d => tierCounts[t][d] = 0); });
+
+      const validScrims = advancedScrims.filter(s => !s.isMission && s.result !== 'AGEND.');
+
+      validScrims.forEach((scrim) => {
+          const opponentData = (props.teams || []).find((t: any) => String(t.acronym).toUpperCase() === String(scrim.opponent).toUpperCase());
+          let rawTier = opponentData?.tier ? String(opponentData.tier).trim() : 'Average';
+          rawTier = rawTier.charAt(0).toUpperCase() + rawTier.slice(1).toLowerCase();
+          const assignedTier = ['Bad', 'Average', 'Good', 'Excellent'].includes(rawTier) ? rawTier : 'Average';
+
+          const diffArray = String(scrim.difficulty || 'CONTROLADO').split(',');
+
+          diffArray.forEach(diffItem => {
+              const cleanDiff = diffItem.trim().toUpperCase();
+              const finalDiff = diffOrder.includes(cleanDiff) ? cleanDiff : 'CONTROLADO';
+              
+              diffCounts[finalDiff]++;
+              tierCounts[assignedTier][finalDiff]++;
+          });
+      });
+
+      return { 
+        stressData: diffOrder.map(diff => ({ name: diff.replace('MUITO', 'MT').replace('STOMPAMOS', 'STOMP.').replace('STOMPADOS', 'STOMP.'), count: diffCounts[diff] })), 
+        efficiencyData: ['Bad', 'Average', 'Good', 'Excellent'].map(tier => ({ name: tier, ...tierCounts[tier] })) 
+      };
+  }, [advancedScrims, props.teams]);
+
+  // --- LÓGICA DO TOP COCKPIT PARA JOGADORES ---
+  const myPlayerStats = useMemo(() => {
+    if (isStaff) return null;
+
+    const activeMatchIds = new Set(filteredMatches.map((m: any) => String(m.match_id || m.id)));
+    const myMatchStats = playerStatsRaw.filter((s: any) => 
+      String(s.puuid) === String(props.sessionUser?.puuid) && activeMatchIds.has(String(s.match_id))
+    );
+
+    if (myMatchStats.length === 0) {
+      return { bestChamp: 'Sylas', lane: 0, impact: 0, conversion: 0, vision: 0, overall: 0 }; 
+    }
+
+    const laneSum = myMatchStats.reduce((acc, s) => acc + (Number(s.lane_rating) || 0), 0);
+    const impactSum = myMatchStats.reduce((acc, s) => acc + (Number(s.impact_rating) || 0), 0);
+    const convSum = myMatchStats.reduce((acc, s) => acc + (Number(s.conversion_rating) || 0), 0);
+    const visSum = myMatchStats.reduce((acc, s) => acc + (Number(s.vision_rating) || 0), 0);
+    
+    const avgLane = Math.round(laneSum / myMatchStats.length);
+    const avgImpact = Math.round(impactSum / myMatchStats.length);
+    const avgConv = Math.round(convSum / myMatchStats.length);
+    const avgVis = Math.round(visSum / myMatchStats.length);
+    
+    const avgOverall = Math.round((avgLane + avgImpact + avgConv + avgVis) / 4);
+
+    const champCounts: Record<string, number> = {};
+    let bestChamp = 'Sylas';
+    let maxCount = 0;
+
+    // CORREÇÃO: Usar s.champion em vez de s.champion_name
+    myMatchStats.forEach(s => {
+      if (s.champion) {
+        champCounts[s.champion] = (champCounts[s.champion] || 0) + 1;
+        if (champCounts[s.champion] > maxCount) {
+          maxCount = champCounts[s.champion];
+          bestChamp = s.champion;
+        }
+      }
+    });
+
+    return { bestChamp, lane: avgLane, impact: avgImpact, conversion: avgConv, vision: avgVis, overall: avgOverall };
+  }, [isStaff, playerStatsRaw, filteredMatches, props.sessionUser]);
+
+  // --- LÓGICA DA BIOMETRIA ---
   const teamWellnessData = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
-    return props.roster.map((p: any) => {
+    return (props.roster || []).map((p: any) => {
       const pRecs = wellnessDataRaw.filter((w: any) => String(w.puuid).toLowerCase() === String(p.puuid).toLowerCase());
       const lRec = pRecs.length > 0 ? pRecs[0] : null;
       return {
@@ -251,14 +542,16 @@ export default function DashboardClient(props: DashboardClientProps) {
     });
   }, [props.roster, wellnessDataRaw]);
 
-  // --- 3. LÓGICA DOS GRÁFICOS TÁTICOS ---
+  // --- LÓGICA DOS GRÁFICOS TÁTICOS (Snowball e Radar) ---
   const earlyGameSnowball = useMemo(() => {
     const recentMatches = [...filteredMatches].slice(0, 10).reverse();
+    
     return recentMatches.map((m, index) => {
       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
       const opp = weAreBlue ? m.red_team_tag : m.blue_team_tag;
-      const fullOpp = opp ? String(opp).toUpperCase() : 'UNKNOWN';
-      const oppKey = fullOpp.substring(0, 4);
+      const fullOpp = opp ? String(opp).toUpperCase().trim() : 'UNKNOWN';
+      
+      const oppKey = fullOpp.length > 4 ? fullOpp.substring(0, 4) : fullOpp;
 
       const tStat = teamStatsRaw.find(s => String(s.match_id) === String(m.match_id || m.id) && String(s.team_acronym).toUpperCase().includes(myTeamTag));
       const goldDiff = tStat ? (Number(tStat.gold_diff_at_12) || 0) : 0;
@@ -272,7 +565,16 @@ export default function DashboardClient(props: DashboardClientProps) {
           if (!isNaN(d.getTime())) dateFormatted = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
       }
 
-      return { uniqueKey: `eg_${index}`, match: oppKey, fullOpponent: fullOpp, date: dateFormatted, goldDiff, isWin: isOurWin };
+      const uniqueChartKey = `${fullOpp}___${index}`;
+
+      return { 
+        chartKey: uniqueChartKey, 
+        match: oppKey, 
+        fullOpponent: fullOpp, 
+        date: dateFormatted, 
+        goldDiff, 
+        isWin: isOurWin 
+      };
     });
   }, [filteredMatches, teamStatsRaw, myTeamTag]);
 
@@ -312,222 +614,10 @@ export default function DashboardClient(props: DashboardClientProps) {
     }
   }, [radarCompareMode, teamStatsRaw, filteredMatches, myTeamTag]);
 
-  // --- 4. LÓGICA DA AGENDA E LOGS ---
-  const groupedSeries = useMemo(() => {
-    const groups: { [key: string]: any } = {};
-    calendarMatches.forEach(m => {
-      const isScrim = String(m.game_type || '').toUpperCase().includes('SCRIM');
-      const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
-      const opp = weAreBlue ? m.red_team_tag : m.blue_team_tag;
-      
-      let dateRaw = 'unknown-date'; let timeRaw = '00:00';
-      if (m.game_start_time) {
-          const brt = getBrasiliaTime(m.game_start_time);
-          if (brt) {
-              dateRaw = brt.dateRaw;
-              timeRaw = brt.timeRaw;
-              
-              // HACK: Ajustar pro dia anterior se for scrim na madrugada (antes das 5h)
-              if (isScrim && parseInt(brt.timeRaw.substring(0, 2)) < 5) {
-                  const adjustDate = new Date(`${dateRaw}T12:00:00`);
-                  adjustDate.setDate(adjustDate.getDate() - 1);
-                  dateRaw = adjustDate.toISOString().split('T')[0];
-              }
-          }
-      }
-      
-      let sId = isScrim ? `SCRIM_${dateRaw}_${opp}` : `OFICIAL_${dateRaw}_${opp}`;
-      if (!groups[sId]) groups[sId] = { id: sId, isScrim: isScrim, calendarDate: dateRaw, time: timeRaw, opp: opp || 'UNKNOWN', ourWins: 0, theirWins: 0, games: [] };
-      groups[sId].games.push(m);
-      
-      const isOurWin = (weAreBlue && String(m.winner_side).toLowerCase() === 'blue') || (!weAreBlue && String(m.winner_side).toLowerCase() === 'red');
-      if (isOurWin) groups[sId].ourWins++; else groups[sId].theirWins++;
-    });
-    return Object.values(groups);
-  }, [calendarMatches, myTeamTag]);
-
-  const getTeamLogo = (acronym: string) => { 
-      const t = props.teams.find((t: any) => String(t.acronym || '').toUpperCase() === String(acronym || '').toUpperCase()); 
-      return t?.logo_url || null; 
-  };
-
-  const calendarGrid = useMemo(() => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    const firstDayIndex = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const daysInPrevMonth = new Date(year, month, 0).getDate();
-    
-    const grid = [];
-    for(let i = firstDayIndex - 1; i >= 0; i--) { 
-        grid.push({ day: daysInPrevMonth - i, isGhost: true, events: [] }); 
-    }
-    
-    for(let i = 1; i <= daysInMonth; i++) {
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-        
-        const manualPastEvents = scrimReportsManual.filter(s => s.scrim_date === dateStr).map(s => {
-            // Adicionado (g: any) para o TypeScript parar de reclamar de tipo 'unknown'
-            const autoMatch = groupedSeries.find((g: any) => g.calendarDate === dateStr && String(g.opp).toUpperCase() === String(s.opponent_acronym).toUpperCase());
-            const computedType = s.match_type ? s.match_type : (autoMatch && !autoMatch.isScrim ? 'OFFICIAL' : 'SCRIM');
-            
-            return { 
-                id: s.id, 
-                time: autoMatch ? autoMatch.time : 'MANUAL', 
-                opp: s.opponent_acronym, 
-                type: computedType, 
-                resultText: `${s.score} ${s.result}`, 
-                isWin: s.result === 'W', 
-                isPast: true, 
-                isAuto: false, 
-                logo: getTeamLogo(s.opponent_acronym), 
-                rawScrim: s 
-            };
-        });
-
-        // Adicionado (g: any) para o TypeScript
-        const pastEvents = groupedSeries.filter((g: any) => g.calendarDate === dateStr).map((g: any) => {
-            const isOverridden = scrimReportsManual.some(s => s.scrim_date === dateStr && String(s.opponent_acronym).toUpperCase() === String(g.opp).toUpperCase());
-            if (isOverridden) return null; 
-            return { 
-                id: g.id, 
-                time: g.time, 
-                opp: g.opp, 
-                type: g.isScrim ? 'SCRIM' : 'OFFICIAL', 
-                resultText: `${g.ourWins} - ${g.theirWins} ${g.ourWins > g.theirWins ? 'W' : g.theirWins > g.ourWins ? 'L' : 'D'}`, 
-                isWin: g.ourWins > g.theirWins, 
-                isPast: true, 
-                isAuto: true, 
-                logo: getTeamLogo(String(g.opp)), 
-                games: g.games 
-            };
-        }).filter(Boolean); 
-
-        const allPastEvents = [...pastEvents, ...manualPastEvents];
-        const opponentsPlayedToday = allPastEvents.map((ev: any) => String(ev.opp).toUpperCase().trim());
-
-        const futureEvents = missionsRaw.filter(m => m.mission_date === dateStr).map(m => {
-            const info = m.status ? m.status.split('|') : [];
-            return { 
-                id: m.id, 
-                time: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', 
-                opp: m.opponent_acronym, 
-                type: m.mission_type, 
-                mode: info[1] ? info[1].trim() : 'TBD', 
-                isPast: false, 
-                isAuto: false, 
-                rawMission: m, 
-                logo: getTeamLogo(String(m.opponent_acronym)) 
-            };
-        }).filter(mission => !opponentsPlayedToday.some(playedOpp => playedOpp.includes(String(mission.opp).toUpperCase().trim()) || String(mission.opp).toUpperCase().trim().includes(playedOpp)));
-
-        // Agora com o parêntese e chaves fechando corretamente!
-        grid.push({ 
-            day: i, 
-            dateStr, 
-            isToday: dateStr === new Date().toISOString().split('T')[0], 
-            events: [...allPastEvents, ...futureEvents].sort((a: any, b: any) => a.time.localeCompare(b.time)), 
-            isGhost: false 
-        });
-    }
-    
-    let nextMonthDay = 1;
-    while(grid.length % 7 !== 0) { 
-        grid.push({ day: nextMonthDay++, isGhost: true, events: [] }); 
-    }
-    
-    return grid;
-  }, [currentDate, groupedSeries, missionsRaw, scrimReportsManual, props.teams]);
-
-  const advancedScrims = useMemo(() => {
-    const autoScrimBlocks = new Map();
-    filteredMatches.filter(m => String(m.game_type || '').toUpperCase().includes('SCRIM')).forEach(m => {
-       let dateRaw = 'unknown';
-       if (m.game_start_time) {
-           const brt = getBrasiliaTime(m.game_start_time);
-           if (brt) {
-               dateRaw = brt.dateRaw;
-               if (String(m.game_type || '').toUpperCase().includes('SCRIM') && parseInt(brt.timeRaw.substring(0, 2)) < 5) {
-                   const adjustDate = new Date(`${dateRaw}T12:00:00`);
-                   adjustDate.setDate(adjustDate.getDate() - 1);
-                   dateRaw = adjustDate.toISOString().split('T')[0];
-               }
-           }
-       }
-
-       const opp = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag) ? m.red_team_tag : m.blue_team_tag;
-       const key = `${dateRaw}_${opp}`;
-       
-       if (!autoScrimBlocks.has(key)) autoScrimBlocks.set(key, { date: dateRaw, opp, wins: 0, losses: 0, games: [] });
-       const block = autoScrimBlocks.get(key); block.games.push(m);
-       const weAreBlue = String(m.blue_team_tag || '').toUpperCase().includes(myTeamTag);
-       const rawWinner = String(m.winner_side || '').toLowerCase();
-       if ((weAreBlue && (rawWinner === 'blue' || rawWinner === '100')) || (!weAreBlue && (rawWinner === 'red' || rawWinner === '200'))) block.wins++; else block.losses++;
-    });
-
-    const finalList: any[] = [];
-    
-    autoScrimBlocks.forEach((block, key) => {
-       const manual = scrimReportsManual.find(sm => sm.scrim_date === block.date && sm.opponent_acronym === block.opp) || {};
-       finalList.push({ id: manual.id || `auto_${key}`, date: block.date, opponent: block.opp, result: block.wins > block.losses ? 'W' : block.losses > block.wins ? 'L' : 'D', score: `${block.wins} - ${block.losses}`, mode: manual.mode || `MD${block.games.length}`, comp: manual.comp_tested || 'AUTOMATIC LOG', difficulty: manual.difficulty || 'CONTROLADO', punctuality: manual.punctuality || 'PONTUAIS', remakes: manual.remakes || 0, isManual: !!manual.id, isMission: false, match_type: manual.match_type || 'SCRIM' });
-    });
-    
-    scrimReportsManual.forEach(sm => { 
-        if (!finalList.find(f => f.id === sm.id)) {
-            if (filterStartDate && sm.scrim_date < filterStartDate) return;
-            if (filterEndDate && sm.scrim_date > filterEndDate) return;
-            finalList.push({ id: sm.id, date: sm.scrim_date, opponent: sm.opponent_acronym, result: sm.result, score: sm.score, mode: sm.mode, comp: sm.comp_tested, difficulty: sm.difficulty || 'CONTROLADO', punctuality: sm.punctuality || 'PONTUAIS', remakes: sm.remakes || 0, isManual: true, isMission: false, match_type: sm.match_type || 'SCRIM' }); 
-        }
-    });
-
-    missionsRaw.forEach(m => {
-        if (filterStartDate && m.mission_date < filterStartDate) return;
-        if (filterEndDate && m.mission_date > filterEndDate) return;
-
-        const info = m.status ? m.status.split('|') : [];
-        const mode = info.length >= 2 ? info[1].trim() : 'TBD';
-        
-        finalList.push({ id: m.id, date: m.mission_date, opponent: m.opponent_acronym, result: 'AGEND.', score: m.mission_time ? m.mission_time.substring(0, 5) : 'TBD', mode: mode, comp: m.mission_type, difficulty: 'AGUARDANDO', punctuality: '-', remakes: 0, isManual: true, isMission: true, rawObj: m });
-    });
-
-    return finalList.sort((a,b) => getSafeTimestamp(b.date) - getSafeTimestamp(a.date));
-  }, [filteredMatches, scrimReportsManual, missionsRaw, myTeamTag, filterStartDate, filterEndDate]);
-
-
-  const chartIntelligence = useMemo(() => {
-      const diffOrder = ['STOMPAMOS', 'MUITO FÁCIL', 'FÁCIL', 'CONTROLADO', 'DIFÍCIL', 'MT DIFÍCIL', 'STOMPADOS'];
-      const diffCounts: Record<string, number> = {};
-      diffOrder.forEach(d => diffCounts[d] = 0);
-
-      const tierCounts: Record<string, Record<string, number>> = { 'Bad': {}, 'Average': {}, 'Good': {}, 'Excellent': {} };
-      ['Bad', 'Average', 'Good', 'Excellent'].forEach(t => { diffOrder.forEach(d => tierCounts[t][d] = 0); });
-
-      const validScrims = advancedScrims.filter(s => !s.isMission && s.result !== 'AGEND.');
-
-      validScrims.forEach((scrim) => {
-          const diff = diffOrder.includes(String(scrim.difficulty || '').toUpperCase()) ? String(scrim.difficulty || '').toUpperCase() : 'CONTROLADO';
-          diffCounts[diff]++;
-          const opponentData = props.teams.find((t: any) => t.acronym === scrim.opponent);
-          let rawTier = opponentData?.tier ? String(opponentData.tier).trim() : 'Average';
-          rawTier = rawTier.charAt(0).toUpperCase() + rawTier.slice(1).toLowerCase();
-          const assignedTier = ['Bad', 'Average', 'Good', 'Excellent'].includes(rawTier) ? rawTier : 'Average';
-          tierCounts[assignedTier][diff]++;
-      });
-
-      return { 
-        stressData: diffOrder.map(diff => ({ name: diff.replace('MUITO', 'MT').replace('STOMPAMOS', 'STOMP.').replace('STOMPADOS', 'STOMP.'), count: diffCounts[diff] })), 
-        efficiencyData: ['Bad', 'Average', 'Good', 'Excellent'].map(tier => ({ name: tier, ...tierCounts[tier] })) 
-      };
-  }, [advancedScrims, props.teams]);
-
-  
-  
-
-  // --- 6. HANDLERS DOS MODAIS E AÇÕES GLOBAIS ---
-
+  // --- HANDLERS DOS MODAIS E AÇÕES GLOBAIS ---
   const groupedTeamsByRegion = useMemo(() => {
     const groups: Record<string, any[]> = {};
-    props.teams.forEach((t: any) => {
+    (props.teams || []).forEach((t: any) => {
       let region = String(t.region || t.league || 'OUTRAS REGIÕES');
       let upperRegion = region.toUpperCase().trim();
       const nameUpper = String(t.name || '').toUpperCase();
@@ -587,7 +677,7 @@ export default function DashboardClient(props: DashboardClientProps) {
          let gc = '3 JOGOS'; let dm = 'PADRÃO'; 
          if (info.length >= 3) { gc = info[1].trim(); dm = info[2].trim(); } 
          
-         const isKnownTeam = props.teams.some((t: any) => t.acronym === m.opponent_acronym);
+         const isKnownTeam = (props.teams || []).some((t: any) => t.acronym === m.opponent_acronym);
          
          setMissionForm({ 
             date: m.mission_date, 
@@ -620,7 +710,7 @@ export default function DashboardClient(props: DashboardClientProps) {
           const info = scrim.rawObj.status ? String(scrim.rawObj.status).split('|') : []; 
           let dm = 'PADRÃO'; 
           if (info.length >= 3) { dm = info[2].trim(); }
-          const isKnownTeam = props.teams.some((t: any) => t.acronym === scrim.opponent);
+          const isKnownTeam = (props.teams || []).some((t: any) => t.acronym === scrim.opponent);
           
           setScrimForm({ 
              date: scrim.rawObj.mission_date, 
@@ -762,12 +852,10 @@ export default function DashboardClient(props: DashboardClientProps) {
       } 
   };
 
-
-  // --- RENDERIZAÇÃO LIMPA E MODULAR ---
+  // --- RENDERIZAÇÃO ---
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 font-sans relative pb-20 p-4 md:p-8 space-y-8">
       
-      {/* 1. BARRA DE FILTROS TOTALMENTE MODULARIZADA */}
       <DashboardFilters 
          matchType={matchType} setMatchType={setMatchType}
          selectedPeriod={selectedPeriod} setSelectedPeriod={setSelectedPeriod}
@@ -776,40 +864,38 @@ export default function DashboardClient(props: DashboardClientProps) {
          splitOptions={splitOptions}
       />
 
-      {/* COCKPIT */}
       <TopCockpit 
          currentUser={props.sessionUser} 
          squadConfig={props.squadConfig} 
          myTeamTag={myTeamTag} 
          isStaff={isStaff} 
+         myStats={myPlayerStats} 
       />
 
-      {/* SECÇÃO 1: CALENDAR | TARGET INTEL */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         <div className="lg:col-span-5">
            <AgendaCalendar 
-         isStaff={isStaff} 
-         calendarGrid={calendarGrid} 
-         currentDate={currentDate}
-         setCurrentDate={setCurrentDate}
-         onDayClick={handleDayClick}
-         onEditEvent={handleEditCalendarEvent}
-         onDeleteEvent={handleDeleteCalendarEvent}
-         teamStatsRaw={teamStatsRaw}          // <--- NOVA LINHA
-         opponentStatsData={opponentStatsData} // <--- NOVA LINHA
-         myTeamTag={myTeamTag}                // <--- NOVA LINHA
-      />
+             isStaff={isStaff} 
+             calendarGrid={calendarGrid} 
+             currentDate={currentDate}
+             setCurrentDate={setCurrentDate}
+             onDayClick={handleDayClick}
+             onEditEvent={handleEditCalendarEvent}
+             onDeleteEvent={handleDeleteCalendarEvent}
+             teamStatsRaw={teamStatsRaw}          
+             opponentStatsData={opponentStatsData} 
+             myTeamTag={myTeamTag}                
+          />
         </div>
         <div className="lg:col-span-7">
            <TargetIntel 
              nextTargetIntel={nextTargetIntel} 
              currentTargetH2H={currentTargetH2H}
-             teamsList={props.teams} 
+             teamsList={props.teams || []} 
            />
         </div>
       </div>
 
-      {/* SECÇÃO 2: SQUAD READINESS */}
       <SquadReadiness 
          isStaff={isStaff} 
          teamWellness={teamWellnessData} 
@@ -824,14 +910,12 @@ export default function DashboardClient(props: DashboardClientProps) {
          }}
       />
 
-      {/* SECÇÃO 3: MATCHUP ANALYTICS */}
       <MatchupAnalytics 
          opponentStatsData={opponentStatsData} 
          championshipStatsData={championshipStatsData} 
-         teamsList={props.teams}
+         teamsList={props.teams || []}
       />
 
-      {/* SECÇÃO 4: TACTICAL METRICS */}
       <TacticalMetrics 
          myTeamTag={myTeamTag} 
          radarData={radarData} 
@@ -839,14 +923,13 @@ export default function DashboardClient(props: DashboardClientProps) {
          efficiencyData={chartIntelligence.efficiencyData} 
          radarCompareMode={radarCompareMode}
          setRadarCompareMode={setRadarCompareMode}
-         teamsList={props.teams}
+         teamsList={props.teams || []}
       />
 
-      {/* SECÇÃO 5: ADVANCED LOGS */}
       <AdvancedLogs 
          isStaff={isStaff} 
          advancedScrims={advancedScrims} 
-         teamsList={props.teams}
+         teamsList={props.teams || []}
          onEditLog={handleEditLog}
          onOpenManualLog={() => { 
             setEditScrimId(null); 
@@ -949,14 +1032,11 @@ export default function DashboardClient(props: DashboardClientProps) {
                   </div>
                </div>
 
-               {/* BOTOES DE TIPO DE JOGO */}
                <div>
                   <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-1.5 ml-1">Tipo de Evento</label>
                   <div className="flex gap-2">
                      <button type="button" onClick={() => setScrimForm({...scrimForm, match_type: 'SCRIM'})} className={`flex-1 py-3 rounded-xl border-2 font-black text-[10px] uppercase tracking-[0.2em] transition-colors ${scrimForm.match_type === 'SCRIM' ? 'bg-amber-600 border-amber-500 text-white shadow-[0_0_15px_rgba(217,119,6,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-white hover:bg-zinc-800'}`}>SCRIM</button>
-                     
                      <button type="button" onClick={() => setScrimForm({...scrimForm, match_type: 'OFFICIAL'})} className={`flex-1 py-3 rounded-xl border-2 font-black text-[10px] uppercase tracking-[0.2em] transition-colors ${scrimForm.match_type === 'OFFICIAL' ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-white hover:bg-zinc-800'}`}>OFICIAL</button>
-                     
                      <button type="button" onClick={() => setScrimForm({...scrimForm, match_type: 'WARM UP'})} className={`flex-1 py-3 rounded-xl border-2 font-black text-[10px] uppercase tracking-[0.2em] transition-colors ${scrimForm.match_type === 'WARM UP' ? 'bg-zinc-600 border-zinc-500 text-white shadow-[0_0_15px_rgba(113,113,122,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-white hover:bg-zinc-800'}`}>WARM UP</button>
                   </div>
                </div>
@@ -991,38 +1071,75 @@ export default function DashboardClient(props: DashboardClientProps) {
                   <input type="text" required placeholder="Ex: Poke, Engage, Scalonamento..." className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 text-white font-bold outline-none focus:border-amber-500 transition-colors shadow-inner" value={scrimForm.comp} onChange={e => setScrimForm({...scrimForm, comp: e.target.value})} />
                </div>
 
+               {(() => {
+                 const getNumGames = (m: string) => {
+                   if (m === 'MD1') return 1;
+                   if (m === 'MD2') return 2;
+                   if (m === 'MD3') return 3;
+                   if (m === 'MD5') return 5;
+                   return 3;
+                 };
+                 const num = getNumGames(scrimForm.mode);
+                 
+                 const diffs = (scrimForm.difficulty || 'CONTROLADO').split(',').map(d => d.trim());
+                 
+                 while (diffs.length < num) diffs.push('CONTROLADO');
+                 if (diffs.length > num) diffs.length = num;
+
+                 const handleDiffChange = (index: number, val: string) => {
+                   const newDiffs = [...diffs];
+                   newDiffs[index] = val;
+                   setScrimForm({ ...scrimForm, difficulty: newDiffs.join(', ') });
+                 };
+
+                 return (
+                   <div className="bg-zinc-900/40 border border-zinc-800/80 p-5 rounded-2xl">
+                     <label className="text-[10px] text-zinc-400 font-black uppercase tracking-widest block mb-4 ml-1">
+                       Dificuldade Tática <span className="text-amber-500">(JOGO A JOGO)</span>
+                     </label>
+                     <div className={`grid gap-3 ${num === 1 ? 'grid-cols-1' : num === 2 ? 'grid-cols-2' : num === 5 ? 'grid-cols-5' : 'grid-cols-3'}`}>
+                       {diffs.map((d, i) => (
+                         <div key={i} className="flex flex-col gap-1.5">
+                           <span className="text-[8px] font-black text-zinc-500 tracking-widest uppercase ml-1">JOGO {i + 1}</span>
+                           <select 
+                             value={d} 
+                             onChange={(e) => handleDiffChange(i, e.target.value)} 
+                             className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2 py-3 text-white font-bold text-[9px] outline-none focus:border-amber-500 transition-colors shadow-inner uppercase"
+                           >
+                             <option value="STOMPAMOS">Stompamos</option>
+                             <option value="MUITO FÁCIL">Muito Fácil</option>
+                             <option value="FÁCIL">Fácil</option>
+                             <option value="CONTROLADO">Controlado</option>
+                             <option value="DIFÍCIL">Difícil</option>
+                             <option value="MT DIFÍCIL">Muito Difícil</option>
+                             <option value="STOMPADOS">Stompados</option>
+                           </select>
+                         </div>
+                       ))}
+                     </div>
+                   </div>
+                 );
+               })()}
+
                <div className="grid grid-cols-2 gap-5">
                   <div>
-                     <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-1.5 ml-1">Dificuldade Tática</label>
-                     <select value={scrimForm.difficulty} onChange={e => setScrimForm({...scrimForm, difficulty: e.target.value})} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 text-white font-bold outline-none focus:border-amber-500 transition-colors shadow-inner">
-                        <option value="STOMPAMOS">Stompamos</option>
-                        <option value="MUITO FÁCIL">Muito Fácil</option>
-                        <option value="FÁCIL">Fácil</option>
-                        <option value="CONTROLADO">Controlado</option>
-                        <option value="DIFÍCIL">Difícil</option>
-                        <option value="MT DIFÍCIL">Muito Difícil</option>
-                        <option value="STOMPADOS">Stompados</option>
-                     </select>
-                  </div>
-                  <div>
-                     <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-1.5 ml-1">Pontualidade</label>
-                     <select value={scrimForm.punctuality} onChange={e => setScrimForm({...scrimForm, punctuality: e.target.value})} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 text-white font-bold outline-none focus:border-amber-500 transition-colors shadow-inner">
+                     <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Pontualidade</label>
+                     <select value={scrimForm.punctuality} onChange={e => setScrimForm({...scrimForm, punctuality: e.target.value})} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 text-white font-bold outline-none focus:border-amber-500 transition-colors shadow-inner">
                         <option value="PONTUAIS">Pontuais (Ambos)</option>
                         <option value="NOSSO ATRASO">Nosso Atraso</option>
                         <option value="ATRASO DELES">Atraso Deles</option>
                         <option value="DESMARCARAM NA HORA">Desmarcaram</option>
                      </select>
                   </div>
-               </div>
-
-               <div>
-                  <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Remakes (Problemas Técnicos/Draft)</label>
-                  <div className="flex gap-2">
-                     {[0, 1, 2, 3].map(num => (
-                        <button key={num} type="button" onClick={() => setScrimForm({...scrimForm, remakes: num})} className={`flex-1 py-3 rounded-xl border-2 text-lg font-black transition-all duration-200 hover:-translate-y-0.5 ${scrimForm.remakes === num ? 'bg-amber-600 text-white border-amber-500 shadow-[0_0_15px_rgba(217,119,6,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-600 hover:text-white hover:bg-zinc-800'}`}>
-                           {num}
-                        </button>
-                     ))}
+                  <div>
+                     <label className="text-[10px] text-zinc-500 font-black uppercase tracking-widest block mb-2 ml-1">Remakes (Draft/Tech)</label>
+                     <div className="flex gap-2">
+                        {[0, 1, 2, 3].map(num => (
+                           <button key={num} type="button" onClick={() => setScrimForm({...scrimForm, remakes: num})} className={`flex-1 py-3 rounded-xl border-2 text-lg font-black transition-all duration-200 hover:-translate-y-0.5 ${scrimForm.remakes === num ? 'bg-amber-600 text-white border-amber-500 shadow-[0_0_15px_rgba(217,119,6,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-600 hover:text-white hover:bg-zinc-800'}`}>
+                              {num}
+                           </button>
+                        ))}
+                     </div>
                   </div>
                </div>
             </div>
@@ -1054,7 +1171,7 @@ export default function DashboardClient(props: DashboardClientProps) {
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 text-white font-bold outline-none focus:border-emerald-500 transition-colors shadow-inner uppercase"
                   >
                     <option value="" disabled>SELECIONE UM JOGADOR</option>
-                    {props.roster.map((p: any) => (
+                    {(props.roster || []).map((p: any) => (
                       <option key={p.puuid} value={p.puuid}>{p.nickname || p.name}</option>
                     ))}
                   </select>

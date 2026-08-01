@@ -1,13 +1,26 @@
 import { useState, useEffect } from 'react';
 import { Plus, Swords, Edit2, Shield } from 'lucide-react';
 // Certifique-se de exportar essas funções no seu arquivo de utils!
-import { formatDate, getTeamLogo, getDifficultyColor } from '@/lib/utils/formatters';
+import { formatDate, getTeamLogo } from '@/lib/utils/formatters';
+
+// Função interna para aplicar a mesma paleta Neon dos gráficos
+const getNeonDiffClasses = (diff: string) => {
+  switch(diff.toUpperCase().trim()) {
+    case 'STOMPAMOS': return 'bg-cyan-950/40 text-cyan-400 border-cyan-500/30';
+    case 'MUITO FÁCIL': return 'bg-sky-950/40 text-sky-400 border-sky-500/30';
+    case 'FÁCIL': return 'bg-indigo-950/40 text-indigo-400 border-indigo-500/30';
+    case 'CONTROLADO': return 'bg-violet-950/40 text-violet-400 border-violet-500/30';
+    case 'DIFÍCIL': return 'bg-rose-950/40 text-rose-400 border-rose-500/30';
+    case 'MT DIFÍCIL': return 'bg-red-950/40 text-red-400 border-red-500/30';
+    case 'STOMPADOS': return 'bg-rose-950/40 text-rose-600 border-rose-700/30'; 
+    default: return 'bg-zinc-900 text-zinc-500 border-zinc-800';
+  }
+};
 
 export default function AdvancedLogs({ advancedScrims, isStaff, onOpenManualLog, onEditLog, teamsList }: any) {
   const [logsPage, setLogsPage] = useState(1);
   const LOGS_PER_PAGE = 20;
 
-  // Reseta a página para 1 sempre que novos logs chegarem
   useEffect(() => {
     setLogsPage(1);
   }, [advancedScrims]);
@@ -36,7 +49,13 @@ export default function AdvancedLogs({ advancedScrims, isStaff, onOpenManualLog,
       <div className="flex-1 overflow-auto custom-scrollbar pr-2 z-10">
         <table className="w-full text-left border-separate border-spacing-y-2.5 min-w-[700px]">
            <thead className="sticky top-0 bg-[#121214]/95 backdrop-blur-md z-10 text-[8px] text-zinc-500 font-black tracking-[0.2em] uppercase">
-             <tr><th className="px-4 pb-2 border-b border-zinc-800/80">DATA / OPONENTE</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">RES / PLACAR</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">COMP TESTADA</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">DIFICULDADE</th><th className="px-4 pb-2 border-b border-zinc-800/80 text-center">REMAKES</th></tr>
+             <tr>
+                <th className="px-4 pb-2 border-b border-zinc-800/80">DATA / OPONENTE</th>
+                <th className="px-4 pb-2 border-b border-zinc-800/80 text-center">RES / PLACAR</th>
+                <th className="px-4 pb-2 border-b border-zinc-800/80 text-center">COMP TESTADA</th>
+                <th className="px-4 pb-2 border-b border-zinc-800/80 text-center">DIFICULDADE (JOGO A JOGO)</th>
+                <th className="px-4 pb-2 border-b border-zinc-800/80 text-center">REMAKES</th>
+             </tr>
            </thead>
            <tbody>
               {paginatedLogs.length > 0 ? paginatedLogs.map((scrim: any) => (
@@ -67,7 +86,27 @@ export default function AdvancedLogs({ advancedScrims, isStaff, onOpenManualLog,
                        </div>
                     </td>
                     <td className="p-3 text-center border-y border-zinc-800/30">
-                       <span className={`px-2 py-1 rounded-md border font-black text-[8px] tracking-widest uppercase shadow-sm ${scrim.isMission ? 'bg-zinc-900 text-zinc-500 border-zinc-800' : getDifficultyColor(scrim.difficulty)}`}>{scrim.difficulty}</span>
+                       {scrim.isMission ? (
+                           <span className="px-2 py-1 rounded-md border font-black text-[8px] tracking-widest uppercase shadow-sm bg-zinc-900 text-zinc-500 border-zinc-800">
+                             {scrim.difficulty}
+                           </span>
+                       ) : (
+                           // LÓGICA NOVA: Divide a string de dificuldade pela vírgula e desenha J1, J2, J3...
+                           <div className="flex flex-wrap items-center justify-center gap-1 max-w-[140px] mx-auto">
+                              {String(scrim.difficulty || 'CONTROLADO').split(',').map((diff, index) => {
+                                  const cleanDiff = diff.trim();
+                                  // Limita o nome pra não quebrar a tabela (ex: STOMPAMOS vira STOMP)
+                                  const shortDiff = cleanDiff.replace('MUITO', 'MT').replace('STOMPAMOS', 'STOMP.').replace('STOMPADOS', 'STOMP.');
+                                  
+                                  return (
+                                    <span key={index} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border font-black text-[7px] tracking-widest uppercase shadow-sm ${getNeonDiffClasses(cleanDiff)}`} title={`Jogo ${index + 1}: ${cleanDiff}`}>
+                                       <span className="opacity-50">J{index + 1}</span>
+                                       <span>{shortDiff}</span>
+                                    </span>
+                                  )
+                              })}
+                           </div>
+                       )}
                     </td>
                     <td className="p-3 text-center rounded-r-xl border-y border-r border-zinc-800/30 relative">
                        <span className={`font-black text-[9px] ${scrim.remakes > 0 ? 'text-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.4)]' : 'text-zinc-600'}`}>{scrim.remakes > 0 ? `${scrim.remakes} RMK` : '-'}</span>
