@@ -6,7 +6,6 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import PlayerCard from './components/PlayerCard';
 import PowerRankings from './components/PowerRankings';
 
-// 1. IMPORTAÇÕES GLOBAIS (Aqui vêm as funções que faltavam: normalizeRole, getScoreColor, etc)
 import { 
   getScoreColor, 
   getChampionCenteredUrl, 
@@ -14,7 +13,6 @@ import {
   getRoleIcon 
 } from '@/lib/utils/formatters';
 
-// 2. IMPORTAÇÕES LOCAIS (Removido o '.ts' do final do caminho e ajustado o que vem daqui)
 import { 
   normalizeTournamentScope, formatTime, normalizeChampName, sortPlayersByRole, 
   getChampionImageUrl, getChampionSplashUrl,
@@ -119,57 +117,81 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
 
   async function fetchInitialData() {
     setLoading(true);
-    const rawTypes = getRawGameTypes();
-    let query = supabase.from('bff_hub_players_roster').select('*');
-    let banQuery = supabase.from('bff_matches_bans').select('*').limit(2000); 
-    let matchCountQuery = supabase.from('bff_matches_history').select('match_id', { count: 'exact', head: true });
-
-    if (globalSplit !== 'ALL') {
-      query = query.ilike('split', globalSplit); 
-      banQuery = banQuery.ilike('split', globalSplit); 
-      matchCountQuery = matchCountQuery.ilike('split', globalSplit);
+    
+    const isCustomDate = !!startDate || !!endDate;
+    let historyQuery = supabase.from('bff_matches_history').select('match_id, game_type, split, game_start_time');
+    
+    if (!isCustomDate && globalSplit !== 'ALL') {
+        historyQuery = historyQuery.ilike('split', globalSplit);
     }
-    if (startDate) { banQuery = banQuery.gte('game_start_time', `${startDate} 00:00:00`); matchCountQuery = matchCountQuery.gte('game_start_time', `${startDate} 00:00:00`); }
-    if (endDate) { banQuery = banQuery.lte('game_start_time', `${endDate} 23:59:59`); matchCountQuery = matchCountQuery.lte('game_start_time', `${endDate} 23:59:59`); }
-    if (rawTypes.length > 0) { query = query.in('game_type', rawTypes); banQuery = banQuery.in('game_type', rawTypes); matchCountQuery = matchCountQuery.in('game_type', rawTypes); }
+    
+    if (startDate) historyQuery = historyQuery.gte('game_start_time', startDate);
+    if (endDate) historyQuery = historyQuery.lte('game_start_time', `${endDate}T23:59:59`);
 
-    const [pRes, tRes, bansRes, matchCountRes, playersTableRes] = await Promise.all([
-      query, supabase.from('bff_matches_teams').select('*').order('acronym'), banQuery, matchCountQuery, supabase.from('players').select('puuid, photo_url') 
+    const [historyRes, tRes, playersTableRes] = await Promise.all([
+      historyQuery.limit(10000),
+      supabase.from('bff_matches_teams').select('*').order('acronym'),
+      supabase.from('players').select('puuid, photo_url') 
     ]);
 
-    const t = tRes.data || []; const pRaw = pRes.data || [];
-    const p = pRaw.filter((curr: any) => {
-      if (globalTournaments.includes('ALL')) return true;
-      return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+    const validMatches = (historyRes.data || []).filter((m: any) => {
+        if (globalTournaments.includes('ALL')) return true;
+        if (globalTournaments.includes('SCRIM') && String(m.game_type || '').toUpperCase().includes('SCRIM')) return true;
+        return globalTournaments.includes(normalizeTournamentScope(m.game_type));
     });
     
+    const validMatchIds = validMatches.map((m: any) => m.match_id);
+
+    let pData: any[] = [];
+    let banData: any[] = [];
+    let sDetailedData: any[] = [];
+
+    if (validMatchIds.length > 0) {
+       const matchChunks = [];
+       for(let i = 0; i < validMatchIds.length; i+=200) { matchChunks.push(validMatchIds.slice(i, i+200)); }
+       
+       for(const chunk of matchChunks) {
+          const [pChunk, bChunk, sChunk] = await Promise.all([
+             supabase.from('bff_player_matches').select('puuid, nickname, team_acronym, primary_role, lane_rating, impact_rating, conversion_rating, vision_rating, game_type').in('match_id', chunk),
+             supabase.from('match_drafts').select('champion, action_type').in('match_id', chunk).ilike('action_type', '%ban%'),
+             supabase.from('core_player_stats').select('puuid, champion, team_tag, lane, role, match_id').in('match_id', chunk)
+          ]);
+          if(pChunk.data) pData.push(...pChunk.data);
+          if(bChunk.data) banData.push(...bChunk.data);
+          if(sChunk.data) sDetailedData.push(...sChunk.data);
+       }
+    }
+    
+    setStatsDetailed(sDetailedData);
+
     const photoMap: Record<string, string> = {};
     if (playersTableRes.data) { playersTableRes.data.forEach((pl: any) => { if (pl.photo_url) photoMap[pl.puuid] = pl.photo_url; }); }
 
-    const uniqueTeamsMap = new Map();
-    t.forEach((team: any) => {
-      const upperAcr = String(team.acronym || '').toUpperCase().trim();
-      if (!upperAcr) return;
-      if (!uniqueTeamsMap.has(upperAcr)) { uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr }); } 
-      else if (team.logo_url && !uniqueTeamsMap.get(upperAcr).logo_url) { uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr }); }
-    });
-    const allUniqueTeams = Array.from(uniqueTeamsMap.values());
-
     const groupedPlayersMap = new Map();
-    p.forEach((curr: any) => {
+    pData.forEach((curr: any) => {
+      
+      // A CORREÇÃO MÁGICA: Permite que os dados de SCRIMS passem pelo filtro de ligas e cheguem na tela
+      if (!globalTournaments.includes('ALL')) {
+           const isScrim = globalTournaments.includes('SCRIM') && String(curr.game_type || '').toUpperCase().includes('SCRIM');
+           if (!isScrim && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return;
+      }
+
       const safeAcr = String(curr.team_acronym || '').toUpperCase().trim();
       if (!groupedPlayersMap.has(curr.puuid)) {
-        groupedPlayersMap.set(curr.puuid, { ...curr, team_acronym: safeAcr, count: 1, photo_url: photoMap[curr.puuid] || null });
+        groupedPlayersMap.set(curr.puuid, { 
+           puuid: curr.puuid, nickname: curr.nickname, team_acronym: safeAcr, primary_role: curr.primary_role,
+           photo_url: photoMap[curr.puuid] || null, games_played: 1,
+           median_lane: Number(curr.lane_rating) || 0, median_impact: Number(curr.impact_rating) || 0,
+           median_conversion: Number(curr.conversion_rating) || 0, median_vision: Number(curr.vision_rating) || 0
+        });
       } else {
         const acc = groupedPlayersMap.get(curr.puuid);
-        const totalGames = acc.games_played + curr.games_played;
-        if (totalGames > 0) {
-          acc.median_lane = ((acc.median_lane * acc.games_played) + (curr.median_lane * curr.games_played)) / totalGames;
-          acc.median_impact = ((acc.median_impact * acc.games_played) + (curr.median_impact * curr.games_played)) / totalGames;
-          acc.median_conversion = ((acc.median_conversion * acc.games_played) + (curr.median_conversion * curr.games_played)) / totalGames;
-          acc.median_vision = ((acc.median_vision * acc.games_played) + (curr.median_vision * curr.games_played)) / totalGames;
-        }
-        acc.games_played = totalGames; acc.count += 1;
+        const totalGames = acc.games_played + 1;
+        acc.median_lane = ((acc.median_lane * acc.games_played) + (Number(curr.lane_rating) || 0)) / totalGames;
+        acc.median_impact = ((acc.median_impact * acc.games_played) + (Number(curr.impact_rating) || 0)) / totalGames;
+        acc.median_conversion = ((acc.median_conversion * acc.games_played) + (Number(curr.conversion_rating) || 0)) / totalGames;
+        acc.median_vision = ((acc.median_vision * acc.games_played) + (Number(curr.vision_rating) || 0)) / totalGames;
+        acc.games_played = totalGames;
       }
     });
 
@@ -182,59 +204,107 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
     aggregatedPlayers.forEach((player: any) => player.is_mvp = player.puuid === mvpPuuid);
 
     setPlayers(aggregatedPlayers);
+    
+    const uniqueTeamsMap = new Map();
+    (tRes.data || []).forEach((team: any) => {
+      const upperAcr = String(team.acronym || '').toUpperCase().trim();
+      if (!upperAcr) return;
+      if (!uniqueTeamsMap.has(upperAcr)) { uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr }); } 
+      else if (team.logo_url && !uniqueTeamsMap.get(upperAcr).logo_url) { uniqueTeamsMap.set(upperAcr, { ...team, acronym: upperAcr }); }
+    });
+    const allUniqueTeams = Array.from(uniqueTeamsMap.values());
     const activeTeamTags = new Set(aggregatedPlayers.map(pl => pl.team_acronym));
+    
     setTeams(allUniqueTeams.filter((team: any) => activeTeamTags.has(team.acronym)));
     setTeamsList(allUniqueTeams);
     setFilterTeam(prev => { if (prev !== "TODOS" && !activeTeamTags.has(prev)) return "TODOS"; return prev; });
 
-    if (bansRes.data) {
-       const validBans = bansRes.data.filter((curr: any) => globalTournaments.includes('ALL') || globalTournaments.includes(normalizeTournamentScope(curr.game_type)));
-       const totalMatches = matchCountRes.count || 1;
-       const banMap: Record<string, number> = {};
-       validBans.forEach((b: any) => { banMap[normalizeChampName(b.champion)] = Number(((Number(b.total_bans) / totalMatches) * 100).toFixed(1)); });
-       setGlobalBans(banMap);
-    }
-
-    const { data: sDetailed } = await supabase.from('core_player_stats').select('puuid, champion, team_tag, lane, role').limit(50000);
-    if (sDetailed) setStatsDetailed(sDetailed);
+    const totalMatches = validMatchIds.length || 1;
+    const banMap: Record<string, number> = {};
+    banData.forEach((b: any) => { 
+       const cName = normalizeChampName(b.champion);
+       banMap[cName] = (banMap[cName] || 0) + 1; 
+    });
+    Object.keys(banMap).forEach(k => { banMap[k] = Number(((banMap[k] / totalMatches) * 100).toFixed(1)); });
+    setGlobalBans(banMap);
 
     setLoading(false);
   }
 
+  // --- NOVA ESTRUTURA BLINDADA PARA O GRÁFICO DE PERFORMANCE ---
   async function fetchPerformanceData(team: string) {
-    let query = supabase.from('bff_hub_performance').select('*').ilike('team_acronym', team).order('game_start_time', { ascending: true }).limit(5000);
-    const rawTypes = getRawGameTypes();
+    const isCustomDate = !!startDate || !!endDate;
+    
+    // Ignoramos a view que esconde as scrims e pegamos direto da fonte (Histórico)
+    let historyQuery = supabase.from('bff_matches_history').select('*')
+       .or(`blue_team_tag.ilike.%${team}%,red_team_tag.ilike.%${team}%`)
+       .order('game_start_time', { ascending: true })
+       .limit(1000); 
 
-    if (globalSplit !== 'ALL') query = query.ilike('split', globalSplit); 
-    if (startDate) query = query.gte('game_start_time', `${startDate} 00:00:00`);
-    if (endDate) query = query.lte('game_start_time', `${endDate} 23:59:59`);
-    if (rawTypes.length > 0) query = query.in('game_type', rawTypes);
+    if (!isCustomDate && globalSplit !== 'ALL') historyQuery = historyQuery.ilike('split', globalSplit); 
+    if (startDate) historyQuery = historyQuery.gte('game_start_time', startDate);
+    if (endDate) historyQuery = historyQuery.lte('game_start_time', `${endDate}T23:59:59`);
 
-    const { data } = await query;
-    if (data) {
-      const validData = data.filter((curr: any) => globalTournaments.includes('ALL') || globalTournaments.includes(normalizeTournamentScope(curr.game_type)));
-      const matchIds = validData.map((m: any) => m.match_id);
+    const { data: historyData } = await historyQuery;
+
+    if (historyData && historyData.length > 0) {
+      const validMatches = historyData.filter((curr: any) => {
+          if (globalTournaments.includes('ALL')) return true;
+          if (globalTournaments.includes('SCRIM') && String(curr.game_type || '').toUpperCase().includes('SCRIM')) return true;
+          return globalTournaments.includes(normalizeTournamentScope(curr.game_type));
+      });
+
+      const matchIds = validMatches.map((m: any) => m.match_id);
+
       if (matchIds.length > 0) {
-        const { data: champData } = await supabase.from('core_player_stats').select('match_id, team_tag, champion').in('match_id', matchIds);
-        if (champData) {
-          validData.forEach((match: any) => {
-             match.team_picks = champData.filter((c: any) => c.match_id === match.match_id && String(c.team_tag).toUpperCase() === String(team).toUpperCase()).map((c: any) => c.champion);
-             match.opp_picks = champData.filter((c: any) => c.match_id === match.match_id && String(c.team_tag).toUpperCase() !== String(team).toUpperCase()).map((c: any) => c.champion);
-          });
-        }
-      }
-      setTeamChartData(validData);
+        // Agora pegamos as notas cruas dos jogadores e calculamos a média do time NAVEGADOR
+        const { data: statsData } = await supabase.from('core_player_stats')
+           .select('match_id, team_tag, champion, lane_rating, impact_rating, conversion_rating, vision_rating, win, puuid')
+           .in('match_id', matchIds);
 
-      const last5Matches = validData.slice(-5).map((m: any) => m.match_id);
-      if (last5Matches.length > 0) {
-        const { data: recentStats } = await supabase.from('core_player_stats').select('puuid').in('match_id', last5Matches).ilike('team_tag', team);
-        if (recentStats) {
-          const counts: Record<string, number> = {};
-          recentStats.forEach((r: any) => { if (r.puuid) counts[r.puuid] = (counts[r.puuid] || 0) + 1; });
-          setRecentStarters(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(entry => entry[0]));
-        } else { setRecentStarters([]); }
-      } else { setRecentStarters([]); }
-    }
+        if (statsData) {
+          const chartData = validMatches.map((match: any) => {
+             const isBlue = String(match.blue_team_tag || '').toUpperCase().includes(team.toUpperCase());
+             const matchStats = statsData.filter((s: any) => s.match_id === match.match_id);
+             
+             const ourStats = matchStats.filter((s: any) => String(s.team_tag).toUpperCase() === team.toUpperCase());
+             const oppStats = matchStats.filter((s: any) => String(s.team_tag).toUpperCase() !== team.toUpperCase());
+
+             const avg = (key: string) => ourStats.length > 0 ? ourStats.reduce((acc, s) => acc + (Number(s[key]) || 0), 0) / ourStats.length : 0;
+
+             return {
+                match_id: match.match_id,
+                game_start_time: match.game_start_time,
+                split: match.split,
+                game_type: match.game_type,
+                team_acronym: team,
+                side: isBlue ? 'Blue' : 'Red',
+                opponent_acronym: isBlue ? match.red_team_tag : match.blue_team_tag,
+                opponent_logo: isBlue ? match.red_logo : match.blue_logo,
+                win_status: ourStats.length > 0 ? (ourStats[0].win ? 'W' : 'L') : 'U',
+                avg_lane: avg('lane_rating'),
+                avg_impact: avg('impact_rating'),
+                avg_conversion: avg('conversion_rating'),
+                avg_vision: avg('vision_rating'),
+                team_picks: ourStats.map((s: any) => s.champion),
+                opp_picks: oppStats.map((s: any) => s.champion)
+             };
+          });
+          
+          // Só desenha no gráfico se a partida tiver os dados táticos salvos
+          const validChartData = chartData.filter((d: any) => d.team_picks && d.team_picks.length > 0);
+          setTeamChartData(validChartData);
+
+          const last5Matches = validChartData.slice(-5).map((m: any) => m.match_id);
+          if (last5Matches.length > 0) {
+             const recentOurStats = statsData.filter((s: any) => last5Matches.includes(s.match_id) && String(s.team_tag).toUpperCase() === team.toUpperCase());
+             const counts: Record<string, number> = {};
+             recentOurStats.forEach((r: any) => { if (r.puuid) counts[r.puuid] = (counts[r.puuid] || 0) + 1; });
+             setRecentStarters(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(entry => entry[0]));
+          } else { setRecentStarters([]); }
+        } else { setTeamChartData([]); setRecentStarters([]); }
+      } else { setTeamChartData([]); setRecentStarters([]); }
+    } else { setTeamChartData([]); setRecentStarters([]); }
   }
 
   async function fetchAnalysisData(team: string) {
@@ -243,13 +313,15 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
     let draftQuery = supabase.from('bff_hub_draft').select('*').ilike('team_acronym', team).limit(15000);
 
     const [obj, draft] = await Promise.all([objQuery, draftQuery]);
+    const isCustomDate = !!startDate || !!endDate;
     
     if (obj.data) {
       const validObjs = obj.data.filter((curr: any) => {
-        if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
-        if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
-        if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
-        if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
+        if (!globalTournaments.includes('ALL')) {
+           const isScrim = globalTournaments.includes('SCRIM') && String(curr.game_type || '').toUpperCase().includes('SCRIM');
+           if (!isScrim && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+        }
+        if (!isCustomDate && globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
         return true;
       });
 
@@ -270,10 +342,11 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
 
     if (draft.data) {
       const validDrafts = draft.data.filter((curr: any) => {
-        if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
-        if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
-        if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
-        if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
+        if (!globalTournaments.includes('ALL')) {
+           const isScrim = globalTournaments.includes('SCRIM') && String(curr.game_type || '').toUpperCase().includes('SCRIM');
+           if (!isScrim && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+        }
+        if (!isCustomDate && globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
         return true;
       });
 
@@ -304,8 +377,11 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
       const { data: wardsChunk, error } = await supabase.from('bff_hub_vision').select('*').ilike('team_acronym', team).range(from, from + step - 1);
       if (error || !wardsChunk || wardsChunk.length === 0) { fetchMore = false; } else {
         const validWards = wardsChunk.filter((curr: any) => {
-          if (!globalTournaments.includes('ALL') && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
-          if (globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
+          if (!globalTournaments.includes('ALL')) {
+             const isScrim = globalTournaments.includes('SCRIM') && String(curr.game_type || '').toUpperCase().includes('SCRIM');
+             if (!isScrim && !globalTournaments.includes(normalizeTournamentScope(curr.game_type))) return false;
+          }
+          if (!isCustomDate && globalSplit !== 'ALL' && curr.split && String(curr.split).toUpperCase() !== globalSplit.toUpperCase()) return false;
           if (startDate && curr.game_start_time && new Date(curr.game_start_time) < new Date(`${startDate}T00:00:00`)) return false;
           if (endDate && curr.game_start_time && new Date(curr.game_start_time) > new Date(`${endDate}T23:59:59`)) return false;
           return true;
@@ -590,7 +666,7 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-visible">
             
             {/* ========================================== */}
-            {/* LADO ESQUERDO: VISION RADAR (CORRIGIDO)    */}
+            {/* LADO ESQUERDO: VISION RADAR */}
             {/* ========================================== */}
             <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col items-center relative shadow-sm hover:z-50 transition-all">
               <div className="w-full flex justify-between mb-6 items-center border-b border-zinc-800 pb-4">
@@ -602,14 +678,11 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
               </div>
               
               <div className="relative w-full max-w-[400px] aspect-square bg-zinc-950 rounded-xl border border-zinc-800 z-10">
-                
-                {/* O background ganha uma capa de overflow para manter os cantos redondos */}
                 <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
                   <img src="https://pbs.twimg.com/media/G7GGWYIXgAEx4SP?format=jpg&name=medium" className="absolute inset-0 w-full h-full object-cover opacity-60" alt="" />
                   <div className="absolute inset-0 z-20 opacity-[0.1]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                 </div>
                 
-                {/* Wards renderizadas livremente por cima */}
                 <div className="absolute inset-0 z-30 pointer-events-none">
                   {activeWards.map((w, index) => {
                     const rawX = Number(w.ward_x ?? w.player_x ?? 0); const rawY = Number(w.ward_y ?? w.player_y ?? 0);
@@ -625,7 +698,6 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
                         <div className="absolute w-2.5 h-2.5 rounded-full animate-ping opacity-50" style={{ backgroundColor: sensorColor }} />
                         <div className="relative w-2.5 h-2.5 rounded-full border-[1.5px] border-zinc-950 shadow-[0_0_4px_rgba(0,0,0,1)]" style={{ backgroundColor: sensorColor }} />
                         
-                        {/* Tooltip blindado vazando as bordas */}
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-lg text-white opacity-0 group-hover/ward:opacity-100 transition-all duration-200 pointer-events-none shadow-2xl flex flex-col min-w-[140px] overflow-hidden scale-90 group-hover/ward:scale-100 origin-bottom z-[99999]">
                            <div className="bg-zinc-900 px-2.5 py-1.5 border-b border-zinc-800 flex items-center gap-2">
                              <div className="w-1.5 h-1.5 rounded-full shadow-[0_0_5px_rgba(255,255,255,0.2)]" style={{ backgroundColor: sensorColor }} />
@@ -649,7 +721,7 @@ export default function PlayersHubClient({ isAdmin }: { isAdmin: boolean }) {
             </div>
 
             {/* ========================================== */}
-            {/* LADO DIREITO: OBJECTIVE BOX PLOT (INTACTO) */}
+            {/* LADO DIREITO: OBJECTIVE BOX PLOT */}
             {/* ========================================== */}
             <div className="bg-[#18181b] border border-zinc-800 rounded-2xl p-6 flex flex-col shadow-sm">
                <h3 className="text-lg font-black text-white uppercase tracking-tight mb-6 border-b border-zinc-800 pb-4">Objective Execution Strategy</h3>
@@ -1112,7 +1184,6 @@ function DraftPickCard({ label, data, side, mode }: any) {
                 <>
                   {mode === 'role' && (
                     <div className="w-8 h-8 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-md">
-                      {/* O getRoleIcon no Utils já retorna a TAG IMG renderizada */}
                       {getRoleIcon(data.name, "w-4 h-4")}
                     </div>
                   )}
