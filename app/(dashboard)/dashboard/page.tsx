@@ -1,22 +1,10 @@
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import DashboardClient from './DashboardClient';
+import { createServerSupabaseClient } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardV2Page() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  
-  const cookieStore = await cookies();
-  
-  const supabase = createServerClient(supabaseUrl, supabaseKey, {
-    cookies: {
-      get(name: string) { return cookieStore.get(name)?.value; },
-      set(name: string, value: string, options: any) { try { cookieStore.set({ name, value, ...options }); } catch (error) {} },
-      remove(name: string, options: any) { try { cookieStore.set({ name, value: '', ...options }); } catch (error) {} },
-    },
-  });
+  const supabase = await createServerSupabaseClient();
 
   const { data: squadConfig } = await supabase.from('squad_config').select('*').limit(1).maybeSingle();
   const myTeamTag = squadConfig?.my_team_tag?.toUpperCase() || 'RMD';
