@@ -196,58 +196,50 @@ export default function PlayerProfilePage() {
   }, []);
 
   const fetchTacticalData = useCallback(async () => {
-    if (!puuid) return;
-    setLoading(true);
-    
-    try {
-      // 🚀 Consulta Otimizada com limite de 1 para evitar falha no maybeSingle
-      const [pRes, tRes, allPRes, statsRes] = await Promise.all([
-        supabase.from('bff_hub_players_roster').select('*').eq('puuid', puuid).limit(1).maybeSingle(),
-        supabase.from('bff_matches_teams').select('*').order('acronym'),
-        supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
-        supabase.from('bff_player_matches').select('*').eq('puuid', puuid).order('game_start_time', { ascending: true })
-      ]);
+  if (!puuid) return;
+  setLoading(true);
+  
+  // Limpa espaços em branco ou codificações acidentais da URL
+  const cleanPuuid = String(puuid).trim();
+  console.log("Buscando PUUID limpo:", cleanPuuid);
 
+  try {
+    const [pRes, tRes, allPRes, statsRes] = await Promise.all([
+      supabase.from('bff_hub_players_roster').select('*').eq('puuid', cleanPuuid).limit(1).maybeSingle(),
+      supabase.from('bff_matches_teams').select('*').order('acronym'),
+      supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
+      supabase.from('bff_player_matches').select('*').eq('puuid', cleanPuuid).order('game_start_time', { ascending: true })
+    ]);
 
+    console.log("Resultado da busca do jogador:", pRes);
 
-      if (pRes.data && allPRes.data) {
-        setPlayer(pRes.data);
-
-        if (statsRes.data && statsRes.data.length > 0) {
-          const enriched = statsRes.data.map((m: any) => ({ 
-            ...m, 
-            normalized_scope: normalizeTournamentScope(m.game_type)
-          }));
-          setAllMatchesRaw(enriched);
-        } else {
-          setAllMatchesRaw([]);
-        }
-
-        let rosterQuery = supabase.from('bff_hub_players_roster').select('puuid, nickname, team_acronym, game_type');
-        if (globalSplit !== 'ALL') rosterQuery = rosterQuery.ilike('split', globalSplit);
-
-        const { data: rosterData } = await rosterQuery;
-        if (rosterData) {
-          setRosterList(rosterData);
-          setTeams(tRes.data || []);
-          setAllPlayers(allPRes.data || []);
-        }
+    if (pRes.data) {
+      setPlayer(pRes.data);
+      if (statsRes.data && statsRes.data.length > 0) {
+        const enriched = statsRes.data.map((m: any) => ({ 
+          ...m, 
+          normalized_scope: normalizeTournamentScope(m.game_type)
+        }));
+        setAllMatchesRaw(enriched);
+      } else {
+        setAllMatchesRaw([]);
       }
-    } catch (err) { 
-      console.error("Erro no protocolo tático:", err); 
-    } finally { 
-      setLoading(false); 
-    }
-  }, [puuid, globalSplit]);
 
-  useEffect(() => { 
-    fetchTacticalData(); 
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setActiveDropdown(null);
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [fetchTacticalData]);
+      if (allPRes.data) {
+        setRosterList(allPRes.data);
+        setTeams(tRes.data || []);
+        setAllPlayers(allPRes.data);
+      }
+    } else {
+      console.warn("Nenhum registro encontrado para o PUUID:", cleanPuuid);
+      setPlayer(null);
+    }
+  } catch (err) { 
+    console.error("Erro crítico no protocolo tático:", err); 
+  } finally { 
+    setLoading(false); 
+  }
+}, [puuid, globalSplit]);
 
   const dynamicAvailableSplits = useMemo(() => {
     if (globalTournaments.includes('ALL')) {
