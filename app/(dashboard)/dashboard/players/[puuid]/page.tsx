@@ -1,7 +1,5 @@
 "use client";
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { supabase } from '@/lib/supabase/client';
-import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -11,39 +9,55 @@ import {
 const DDRAGON_VERSION = '16.5.1';
 const DEFAULT_AVATAR = "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png";
 
-// --- CLASSIFICADOR DE CAMPEONATOS ---
+// --- DADOS FICTÍCIOS PARA VISUALIZAÇÃO E WIREFRAME ---
+const MOCK_PLAYER = {
+  puuid: "474dd8c6-24e2-5336-8c39-05d451970e91",
+  nickname: "Bwipo",
+  team_acronym: "EST",
+  primary_role: "TOP",
+  photo_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/266.png", // Aatrox
+  games_played: 19,
+  median_lane: "76.8",
+  median_impact: "82.8",
+  median_conversion: "85.1",
+  median_vision: "65.9"
+};
+
+const MOCK_TEAMS = [
+  { acronym: "EST", logo_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/266.png" },
+  { acronym: "RMD", logo_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/157.png" },
+  { acronym: "VKS", logo_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/64.png" },
+  { acronym: "PNG", logo_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/103.png" },
+];
+
+const MOCK_ALL_PLAYERS = [
+  { puuid: "474dd8c6-24e2-5336-8c39-05d451970e91", nickname: "Bwipo", team_acronym: "EST", primary_role: "TOP" },
+  { puuid: "p2", nickname: "Cariok", team_acronym: "EST", primary_role: "JNG" },
+  { puuid: "p3", nickname: "tinowns", team_acronym: "EST", primary_role: "MID" },
+  { puuid: "p4", nickname: "Route", team_acronym: "EST", primary_role: "ADC" },
+  { puuid: "p5", nickname: "Ceos", team_acronym: "EST", primary_role: "SUP" },
+];
+
+// 15 Partidas geradas com métricas completas para alimentar todos os gráficos
+const MOCK_MATCHES = [
+  { champion: "Aatrox", is_win: true, gpm: 420, dpm: 680, eff_val: 85, lane_rating: 78, impact_rating: 88, conversion_rating: 85, vision_rating: 62, gold_diff_at_12: 850, xp_diff_at_12: 600, deaths_at_12: 1, deaths: 3, kp_val: 68, vspm: 1.2, opponent_acronym: "RMD", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Renekton", is_win: true, gpm: 410, dpm: 620, eff_val: 82, lane_rating: 82, impact_rating: 80, conversion_rating: 82, vision_rating: 65, gold_diff_at_12: 1200, xp_diff_at_12: 900, deaths_at_12: 0, deaths: 2, kp_val: 60, vspm: 1.1, opponent_acronym: "VKS", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "K'Sante", is_win: false, gpm: 350, dpm: 450, eff_val: 65, lane_rating: 68, impact_rating: 65, conversion_rating: 70, vision_rating: 70, gold_diff_at_12: -450, xp_diff_at_12: -300, deaths_at_12: 2, deaths: 5, kp_val: 52, vspm: 1.4, opponent_acronym: "PNG", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Aatrox", is_win: true, gpm: 440, dpm: 750, eff_val: 92, lane_rating: 85, impact_rating: 92, conversion_rating: 89, vision_rating: 68, gold_diff_at_12: 1500, xp_diff_at_12: 1100, deaths_at_12: 0, deaths: 1, kp_val: 75, vspm: 1.3, opponent_acronym: "RMD", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Gnar", is_win: true, gpm: 390, dpm: 580, eff_val: 78, lane_rating: 74, impact_rating: 78, conversion_rating: 80, vision_rating: 64, gold_diff_at_12: 300, xp_diff_at_12: 200, deaths_at_12: 1, deaths: 3, kp_val: 62, vspm: 1.1, opponent_acronym: "VKS", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Sion", is_win: false, gpm: 320, dpm: 380, eff_val: 60, lane_rating: 60, impact_rating: 62, conversion_rating: 65, vision_rating: 72, gold_diff_at_12: -800, xp_diff_at_12: -600, deaths_at_12: 3, deaths: 6, kp_val: 48, vspm: 1.5, opponent_acronym: "PNG", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Aatrox", is_win: true, gpm: 460, dpm: 810, eff_val: 95, lane_rating: 88, impact_rating: 95, conversion_rating: 92, vision_rating: 66, gold_diff_at_12: 1800, xp_diff_at_12: 1400, deaths_at_12: 0, deaths: 1, kp_val: 80, vspm: 1.2, opponent_acronym: "RMD", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Jax", is_win: true, gpm: 430, dpm: 710, eff_val: 88, lane_rating: 80, impact_rating: 86, conversion_rating: 87, vision_rating: 60, gold_diff_at_12: 950, xp_diff_at_12: 750, deaths_at_12: 1, deaths: 2, kp_val: 70, vspm: 1.0, opponent_acronym: "VKS", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Renekton", is_win: false, gpm: 360, dpm: 490, eff_val: 68, lane_rating: 72, impact_rating: 68, conversion_rating: 72, vision_rating: 63, gold_diff_at_12: -200, xp_diff_at_12: -150, deaths_at_12: 2, deaths: 4, kp_val: 55, vspm: 1.2, opponent_acronym: "PNG", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Aatrox", is_win: true, gpm: 425, dpm: 690, eff_val: 84, lane_rating: 79, impact_rating: 84, conversion_rating: 84, vision_rating: 65, gold_diff_at_12: 600, xp_diff_at_12: 500, deaths_at_12: 1, deaths: 3, kp_val: 65, vspm: 1.2, opponent_acronym: "RMD", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "Ambessa", is_win: true, gpm: 450, dpm: 760, eff_val: 90, lane_rating: 84, impact_rating: 90, conversion_rating: 88, vision_rating: 67, gold_diff_at_12: 1100, xp_diff_at_12: 850, deaths_at_12: 0, deaths: 2, kp_val: 74, vspm: 1.3, opponent_acronym: "VKS", side: "BLUE", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+  { champion: "K'Sante", is_win: true, gpm: 380, dpm: 520, eff_val: 76, lane_rating: 75, impact_rating: 76, conversion_rating: 79, vision_rating: 71, gold_diff_at_12: 250, xp_diff_at_12: 400, deaths_at_12: 1, deaths: 2, kp_val: 61, vspm: 1.4, opponent_acronym: "PNG", side: "RED", game_type: "CIRCUITO DESAFIANTE", split: "SPLIT 2" },
+];
+
 function normalizeTournamentScope(rawName: string | null): string {
-  const name = String(rawName || '').toUpperCase();
-  if (name.includes('SCRIM')) return 'SCRIM';
-  if (name.includes('CBLOL') && (name.includes('ACADEMY') || name.includes('DESAFIANTE'))) return 'CIRCUITO DESAFIANTE';
-  if (name.includes('CIRCUITO DESAFIANTE') || name.includes('LIGA IGNIS')) return 'CIRCUITO DESAFIANTE';
-  if (name.includes('LCK') && (name.includes('CHALLENGERS') || name.includes(' CL'))) return 'LCK CHALLENGERS';
-  if (name.includes('LCS') && (name.includes('CHALLENGERS') || name.includes('NACL'))) return 'LCS CHALLENGERS';
-  if (name.includes('EMEA') && name.includes('MASTERS')) return 'EMEA MASTERS';
-  
-  if (name.includes('CBLOL') && name.includes('CUP')) return 'CBLOL CUP';
-  if (name.includes('LCK') && name.includes('CUP')) return 'LCK CUP';
-  if (name.includes('LCS') && name.includes('CUP')) return 'LCS CUP';
-  if (name.includes('LEC') && name.includes('CUP')) return 'LEC CUP';
-
-  if (name.includes('CBLOL')) return 'CBLOL';
-  if (name.includes('LCK')) return 'LCK';
-  if (name.includes('LCS')) return 'LCS';
-  if (name.includes('LEC')) return 'LEC';
-  if (name.includes('LPL')) return 'LPL';
-
-  if (name.includes('EWC') && (name.includes('QUALIFIER') || name.includes('CLOSED') || name.includes('OPEN') || name.includes('CQ'))) return 'EWC QUALIFIER';
-  if (name.includes('EWC') || name.includes('ESPORTS WORLD CUP')) return 'EWC';
-  if (name.includes('WORLD CUP') || name.includes('COPA DO MUNDO') || name.includes('NATIONS')) return 'WORLD CUP';
-  if (name.includes('AMERICAS CUP')) return 'AMERICAS CUP';
-  if (name.includes('FIRST STAND')) return 'FIRST STAND';
-  if (name.includes('MSI') || name.includes('MID SEASON')) return 'MSI';
-  if (name.includes('WORLDS') || name.includes('MUNDIAL')) return 'MUNDIAL';
-
-  return 'OUTRO';
+  return 'CIRCUITO DESAFIANTE';
 }
 
-// --- MAPEAMENTO E ORDENAÇÃO DE ROLES ---
 const ROLES_ORDER = ['top', 'jng', 'mid', 'adc', 'support'];
 
 const normalizeRole = (lane: string | null): string => {
@@ -70,12 +84,11 @@ const getRoleIcon = (role: string, size: string = "w-5 h-5") => {
     top: 'top', jungle: 'jungle', jng: 'jungle', mid: 'middle', middle: 'middle', 
     adc: 'bottom', bottom: 'bottom', sup: 'utility', support: 'utility', utility: 'utility'
   };
-  const key = mapping[role?.toLowerCase()] || 'middle';
+  const key = mapping[role?.toLowerCase()] || 'top';
   const url = `https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-clash/global/default/assets/images/position-selector/positions/icon-position-${key}.png`;
   return <img src={url} alt={role} className={`${size} object-contain brightness-200`} />;
 };
 
-// --- CORES TIER 2 (FLAT DESIGN + GLOW) ---
 function getScoreColor(score: any) {
   const s = Number(score);
   if (!s || s === 0) return "text-zinc-600";
@@ -112,7 +125,6 @@ function getChampionSplashUrl(championName: string | null) {
   return `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${sanitized}_0.jpg`;
 }
 
-// --- MATEMÁTICA: REGRESSÃO LINEAR E R² ---
 function calculateRegression(data: any[], xKey: string, yKey: string) {
   const n = data.length;
   if (n < 2) return { points: [], r2: 0 };
@@ -155,187 +167,45 @@ function calculateBoxPlotStats(data: number[]) {
 }
 
 export default function PlayerProfilePage() {
-  const rawParams = useParams();
-  const puuid = Array.isArray(rawParams.puuid) ? rawParams.puuid[0] : rawParams.puuid;
-  const router = useRouter();
   const dropdownRef = useRef<any>(null);
   
-  const [player, setPlayer] = useState<any>(null);
-  const [teams, setTeams] = useState<any[]>([]);
-  const [allPlayers, setAllPlayers] = useState<any[]>([]);
-  const [rosterList, setRosterList] = useState<any[]>([]); 
-  const [allMatchesRaw, setAllMatchesRaw] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  // ESTADOS INICIALIZADOS DIRETAMENTE COM DADOS MOCKADOS
+  const [player] = useState<any>(MOCK_PLAYER);
+  const [teams] = useState<any[]>(MOCK_TEAMS);
+  const [allPlayers] = useState<any[]>(MOCK_ALL_PLAYERS);
+  const [rosterList] = useState<any[]>(MOCK_ALL_PLAYERS); 
+  const [allMatchesRaw] = useState<any[]>(MOCK_MATCHES);
+  const [loading] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<any>(null);
   
   const [globalTournaments, setGlobalTournaments] = useState<string[]>(["CIRCUITO DESAFIANTE"]);
   const [globalSplit, setGlobalSplit] = useState("ALL");
-  const [validSplitsMap, setValidSplitsMap] = useState<Record<string, string[]>>({});
   const [sideFilter, setSideFilter] = useState<'ALL' | 'BLUE' | 'RED'>('ALL');
   const [opponentFilter, setOpponentFilter] = useState<string>('ALL');
 
-  useEffect(() => {
-    async function loadSplitsMap() {
-      const { data } = await supabase.from('bff_matches_history').select('game_type, split');
-      if (data) {
-        const map: Record<string, Set<string>> = {};
-        data.forEach((d: any) => {
-          if (d.game_type && d.split) {
-            const scope = normalizeTournamentScope(d.game_type);
-            if (!map[scope]) map[scope] = new Set();
-            map[scope].add(d.split.trim().toUpperCase());
-          }
-        });
-        const finalMap: Record<string, string[]> = {};
-        for (const k in map) finalMap[k] = Array.from(map[k]);
-        setValidSplitsMap(finalMap);
-      }
-    }
-    loadSplitsMap();
-  }, []);
-
-  const fetchTacticalData = useCallback(async () => {
-    if (!puuid) return;
-    setLoading(true);
-    
-    const cleanPuuid = String(puuid).trim();
-    
-    try {
-      const [pRes, tRes, allPRes, statsRes] = await Promise.all([
-        supabase.from('bff_hub_players_roster').select('*').eq('puuid', cleanPuuid),
-        supabase.from('bff_matches_teams').select('*').order('acronym'),
-        supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
-        supabase.from('bff_player_matches').select('*').eq('puuid', cleanPuuid).order('game_start_time', { ascending: true })
-      ]);
-
-      if (pRes.data && pRes.data.length > 0) {
-        // Consolidação/soma de registros múltiplos do mesmo jogador (ex: por splits diferentes)
-        const rows = pRes.data;
-        let totalGames = 0;
-        let sumLaneWeighted = 0;
-        let sumImpactWeighted = 0;
-        let sumConvWeighted = 0;
-        let sumVisionWeighted = 0;
-
-        rows.forEach((r: any) => {
-          const games = Number(r.games_played) || 0;
-          totalGames += games;
-          sumLaneWeighted += (Number(r.median_lane) || 0) * games;
-          sumImpactWeighted += (Number(r.median_impact) || 0) * games;
-          sumConvWeighted += (Number(r.median_conversion) || 0) * games;
-          sumVisionWeighted += (Number(r.median_vision) || 0) * games;
-        });
-
-        const consolidatedPlayer = {
-          ...rows[0],
-          games_played: totalGames,
-          median_lane: totalGames > 0 ? (sumLaneWeighted / totalGames).toFixed(4) : rows[0].median_lane,
-          median_impact: totalGames > 0 ? (sumImpactWeighted / totalGames).toFixed(4) : rows[0].median_impact,
-          median_conversion: totalGames > 0 ? (sumConvWeighted / totalGames).toFixed(4) : rows[0].median_conversion,
-          median_vision: totalGames > 0 ? (sumVisionWeighted / totalGames).toFixed(4) : rows[0].median_vision,
-        };
-
-        setPlayer(consolidatedPlayer);
-
-        if (statsRes.data && statsRes.data.length > 0) {
-          const enriched = statsRes.data.map((m: any) => ({ 
-            ...m, 
-            normalized_scope: normalizeTournamentScope(m.game_type)
-          }));
-          setAllMatchesRaw(enriched);
-        } else {
-          setAllMatchesRaw([]);
-        }
-
-        if (allPRes.data) {
-          // Deduplicar a lista geral de jogadores caso venham múltiplos registros por split
-          const uniquePlayersMap = new Map();
-          allPRes.data.forEach((item: any) => {
-            if (!uniquePlayersMap.has(item.puuid)) {
-              uniquePlayersMap.set(item.puuid, item);
-            }
-          });
-          const uniquePlayers = Array.from(uniquePlayersMap.values());
-
-          setRosterList(uniquePlayers);
-          setTeams(tRes.data || []);
-          setAllPlayers(uniquePlayers);
-        }
-      } else {
-        setPlayer(null);
-      }
-    } catch (err) { 
-      console.error("Erro no protocolo tático:", err); 
-    } finally { 
-      setLoading(false); 
-    }
-  }, [puuid, globalSplit]);
-
   useEffect(() => { 
-    fetchTacticalData(); 
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setActiveDropdown(null);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [fetchTacticalData]);
+  }, []);
 
-  const dynamicAvailableSplits = useMemo(() => {
-    if (globalTournaments.includes('ALL')) {
-      return ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
-    }
-    const splits = new Set<string>();
-    globalTournaments.forEach(t => {
-      if (validSplitsMap[t]) {
-        validSplitsMap[t].forEach(s => splits.add(s));
-      }
-    });
-    const order = ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON'];
-    return Array.from(splits).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-  }, [globalTournaments, validSplitsMap]);
-
-  useEffect(() => {
-    if (globalSplit !== 'ALL' && dynamicAvailableSplits.length > 0 && !dynamicAvailableSplits.includes(globalSplit)) {
-      setGlobalSplit('ALL');
-    }
-  }, [dynamicAvailableSplits, globalSplit]);
+  const dynamicAvailableSplits = useMemo(() => ['SPLIT 1', 'SPLIT 2', 'SPLIT 3'], []);
 
   const filteredMatches = useMemo(() => {
     return allMatchesRaw.filter(m => {
-      const scope = m.normalized_scope || 'OUTRO';
-      if (!globalTournaments.includes('ALL')) {
-        if (!globalTournaments.includes(scope)) return false;
-      }
-      if (globalSplit !== 'ALL' && m.split?.toUpperCase() !== globalSplit.toUpperCase()) return false;
-      
-      if (sideFilter !== 'ALL') {
-         const matchSide = String(m.side || '').toUpperCase();
-         if (matchSide !== sideFilter && matchSide !== (sideFilter === 'BLUE' ? '100' : '200')) return false;
-      }
-
+      if (sideFilter !== 'ALL' && m.side !== sideFilter) return false;
       if (opponentFilter !== 'ALL' && m.opponent_acronym?.toUpperCase() !== opponentFilter.toUpperCase()) return false;
-      
       return true;
     });
-  }, [allMatchesRaw, globalTournaments, globalSplit, sideFilter, opponentFilter]);
+  }, [allMatchesRaw, sideFilter, opponentFilter]);
 
   const availableOpponents = useMemo(() => {
-    const opps = new Set(filteredMatches.map(m => m.opponent_acronym?.toUpperCase()));
-    opps.delete('MIX'); 
-    opps.delete(undefined);
-    return Array.from(opps).sort() as string[];
-  }, [filteredMatches]);
+    return Array.from(new Set(MOCK_MATCHES.map(m => m.opponent_acronym))).sort();
+  }, []);
 
-  const displayedTeams = useMemo(() => {
-    if (!teams.length || !rosterList.length) return teams;
-    const validTourneys = Array.from(new Set(allMatchesRaw.map(m => m.game_type).filter(g => g && g !== 'UNKNOWN')));
-    const activeInTourney = new Set(
-       rosterList
-         .filter(r => validTourneys.includes(r.game_type?.toUpperCase() || r.game_type))
-         .map(r => r.team_acronym?.toUpperCase())
-    );
-    return teams.filter(t => activeInTourney.has(t.acronym?.toUpperCase()) || t.acronym?.toUpperCase() === player?.team_acronym?.toUpperCase());
-  }, [teams, rosterList, allMatchesRaw, player]);
+  const displayedTeams = useMemo(() => teams, [teams]);
 
   const bubbleData = useMemo(() => filteredMatches.map(m => ({ 
     x: Math.round(Number(m.gpm) || 0), 
@@ -407,10 +277,9 @@ export default function PlayerProfilePage() {
       <p className="text-zinc-500 font-bold tracking-widest text-xs uppercase animate-pulse">Sincronizando Operativo...</p>
     </div>
   );
-  if (!loading && !player) return <div className="p-20 text-red-500 font-black text-center uppercase tracking-widest">Operativo não encontrado no banco de dados.</div>;
 
   return (
-    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible">
+    <div className="max-w-[1550px] mx-auto p-4 md:p-8 space-y-12 font-sans pb-20 overflow-visible bg-[#0a0a0a] text-zinc-100 min-h-screen">
       
       {/* HEADER */}
       <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8 mb-4 border-b border-zinc-800 pb-8 relative z-[250]">
@@ -420,7 +289,7 @@ export default function PlayerProfilePage() {
            </Link>
            <div className="animate-fade-in-right">
              <h1 className="text-4xl font-black text-white uppercase tracking-tight">OPERATIVE <span className="text-blue-500 drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]">INTEL</span></h1>
-             <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DOSSIER TÁTICO INDIVIDUAL</p>
+             <p className="text-[10px] text-zinc-500 font-bold tracking-widest mt-2 uppercase">DOSSIER TÁTICO INDIVIDUAL (WIREFRAME MODE)</p>
            </div>
         </div>
 
@@ -451,7 +320,7 @@ export default function PlayerProfilePage() {
                   {activeDropdown === t.acronym && (
                     <div className="absolute top-full left-0 mt-2 bg-zinc-900/95 border border-zinc-700/50 rounded-lg shadow-2xl min-w-[180px] overflow-hidden z-[9999] backdrop-blur-md animate-fade-in-down origin-top">
                       {teamRoster.map((tm:any) => (
-                        <button key={tm.puuid} onClick={() => { router.push(`/dashboard/players/${tm.puuid}`); setActiveDropdown(null); }} className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] hover:bg-zinc-800 border-b border-zinc-800/50 last:border-0 transition-all duration-200 ${tm.puuid === player.puuid ? 'bg-zinc-800 text-blue-400 font-black pl-5' : 'text-zinc-300 font-bold uppercase'}`}>
+                        <button key={tm.puuid} onClick={() => setActiveDropdown(null)} className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] hover:bg-zinc-800 border-b border-zinc-800/50 last:border-0 transition-all duration-200 ${tm.puuid === player.puuid ? 'bg-zinc-800 text-blue-400 font-black pl-5' : 'text-zinc-300 font-bold uppercase'}`}>
                           <span className="opacity-80">{getRoleIcon(tm.primary_role, "w-4 h-4")}</span>
                           {tm.nickname}
                         </button>
@@ -461,10 +330,6 @@ export default function PlayerProfilePage() {
                 </div>
               );
             })}
-
-            {displayedTeams.length === 0 && (
-               <p className="text-[10px] text-zinc-500 font-bold py-2 uppercase tracking-widest px-4">SEM TIMES DISPONÍVEIS</p>
-            )}
         </div>
 
         <div className="flex items-center gap-4 shrink-0 w-full lg:w-auto justify-end">
@@ -490,7 +355,6 @@ export default function PlayerProfilePage() {
         {/* COLUNA ESQUERDA (PERFIL E CHAMPIONS) */}
         <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6 z-[150] sticky top-6 h-fit">
           
-          {/* CARTINHA DO OPERATIVO COM SPLASH ART ANIMADA */}
           <div className="bg-[#18181b] border border-zinc-800 rounded-3xl relative overflow-hidden shadow-xl flex flex-col items-center group transition-all duration-500 hover:border-zinc-700 hover:shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
             
             {mainChampSplash && (
@@ -550,131 +414,119 @@ export default function PlayerProfilePage() {
             </p>
             
             <div className="space-y-3">
-              {topChampions.length === 0 ? (
-                 <div className="text-center py-6 text-zinc-600 text-[10px] tracking-widest font-bold uppercase">SEM JOGOS NO FILTRO</div>
-              ) : (
-                topChampions.map((c: any) => {
-                  const winrate = Math.round((c.wins / c.games) * 100);
-                  const losses = c.games - c.wins;
-                  const champSplash = getChampionSplashUrl(c.name);
-                  
-                  return (
-                    <div key={c.name} className="relative group flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-all duration-300 cursor-help overflow-hidden hover:-translate-y-0.5 hover:shadow-md">
-                      
-                      <div className="absolute inset-0 z-0 opacity-20 group-hover:opacity-40 transition-opacity duration-500">
-                         <img src={champSplash} className="w-full h-full object-cover object-[center_20%]" alt="" />
-                      </div>
-                      <div className="absolute inset-0 bg-gradient-to-r from-zinc-900 via-zinc-900/80 to-transparent z-0" />
+              {topChampions.map((c: any) => {
+                const winrate = Math.round((c.wins / c.games) * 100);
+                const losses = c.games - c.wins;
+                const champSplash = getChampionSplashUrl(c.name);
+                
+                return (
+                  <div key={c.name} className="relative group flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-all duration-300 cursor-help overflow-hidden hover:-translate-y-0.5 hover:shadow-md">
+                    
+                    <div className="absolute inset-0 z-0 opacity-20 group-hover:opacity-40 transition-opacity duration-500">
+                       <img src={champSplash} className="w-full h-full object-cover object-[center_20%]" alt="" />
+                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-r from-zinc-900 via-zinc-900/80 to-transparent z-0" />
 
-                      <div className="relative z-10 flex items-center gap-3">
-                        <img src={getChampionImageUrl(c.name)} className="w-9 h-9 rounded-lg border border-zinc-700 group-hover:border-zinc-400 transition-colors shadow-sm" alt={c.name} />
-                        <div className="text-left">
-                          <p className="text-[12px] font-black text-white uppercase drop-shadow-md">{c.name}</p>
-                          <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest">{c.games} GAMES</p>
+                    <div className="relative z-10 flex items-center gap-3">
+                      <img src={getChampionImageUrl(c.name)} className="w-9 h-9 rounded-lg border border-zinc-700 group-hover:border-zinc-400 transition-colors shadow-sm" alt={c.name} />
+                      <div className="text-left">
+                        <p className="text-[12px] font-black text-white uppercase drop-shadow-md">{c.name}</p>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest">{c.games} GAMES</p>
+                      </div>
+                    </div>
+                    <div className="relative z-10 text-right">
+                      <p className={`text-[13px] font-black drop-shadow-md ${winrate >= 60 ? 'text-blue-400' : winrate < 50 ? 'text-red-400' : 'text-zinc-200'}`}>{winrate}%</p>
+                      <p className="text-[8px] text-zinc-400 font-bold uppercase tracking-widest">WR</p>
+                    </div>
+
+                    <div className="absolute left-[calc(100%+16px)] top-1/2 -translate-y-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-2xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-[300] origin-left scale-95 group-hover:scale-100">
+                      <div className="relative z-10">
+                        <div className="flex justify-between items-center border-b border-zinc-800 pb-3 mb-4">
+                          <p className="text-[11px] font-black text-white uppercase tracking-widest">{c.name}</p>
+                          <p className="text-[10px] font-black bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800"><span className="text-blue-500">{c.wins}W</span> <span className="text-zinc-600 px-0.5">-</span> <span className="text-red-500">{losses}L</span></p>
                         </div>
-                      </div>
-                      <div className="relative z-10 text-right">
-                        <p className={`text-[13px] font-black drop-shadow-md ${winrate >= 60 ? 'text-blue-400' : winrate < 50 ? 'text-red-400' : 'text-zinc-200'}`}>{winrate}%</p>
-                        <p className="text-[8px] text-zinc-400 font-bold uppercase tracking-widest">WR</p>
-                      </div>
-
-                      <div className="absolute left-[calc(100%+16px)] top-1/2 -translate-y-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-2xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-[300] origin-left scale-95 group-hover:scale-100">
-                        <div className="relative z-10">
-                          <div className="flex justify-between items-center border-b border-zinc-800 pb-3 mb-4">
-                            <p className="text-[11px] font-black text-white uppercase tracking-widest">{c.name}</p>
-                            <p className="text-[10px] font-black bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800"><span className="text-blue-500">{c.wins}W</span> <span className="text-zinc-600 px-0.5">-</span> <span className="text-red-500">{losses}L</span></p>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-4 text-[9px] font-bold">
-                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">LANE</p><p className={`text-sm font-black ${getScoreColorText(c.ml)}`}>{Math.round(c.ml)}</p></div>
-                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">IMPACTO</p><p className={`text-sm font-black ${getScoreColorText(c.mi)}`}>{Math.round(c.mi)}</p></div>
-                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">CONV.</p><p className={`text-sm font-black ${getScoreColorText(c.mc)}`}>{Math.round(c.mc)}</p></div>
-                            <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">VISÃO</p><p className={`text-sm font-black ${getScoreColorText(c.mv)}`}>{Math.round(c.mv)}</p></div>
-                          </div>
-                          
-                          <div className="mt-4 pt-3 border-t border-zinc-800 flex justify-between items-center bg-zinc-900/50 -mx-5 -mb-5 px-5 py-3 rounded-b-2xl">
-                             <p className="text-zinc-400 text-[9px] font-bold uppercase tracking-widest">RATING TÁTICO</p>
-                             <p className={`text-[14px] font-black ${getScoreColorText(c.avg)}`}>{Math.round(c.avg)}</p>
-                          </div>
+                        
+                        <div className="grid grid-cols-2 gap-4 text-[9px] font-bold">
+                          <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">LANE</p><p className={`text-sm font-black ${getScoreColorText(c.ml)}`}>{Math.round(c.ml)}</p></div>
+                          <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">IMPACTO</p><p className={`text-sm font-black ${getScoreColorText(c.mi)}`}>{Math.round(c.mi)}</p></div>
+                          <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">CONV.</p><p className={`text-sm font-black ${getScoreColorText(c.mc)}`}>{Math.round(c.mc)}</p></div>
+                          <div><p className="text-zinc-500 mb-1 text-[8px] uppercase tracking-widest">VISÃO</p><p className={`text-sm font-black ${getScoreColorText(c.mv)}`}>{Math.round(c.mv)}</p></div>
+                        </div>
+                        
+                        <div className="mt-4 pt-3 border-t border-zinc-800 flex justify-between items-center bg-zinc-900/50 -mx-5 -mb-5 px-5 py-3 rounded-b-2xl">
+                           <p className="text-zinc-400 text-[9px] font-bold uppercase tracking-widest">RATING TÁTICO</p>
+                           <p className={`text-[14px] font-black ${getScoreColorText(c.avg)}`}>{Math.round(c.avg)}</p>
                         </div>
                       </div>
                     </div>
-                  );
-                })
-              )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
 
         {/* COLUNA DIREITA: GRÁFICOS */}
         <div className="lg:col-span-8 xl:col-span-9 space-y-6">
-          
-          {filteredMatches.length === 0 ? (
-             <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-20 flex flex-col items-center justify-center text-center shadow-sm min-h-[600px] h-full animate-fade-in">
-               <h3 className="text-2xl text-zinc-500 font-black uppercase tracking-tight">SEM DADOS DISPONÍVEIS</h3>
-               <p className="text-[10px] text-zinc-600 mt-2 uppercase tracking-widest font-bold max-w-md">O filtro selecionado não retornou nenhuma partida. Altere a timeline ou o adversário no painel de controle acima.</p>
-             </div>
-          ) : (
-            <div className="animate-fade-in-up">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <ChartWrapper title="Eficiência de Recursos (GPM x DPM)">
-                  <ResponsiveContainer width="100%" height={240}>
-                    <ScatterChart margin={{ top: 20, right: 40, left: 10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
-                      <XAxis type="number" dataKey="x" stroke="#71717a" fontSize={10} domain={['dataMin - 30', 'dataMax + 30']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
-                      <YAxis type="number" dataKey="y" stroke="#71717a" fontSize={10} domain={['dataMin - 50', 'dataMax + 50']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
-                      <ZAxis type="number" dataKey="z" range={[400, 4500]} domain={['dataMin', 'dataMax']} />
-                      <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
-                      <Scatter data={bubbleData} dataKey="z" animationDuration={1000}>
-                        {bubbleData.map((e, i) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.8} className="hover:opacity-100 transition-opacity cursor-crosshair" />))}
-                      </Scatter>
-                    </ScatterChart>
-                  </ResponsiveContainer>
-                </ChartWrapper>
+          <div className="animate-fade-in-up">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <ChartWrapper title="Eficiência de Recursos (GPM x DPM)">
+                <ResponsiveContainer width="100%" height={240}>
+                  <ScatterChart margin={{ top: 20, right: 40, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
+                    <XAxis type="number" dataKey="x" stroke="#71717a" fontSize={10} domain={['dataMin - 30', 'dataMax + 30']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
+                    <YAxis type="number" dataKey="y" stroke="#71717a" fontSize={10} domain={['dataMin - 50', 'dataMax + 50']} axisLine={false} tickLine={false} tickFormatter={(v) => Math.round(v).toString()} />
+                    <ZAxis type="number" dataKey="z" range={[400, 4500]} domain={['dataMin', 'dataMax']} />
+                    <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
+                    <Scatter data={bubbleData} dataKey="z" animationDuration={1000}>
+                      {bubbleData.map((e, i) => (<Cell key={i} fill={e.is_win ? '#3b82f6' : '#ef4444'} fillOpacity={0.8} className="hover:opacity-100 transition-opacity cursor-crosshair" />))}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </ChartWrapper>
 
-                <ChartWrapper title="Histórico de Notas (Performance)">
-                  <ResponsiveContainer width="100%" height={240}>
-                    <LineChart data={filteredMatches.slice(-12)} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
-                      <YAxis domain={[40, 100]} stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/>
-                      <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
-                      <Legend iconType="circle" wrapperStyle={{fontSize: '9px', paddingTop: '10px', fontWeight: 'bold'}}/>
-                      <Line type="monotone" dataKey="lane_rating" name="Lane" stroke="#c084fc" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
-                      <Line type="monotone" dataKey="impact_rating" name="Impacto" stroke="#60a5fa" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
-                      <Line type="monotone" dataKey="conversion_rating" name="Conv." stroke="#34d399" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
-                      <Line type="monotone" dataKey="vision_rating" name="Visão" stroke="#fbbf24" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartWrapper>
+              <ChartWrapper title="Histórico de Notas (Performance)">
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={filteredMatches.slice(-12)} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/>
+                    <YAxis domain={[40, 100]} stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/>
+                    <Tooltip content={<CustomCommonTooltip teams={teams} />} cursor={{strokeDasharray: '3 3', stroke: '#3f3f46'}}/>
+                    <Legend iconType="circle" wrapperStyle={{fontSize: '9px', paddingTop: '10px', fontWeight: 'bold'}}/>
+                    <Line type="monotone" dataKey="lane_rating" name="Lane" stroke="#c084fc" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                    <Line type="monotone" dataKey="impact_rating" name="Impacto" stroke="#60a5fa" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                    <Line type="monotone" dataKey="conversion_rating" name="Conv." stroke="#34d399" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                    <Line type="monotone" dataKey="vision_rating" name="Visão" stroke="#fbbf24" strokeWidth={2} dot={{r:3, strokeWidth: 2, fill: '#18181b'}} activeDot={{r: 5, strokeWidth: 0}} animationDuration={1500}/>
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartWrapper>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <ChartWrapper title="Win Chance by Gold Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={goldChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#fbbf24" strokeWidth={2} fill="#fbbf24" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
+              <ChartWrapper title="Win Chance by XP Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={xpChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#3b82f6" strokeWidth={2} fill="#3b82f6" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <ChartWrapper title="Distribuição Gold Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={goldBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{goldBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
+              <ChartWrapper title="Distribuição XP Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={xpBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{xpBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
+            </div>
+
+            <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm transition-all duration-500 hover:border-zinc-700">
+              <div className="flex justify-between items-center mb-8 border-b border-zinc-800 pb-4">
+                 <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
+                   <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
+                   Matriz Relacional de Performance
+                 </h3>
               </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <ChartWrapper title="Win Chance by Gold Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={goldChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#fbbf24" strokeWidth={2} fill="#fbbf24" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
-                <ChartWrapper title="Win Chance by XP Diff @ 12"><ResponsiveContainer width="100%" height={240}><AreaChart data={xpChanceCurve}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="val" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v)=>`${v>0?'+':''}${v}`}/><YAxis unit="%" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomProbabilityTooltip />}/><Area type="linear" dataKey="chance" stroke="#3b82f6" strokeWidth={2} fill="#3b82f6" fillOpacity={0.1} connectNulls animationDuration={1200}/></AreaChart></ResponsiveContainer></ChartWrapper>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <ChartWrapper title="Distribuição Gold Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={goldBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{goldBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
-                <ChartWrapper title="Distribuição XP Diff @ 12 (BoxPlot)"><ResponsiveContainer width="100%" height={240}><ComposedChart data={xpBoxPlotData} margin={{ top: 20, right: 30, left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false}/><XAxis dataKey="name" stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false}/><Tooltip content={<CustomBoxPlotTooltip />} cursor={{fill: '#27272a', opacity: 0.4}}/><Bar dataKey="q1" stackId="a" fill="transparent" /><Bar dataKey="q3_diff" stackId="a" fillOpacity={0.8} radius={4} animationDuration={1000}>{xpBoxPlotData.map((e, i) => (<Cell key={i} fill={e.color} className="hover:opacity-100 transition-opacity cursor-pointer" />))}</Bar></ComposedChart></ResponsiveContainer></ChartWrapper>
-              </div>
-
-              <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-8 shadow-sm transition-all duration-500 hover:border-zinc-700">
-                <div className="flex justify-between items-center mb-8 border-b border-zinc-800 pb-4">
-                   <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-3">
-                     <div className="w-1.5 h-5 bg-blue-500 rounded-sm" /> 
-                     Matriz Relacional de Performance
-                   </h3>
-                </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                  <RelationalChart title="Mortes@12 vs Mortes Totais" data={filteredMatches} teams={teams} x="deaths_at_12" y="deaths" xN="M@12" yN="Total" />
-                  <RelationalChart title="KP% vs Visão por Minuto" data={filteredMatches} teams={teams} x="kp_val" y="vspm" xN="KP%" yN="VPM" />
-                  <RelationalChart title="Mortes@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="deaths_at_12" y="xp_diff_at_12" xN="M@12" yN="XP Diff" />
-                  <RelationalChart title="KP% vs XP Diff@12" data={filteredMatches} teams={teams} x="kp_val" y="xp_diff_at_12" xN="KP%" yN="XP Diff" />
-                  <RelationalChart title="Mortes vs Kill Participation" data={filteredMatches} teams={teams} x="deaths" y="kp_val" xN="Mortes" yN="KP%" />
-                </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                <RelationalChart title="Mortes@12 vs Mortes Totais" data={filteredMatches} teams={teams} x="deaths_at_12" y="deaths" xN="M@12" yN="Total" />
+                <RelationalChart title="KP% vs Visão por Minuto" data={filteredMatches} teams={teams} x="kp_val" y="vspm" xN="KP%" yN="VPM" />
+                <RelationalChart title="Mortes@12 vs XP Diff@12" data={filteredMatches} teams={teams} x="deaths_at_12" y="xp_diff_at_12" xN="M@12" yN="XP Diff" />
+                <RelationalChart title="KP% vs XP Diff@12" data={filteredMatches} teams={teams} x="kp_val" y="xp_diff_at_12" xN="KP%" yN="XP Diff" />
+                <RelationalChart title="Mortes vs Kill Participation" data={filteredMatches} teams={teams} x="deaths" y="kp_val" xN="Mortes" yN="KP%" />
               </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -684,131 +536,12 @@ export default function PlayerProfilePage() {
 // --- SUB-COMPONENTES AUXILIARES ---
 
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const click = (e: any) => { if (ref.current && !ref.current.contains(e.target)) setIsOpen(false); };
-    document.addEventListener("mousedown", click);
-    return () => document.removeEventListener("mousedown", click);
-  }, []);
-
-  const TOURNAMENT_GROUPS = [
-    {
-      label: "LIGAS TIER 1",
-      options: [
-        { id: 'CBLOL', label: 'CBLOL' },
-        { id: 'LCK', label: 'LCK' },
-        { id: 'LCS', label: 'LCS' },
-        { id: 'LEC', label: 'LEC' },
-        { id: 'LPL', label: 'LPL' }
-      ]
-    },
-    {
-      label: "LIGAS CHALLENGERS",
-      options: [
-        { id: 'CIRCUITO DESAFIANTE', label: 'CIRCUITO DESAFIANTE' },
-        { id: 'LCK CHALLENGERS', label: 'LCK CHALLENGERS' },
-        { id: 'LCS CHALLENGERS', label: 'LCS CHALLENGERS' },
-        { id: 'EMEA MASTERS', label: 'EMEA MASTERS' }
-      ]
-    },
-    {
-      label: "TORNEIOS GLOBAIS",
-      options: [
-        { id: 'AMERICAS CUP', label: 'AMERICAS CUP' },
-        { id: 'EWC QUALIFIER', label: 'EWC QUALIFIER' },
-        { id: 'EWC', label: 'ESPORTS WORLD CUP' },
-        { id: 'FIRST STAND', label: 'FIRST STAND' },
-        { id: 'MSI', label: 'MSI' },
-        { id: 'MUNDIAL', label: 'MUNDIAL' },
-        { id: 'WORLD CUP', label: 'WORLD CUP' }
-      ]
-    },
-    {
-      label: "OFF-SEASON",
-      options: [
-        { id: 'CBLOL CUP', label: 'CBLOL CUP' },
-        { id: 'LCK CUP', label: 'LCK CUP' },
-        { id: 'LCS CUP', label: 'LCS CUP' },
-        { id: 'LEC CUP', label: 'LEC CUP' },
-        { id: 'SCRIM', label: 'SCRIMS' }
-      ]
-    }
-  ];
-
-  const toggleOption = (id: string) => {
-    if (id === 'ALL') {
-      onChange(['ALL']);
-      return;
-    }
-    
-    let newValues = value.filter(v => v !== 'ALL');
-    if (newValues.includes(id)) {
-      newValues = newValues.filter(v => v !== id);
-      if (newValues.length === 0) newValues = ['ALL'];
-    } else {
-      newValues.push(id);
-    }
-    onChange(newValues);
-  };
-
-  const currentLabel = value.includes('ALL') 
-    ? 'TODOS OS CAMPEONATOS' 
-    : value.length === 1 
-      ? TOURNAMENT_GROUPS.flatMap(g => g.options).find(o => o.id === value[0])?.label 
-      : `${value.length} CAMPEONATOS SEL.`;
-
   return (
-    <div className="relative flex flex-col" ref={ref}>
+    <div className="flex flex-col">
       <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block ml-1">CAMPEONATO</label>
-      <button 
-        onClick={() => setIsOpen(!isOpen)} 
-        className={`bg-zinc-900 border px-4 py-2 rounded-lg flex items-center justify-between gap-4 min-w-[220px] transition-colors text-[10px] font-bold uppercase shadow-sm ${value.includes('ALL') ? 'border-zinc-800 text-zinc-300 hover:border-zinc-600' : 'border-blue-500/50 text-blue-400 hover:border-blue-400'}`}
-      >
-        <span className="flex-1 text-left truncate">{currentLabel}</span>
-        <span className={`text-[8px] transition-transform ${isOpen ? 'rotate-180 text-blue-500' : 'text-zinc-500'}`}>▼</span>
-      </button>
-      
-      {isOpen && (
-        <div className="absolute top-full mt-2 right-0 w-[260px] bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[9999] max-h-[400px] flex flex-col">
-          
-          <button 
-            onClick={() => { onChange(['ALL']); setIsOpen(false); }} 
-            className={`w-full flex items-center gap-3 px-4 py-3 transition-colors border-b border-zinc-800 shrink-0 ${value.includes('ALL') ? 'bg-blue-600/10 text-blue-400' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}`}
-          >
-             <div className={`w-3 h-3 rounded flex items-center justify-center border ${value.includes('ALL') ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
-                {value.includes('ALL') && <span className="text-white text-[8px] font-black">✓</span>}
-             </div>
-             <span className="text-[10px] font-black uppercase tracking-widest">TODOS (GLOBAL)</span>
-          </button>
-
-          <div className="overflow-y-auto custom-scrollbar">
-            {TOURNAMENT_GROUPS.map((group, gIndex) => (
-              <div key={group.label} className={gIndex > 0 ? "border-t border-zinc-800/50" : ""}>
-                <div className="px-4 py-2 bg-zinc-900/50 sticky top-0 z-10 backdrop-blur-sm">
-                   <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">{group.label}</span>
-                </div>
-                {group.options.map((opt) => {
-                  const isSelected = value.includes(opt.id);
-                  return (
-                    <button 
-                      key={opt.id} 
-                      onClick={() => toggleOption(opt.id)} 
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors ${isSelected ? 'bg-zinc-800/50 text-white' : 'text-zinc-400'}`}
-                    >
-                      <div className={`w-3 h-3 rounded flex items-center justify-center border ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-zinc-600'}`}>
-                         {isSelected && <span className="text-white text-[8px] font-black">✓</span>}
-                      </div>
-                      <span className="text-[10px] font-bold uppercase">{opt.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-bold uppercase text-blue-400">
+        CIRCUITO DESAFIANTE
+      </div>
     </div>
   );
 }
@@ -856,7 +589,7 @@ function CockpitDropdown({ label, value, onChange, options }: any) {
 function SplitSelector({ value, onChange, availableSplits }: { value: string, onChange: (val: string) => void, availableSplits?: string[] }) {
   const dynamicOptions = [
     { id: 'ALL', label: 'TODOS OS RECORTES' },
-    ...(availableSplits || ['CUP', 'SPLIT 1', 'SPLIT 2', 'SPLIT 3', 'EVENTO GLOBAL', 'OFF-SEASON']).map(s => ({ id: s, label: s }))
+    ...(availableSplits || ['SPLIT 1', 'SPLIT 2']).map(s => ({ id: s, label: s }))
   ];
 
   return <CockpitDropdown label="TIMELINE" value={value} onChange={onChange} options={dynamicOptions} />
