@@ -176,7 +176,6 @@ export default function PlayerProfilePage() {
 
   useEffect(() => {
     async function loadSplitsMap() {
-      // Usando a View BFF de histórico
       const { data } = await supabase.from('bff_matches_history').select('game_type, split');
       if (data) {
         const map: Record<string, Set<string>> = {};
@@ -196,50 +195,90 @@ export default function PlayerProfilePage() {
   }, []);
 
   const fetchTacticalData = useCallback(async () => {
-  if (!puuid) return;
-  setLoading(true);
-  
-  // Limpa espaços em branco ou codificações acidentais da URL
-  const cleanPuuid = String(puuid).trim();
-  console.log("Buscando PUUID limpo:", cleanPuuid);
+    if (!puuid) return;
+    setLoading(true);
+    
+    const cleanPuuid = String(puuid).trim();
+    
+    try {
+      const [pRes, tRes, allPRes, statsRes] = await Promise.all([
+        supabase.from('bff_hub_players_roster').select('*').eq('puuid', cleanPuuid),
+        supabase.from('bff_matches_teams').select('*').order('acronym'),
+        supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
+        supabase.from('bff_player_matches').select('*').eq('puuid', cleanPuuid).order('game_start_time', { ascending: true })
+      ]);
 
-  try {
-    const [pRes, tRes, allPRes, statsRes] = await Promise.all([
-      supabase.from('bff_hub_players_roster').select('*').eq('puuid', cleanPuuid).limit(1).maybeSingle(),
-      supabase.from('bff_matches_teams').select('*').order('acronym'),
-      supabase.from('bff_hub_players_roster').select('puuid, team_acronym, nickname, primary_role'),
-      supabase.from('bff_player_matches').select('*').eq('puuid', cleanPuuid).order('game_start_time', { ascending: true })
-    ]);
+      if (pRes.data && pRes.data.length > 0) {
+        // Consolidação/soma de registros múltiplos do mesmo jogador (ex: por splits diferentes)
+        const rows = pRes.data;
+        let totalGames = 0;
+        let sumLaneWeighted = 0;
+        let sumImpactWeighted = 0;
+        let sumConvWeighted = 0;
+        let sumVisionWeighted = 0;
 
-    console.log("Resultado da busca do jogador:", pRes);
+        rows.forEach((r: any) => {
+          const games = Number(r.games_played) || 0;
+          totalGames += games;
+          sumLaneWeighted += (Number(r.median_lane) || 0) * games;
+          sumImpactWeighted += (Number(r.median_impact) || 0) * games;
+          sumConvWeighted += (Number(r.median_conversion) || 0) * games;
+          sumVisionWeighted += (Number(r.median_vision) || 0) * games;
+        });
 
-    if (pRes.data) {
-      setPlayer(pRes.data);
-      if (statsRes.data && statsRes.data.length > 0) {
-        const enriched = statsRes.data.map((m: any) => ({ 
-          ...m, 
-          normalized_scope: normalizeTournamentScope(m.game_type)
-        }));
-        setAllMatchesRaw(enriched);
+        const consolidatedPlayer = {
+          ...rows[0],
+          games_played: totalGames,
+          median_lane: totalGames > 0 ? (sumLaneWeighted / totalGames).toFixed(4) : rows[0].median_lane,
+          median_impact: totalGames > 0 ? (sumImpactWeighted / totalGames).toFixed(4) : rows[0].median_impact,
+          median_conversion: totalGames > 0 ? (sumConvWeighted / totalGames).toFixed(4) : rows[0].median_conversion,
+          median_vision: totalGames > 0 ? (sumVisionWeighted / totalGames).toFixed(4) : rows[0].median_vision,
+        };
+
+        setPlayer(consolidatedPlayer);
+
+        if (statsRes.data && statsRes.data.length > 0) {
+          const enriched = statsRes.data.map((m: any) => ({ 
+            ...m, 
+            normalized_scope: normalizeTournamentScope(m.game_type)
+          }));
+          setAllMatchesRaw(enriched);
+        } else {
+          setAllMatchesRaw([]);
+        }
+
+        if (allPRes.data) {
+          // Deduplicar a lista geral de jogadores caso venham múltiplos registros por split
+          const uniquePlayersMap = new Map();
+          allPRes.data.forEach((item: any) => {
+            if (!uniquePlayersMap.has(item.puuid)) {
+              uniquePlayersMap.set(item.puuid, item);
+            }
+          });
+          const uniquePlayers = Array.from(uniquePlayersMap.values());
+
+          setRosterList(uniquePlayers);
+          setTeams(tRes.data || []);
+          setAllPlayers(uniquePlayers);
+        }
       } else {
-        setAllMatchesRaw([]);
+        setPlayer(null);
       }
-
-      if (allPRes.data) {
-        setRosterList(allPRes.data);
-        setTeams(tRes.data || []);
-        setAllPlayers(allPRes.data);
-      }
-    } else {
-      console.warn("Nenhum registro encontrado para o PUUID:", cleanPuuid);
-      setPlayer(null);
+    } catch (err) { 
+      console.error("Erro no protocolo tático:", err); 
+    } finally { 
+      setLoading(false); 
     }
-  } catch (err) { 
-    console.error("Erro crítico no protocolo tático:", err); 
-  } finally { 
-    setLoading(false); 
-  }
-}, [puuid, globalSplit]);
+  }, [puuid, globalSplit]);
+
+  useEffect(() => { 
+    fetchTacticalData(); 
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setActiveDropdown(null);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [fetchTacticalData]);
 
   const dynamicAvailableSplits = useMemo(() => {
     if (globalTournaments.includes('ALL')) {
@@ -360,7 +399,6 @@ export default function PlayerProfilePage() {
       return { lane: l, impact: i, conv: c, vision: v, avg: (l+i+c+v)/4 }
   }, [filteredMatches]);
 
-  // Main Champion Banner Logic
   const mainChampName = topChampions.length > 0 ? topChampions[0].name : null;
   const mainChampSplash = mainChampName ? getChampionSplashUrl(mainChampName) : null;
 
@@ -455,7 +493,6 @@ export default function PlayerProfilePage() {
           {/* CARTINHA DO OPERATIVO COM SPLASH ART ANIMADA */}
           <div className="bg-[#18181b] border border-zinc-800 rounded-3xl relative overflow-hidden shadow-xl flex flex-col items-center group transition-all duration-500 hover:border-zinc-700 hover:shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
             
-            {/* Background Splash Art Dynamica */}
             {mainChampSplash && (
               <div className="absolute inset-0 z-0 transition-all duration-700 opacity-20 group-hover:opacity-40 group-hover:scale-105">
                 <img src={mainChampSplash} className="w-full h-full object-cover object-[center_30%]" alt="" />
@@ -485,7 +522,6 @@ export default function PlayerProfilePage() {
                  <p className="text-zinc-300 text-[10px] tracking-widest uppercase font-bold bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-700/50 backdrop-blur-sm">{player.primary_role}</p>
               </div>
 
-              {/* OVERALL EM DESTAQUE */}
               {filteredMatches.length > 0 && (
                 <div className="w-full pt-6 flex flex-col items-center mt-2 group-hover:scale-105 transition-transform duration-500">
                    <p className="text-[9px] text-zinc-400 font-bold tracking-[0.2em] uppercase mb-1">RATING TÁTICO</p>
@@ -507,7 +543,7 @@ export default function PlayerProfilePage() {
             </div>
           </div>
 
-          {/* Módulo 3: Champion Pool (Cards Interativos) */}
+          {/* Champion Pool */}
           <div className="bg-[#18181b] border border-zinc-800 rounded-3xl p-6 shadow-sm transition-all duration-500 hover:border-zinc-700">
             <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mb-5 border-b border-zinc-800 pb-3 flex items-center gap-2">
               Operativos Utilizados
@@ -525,7 +561,6 @@ export default function PlayerProfilePage() {
                   return (
                     <div key={c.name} className="relative group flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-all duration-300 cursor-help overflow-hidden hover:-translate-y-0.5 hover:shadow-md">
                       
-                      {/* Fundo do Card (Splash Art + Gradiente) */}
                       <div className="absolute inset-0 z-0 opacity-20 group-hover:opacity-40 transition-opacity duration-500">
                          <img src={champSplash} className="w-full h-full object-cover object-[center_20%]" alt="" />
                       </div>
@@ -543,7 +578,6 @@ export default function PlayerProfilePage() {
                         <p className="text-[8px] text-zinc-400 font-bold uppercase tracking-widest">WR</p>
                       </div>
 
-                      {/* POPOVER ANIMADO */}
                       <div className="absolute left-[calc(100%+16px)] top-1/2 -translate-y-1/2 w-52 bg-zinc-950/95 backdrop-blur-md border border-zinc-700/50 rounded-2xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-[300] origin-left scale-95 group-hover:scale-100">
                         <div className="relative z-10">
                           <div className="flex justify-between items-center border-b border-zinc-800 pb-3 mb-4">
@@ -572,7 +606,7 @@ export default function PlayerProfilePage() {
           </div>
         </div>
 
-        {/* COLUNA DIREITA: GRÁFICOS (HOVERS E ANIMAÇÕES) */}
+        {/* COLUNA DIREITA: GRÁFICOS */}
         <div className="lg:col-span-8 xl:col-span-9 space-y-6">
           
           {filteredMatches.length === 0 ? (
@@ -647,7 +681,7 @@ export default function PlayerProfilePage() {
   );
 }
 
-// --- SUB-COMPONENTES AUXILIARES (FLAT DESIGN INTERATIVO) ---
+// --- SUB-COMPONENTES AUXILIARES ---
 
 function TournamentMultiSelector({ value, onChange }: { value: string[], onChange: (val: string[]) => void }) {
   const [isOpen, setIsOpen] = useState(false);
